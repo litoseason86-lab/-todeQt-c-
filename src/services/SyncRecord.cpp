@@ -153,6 +153,15 @@ bool fromJson(const QJsonObject& object, SyncBatch* batch, QString* error)
         return fail(QStringLiteral("同步文件缺少设备标识"));
     }
 
+    // 从首版写出代码（f2bedea）起，两个集合就始终以数组写出，合法旧文件也必须具备它们。
+    // 缺失或类型错误不能按空集合处理，否则整体替换会把本机数据误当成快照中已删除的内容。
+    if (!object.value(QStringLiteral("records")).isArray()) {
+        return fail(QStringLiteral("同步文件缺少记录集合或记录集合不是数组"));
+    }
+    if (!object.value(QStringLiteral("settings")).isArray()) {
+        return fail(QStringLiteral("同步文件缺少设置集合或设置集合不是数组"));
+    }
+
     SyncBatch result;
     result.device = object.value(QStringLiteral("device")).toString();
     result.epoch = qint64(object.value(QStringLiteral("epoch")).toDouble());

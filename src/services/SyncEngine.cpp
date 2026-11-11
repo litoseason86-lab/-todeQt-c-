@@ -628,14 +628,18 @@ void SyncEngine::afterScan(const SyncWorker::ScanResult& result)
     QHash<QString, SyncPosition> requests = s.snapshotRequests();
     const QHash<QString, SyncPosition> cursors = s.peerCursors();
     // 请对方补一份至少覆盖到 seq 的快照。只往后推、不往前退：覆盖得更远的快照也覆盖了前面的。
-    const auto requestSnapshot = [&](const QString& device, qint64 seq) {
+    const auto requestSnapshot = [&](const QString& device, qint64 seq) -> bool {
         const SyncPosition current = requests.value(device);
         if (current.epoch == epoch && current.seq >= seq) {
-            return;
+            return true;
+        }
+        // 请求必须先落盘，游标文件才发得出去；否则跳过坏批次后会永久丢掉补发意图。
+        if (!s.setSnapshotRequest(device, {epoch, seq})) {
+            return false;
         }
         requests.insert(device, {epoch, seq});
-        s.setSnapshotRequest(device, {epoch, seq});
         m_cursorDirty = true;
+        return true;
     };
     SyncStore::ApplyResult total;
     for (const SyncWorker::PeerScan& peer : result.peers) {
@@ -644,15 +648,18 @@ void SyncEngine::afterScan(const SyncWorker::ScanResult& result)
         if (peer.snapshotStatus == SyncFiles::ParseStatus::NewerFormat) {
             warn(Status::NewerVersion, peer.snapshotError);
         } else if (peer.snapshotStatus == SyncFiles::ParseStatus::Corrupt && peer.readError.ok()) {
-            // 需要的快照坏了：记一笔日志（同一份只记一次），再请对方写一份新的。对方只在写过更新的一批之后
-            // 才会重写快照，所以请求推到它下一批；它下次同步时就会写出来。
+            // 需要的快照坏了：请求重写它本身覆盖的位置；对方没有新批次时，N+1 根本不存在，无法响应。
             const QString path = SyncFiles::deviceDirectory(peer.device) + QLatin1Char('/')
                 + SyncFiles::snapshotFileName(peer.snapshotPosition);
             if (!m_loggedBadFiles.contains(path)) {
                 m_loggedBadFiles.insert(path);
                 s.logFileProblem(peer.device, path, peer.snapshotError);
+                // 即使缺号时已经请求过同一位置，也要刷新游标指纹，让发送端知道刚补的快照仍不可读。
+                m_cursorDirty = true;
             }
-            requestSnapshot(peer.device, peer.snapshotPosition.seq + 1);
+            if (!requestSnapshot(peer.device, peer.snapshotPosition.seq)) {
+                warn(Status::Error, QStringLiteral("记不下快照补发请求，下一轮重试"));
+            }
             warn(Status::Error, QStringLiteral("%1 读不懂：%2").arg(path, peer.snapshotError));
         }
         bool stopped = false;
@@ -686,7 +693,10 @@ void SyncEngine::afterScan(const SyncWorker::ScanResult& result)
                 // 坏文件：写完整了还是坏的，重读也不会变好。跳过它、记进同步日志，并请对方补一份
                 // 覆盖到这一批的快照，把这批里的改动带回来。停在这里等的话，一个坏文件就会让同步永远卡住。
                 s.logFileProblem(peer.device, file.path, file.error);
-                requestSnapshot(peer.device, file.seq);
+                if (!requestSnapshot(peer.device, file.seq)) {
+                    warn(Status::Error, QStringLiteral("记不下补发请求，停在这一批，下一轮重试"));
+                    break;
+                }
                 if (!s.setPeerCursor(peer.device, {epoch, file.seq})) {
                     warn(Status::Error, QStringLiteral("记不下读取进度"));
                     break;
@@ -717,7 +727,9 @@ void SyncEngine::afterScan(const SyncWorker::ScanResult& result)
             const qint64 since = m_gapSinceMs.value(peer.device, now);
             m_gapSinceMs.insert(peer.device, since);
             if (now - since >= m_options.gapRequestAfterMs) {
-                requestSnapshot(peer.device, peer.waitingFor);
+                if (!requestSnapshot(peer.device, peer.waitingFor)) {
+                    warn(Status::Error, QStringLiteral("记不下缺号补发请求，下一轮重试"));
+                }
             }
         } else {
             m_gapSinceMs.remove(peer.device);
@@ -913,9 +925,17 @@ void SyncEngine::afterSurvey(const SyncWorker::Survey& survey)
             continue;
         }
         if (peer.cursor.epoch == epoch) {
-            // 保留普通同 epoch 缺号请求规则：请求的序号本机确实写过，且大于当前快照覆盖序号
+            const ServedRequestFingerprint fp{peer.cursor.writtenAtMs, request};
+            // 普通缺号请求仍要求序号已经写过；服务成功也要记指纹，因为请求在对方收到快照前还会保留。
             if (request.seq > covered && request.seq <= written) {
                 needed = true;
+                pendingFingerprints.insert(peer.device, fp);
+            } else if (covered >= 0 && request.seq == covered && request.seq <= written
+                       && m_servedSnapshotRequests.value(peer.device) != fp) {
+                // 请求现有快照的位置表示它读不了这份快照；不能用尚未存在的 N+1 表示重写。
+                // 同一指纹只补一次，普通缺号分支也登记指纹，避免刚补成后又因覆盖位置相等而多写一次。
+                needed = true;
+                pendingFingerprints.insert(peer.device, fp);
             }
         } else if (peer.cursor.epoch < epoch) {
             // 单独允许 peer.cursor.epoch < 本机 epoch、request.epoch 等于本机 epoch、

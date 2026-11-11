@@ -32,6 +32,7 @@
 #include "../src/services/SyncNotifier.h"
 #include "../src/services/SyncSchema.h"
 #include "../src/services/SyncStore.h"
+#include "../src/services/SyncedSettings.h"
 #include "../src/services/TaskManager.h"
 
 // 设备间同步接进应用（050 阶段 4）的测试：SyncController 怎么开关同步、怎么和恢复备份、逻辑日起点、
@@ -357,6 +358,8 @@ private slots:
     // 051 阶段 2：设置
     void contentSettingsAreRecordedButDeviceSettingsAreNot();
     void remoteSettingsAreWrittenBackAndSnapshotGapsRemoved();
+    void snapshotGoalRemovalWriteBack_data();
+    void snapshotGoalRemovalWriteBack();
     void invalidRemoteSettingsAreNotWrittenBack();
     void startupWritesBackSeveralSettingsWithoutReRecordingThem();
 
@@ -1647,6 +1650,87 @@ void SyncControllerTests::remoteSettingsAreWrittenBackAndSnapshotGapsRemoved()
     SyncController relaunched(macPlatform(cloudFolder()));
     relaunched.initialize();
     QVERIFY(!settingRow(goal).exists);
+}
+
+void SyncControllerTests::snapshotGoalRemovalWriteBack_data()
+{
+    // 保证今日目标删除在存储故障时保留重试意图，正常写回时及时清除标记。
+    QTest::addColumn<bool>("failWrites");
+    QTest::newRow("持续写入失败后启动重试") << true;
+    QTest::newRow("正常删除立即清标记") << false;
+}
+
+void SyncControllerTests::snapshotGoalRemovalWriteBack()
+{
+    // 保证快照删除的目标在偏好写入失败后不会复活，故障解除后启动核对删除旧值且不重新发布。
+    QFETCH(bool, failWrites);
+    const QString date = QStringLiteral("2026-09-20");
+    const QString goal = SyncSchema::dailyGoalSettingKey(date);
+    {
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        QVERIFY(AppSettings::instance()->setDailyFocusGoal(date, 90));
+        QCOMPARE(SyncStore().syncedSetting(goal), QStringLiteral("90"));
+    }
+    SyncBatch snapshot = SyncStore().exportSnapshot();
+    snapshot.device = QStringLiteral("fedcba9876543210fedcba9876543210");
+    snapshot.settings.erase(std::remove_if(snapshot.settings.begin(), snapshot.settings.end(),
+        [&goal](const SyncSettingRecord& setting) { return setting.key == goal; }), snapshot.settings.end());
+    const auto replaced = SyncStore().replaceWithSnapshot(snapshot);
+    QVERIFY2(replaced.ok, qPrintable(replaced.error));
+    QVERIFY(replaced.removedSettings.contains(goal));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(goal), QStringLiteral("remove"));
+    QVERIFY(!settingRow(goal).exists);
+    QString ini;
+    {
+        QSettings settings;
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+        ini = settings.fileName();
+    }
+    const QString directory = QFileInfo(ini).absolutePath();
+    const auto filePermissions = QFileInfo(ini).permissions();
+    const auto directoryPermissions = QFileInfo(directory).permissions();
+    // 文件与父目录同时禁止写入，阻止 QSettings 通过原子替换绕过只读文件；退出断言也恢复权限。
+    const auto restore = qScopeGuard([&] {
+        QFile::setPermissions(directory, directoryPermissions);
+        QFile::setPermissions(ini, filePermissions);
+    });
+    if (failWrites) {
+        QVERIFY(QFile::setPermissions(ini, QFileDevice::ReadOwner));
+        QVERIFY(QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+        QFile probe(ini);
+        QVERIFY(!probe.open(QIODevice::WriteOnly | QIODevice::Append));
+        QVERIFY(!SyncedSettings::remove(goal));
+        bool readOk = true;
+        QVERIFY(SyncedSettings::currentValues(&readOk).isEmpty());
+        QVERIFY(!readOk);
+    }
+    SyncNotifier::publish(replaced);
+    if (failWrites) {
+        QCOMPARE(SyncStore().pendingSettingWriteBacks().value(goal), QStringLiteral("remove"));
+        QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(date), 90);
+        QVERIFY(QFile::setPermissions(directory, directoryPermissions));
+        QVERIFY(QFile::setPermissions(ini, filePermissions));
+        AppSettings::instance()->reload();
+        QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(date), 90);
+    } else {
+        QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(date), 0);
+        QVERIFY(!SyncStore().pendingSettingWriteBacks().contains(goal));
+    }
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+    QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(date), 0);
+    QVERIFY(!SyncStore().pendingSettingWriteBacks().contains(goal));
+    QVERIFY(!settingRow(goal).exists);
+    const SyncBatch pending = SyncStore().collectPending();
+    for (const auto& setting : pending.settings) {
+        QVERIFY(setting.key != goal);
+    }
+    const SyncBatch published = SyncStore().exportSnapshot();
+    for (const auto& setting : published.settings) {
+        QVERIFY(setting.key != goal);
+    }
 }
 
 void SyncControllerTests::invalidRemoteSettingsAreNotWrittenBack()

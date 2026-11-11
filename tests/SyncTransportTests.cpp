@@ -1,6 +1,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMutex>
@@ -15,6 +16,7 @@
 #include <QWaitCondition>
 #include <QtTest>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -328,6 +330,26 @@ QByteArray tamper(const QByteArray& bytes, const std::function<void(QJsonObject&
     return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
 
+// 只统计成功落盘的快照写出；计数跨主线程与工作线程读取，使用原子变量隔离时序。
+class SnapshotWriteCountingFolder : public LocalSyncFolder
+{
+public:
+    SnapshotWriteCountingFolder(const QString& root, std::shared_ptr<std::atomic<int>> writes)
+        : LocalSyncFolder(root), m_writes(std::move(writes)) {}
+
+    bool write(const QString& path, const QByteArray& data, Error* error) override
+    {
+        const bool ok = LocalSyncFolder::write(path, data, error);
+        if (ok && QFileInfo(path).fileName().startsWith(QStringLiteral("snapshot-"))) {
+            ++*m_writes;
+        }
+        return ok;
+    }
+
+private:
+    std::shared_ptr<std::atomic<int>> m_writes;
+};
+
 // 读快照时可受控注入 I/O 错误的本地同步文件夹替身，用于故障注入测试
 class FaultySnapshotFolder : public LocalSyncFolder
 {
@@ -365,6 +387,9 @@ private slots:
     void filesRoundTrip();
     void corruptFilesAreRecognized_data();
     void corruptFilesAreRecognized();
+    void requiredBatchCollections_data();
+    void requiredBatchCollections();
+    void higherEpochSnapshotMissingRecordsPreservesLocalData();
     void newerFormatsAreNotTreatedAsCorrupt();
     void wrongFolderHints_data();
     void wrongFolderHints();
@@ -406,6 +431,9 @@ private slots:
     void lostFileIsRecoveredThroughSnapshotRequest();
 
     // 3f：异常与暂停
+    void sameEpochSnapshotRequestIsServedOnce_data();
+    void sameEpochSnapshotRequestIsServedOnce();
+    void corruptBatchRequestFailureKeepsCursorAndRetries();
     void corruptFileIsSkippedLoggedAndHealedBySnapshot();
     void newerFormatFileStopsWithoutSkipping();
     void memoRecordsRoundTripInEveryReadableFormat();
@@ -640,6 +668,127 @@ void SyncTransportTests::corruptFilesAreRecognized()
     QCOMPARE(status, SyncFiles::ParseStatus::Corrupt);
     // 原因会写进同步日志给人看，不能是空的。
     QVERIFY(!error.isEmpty());
+}
+
+void SyncTransportTests::requiredBatchCollections_data()
+{
+    // 保证每个可读格式的增量和快照均拒绝非法集合，同时保留合法空集合与旧式记录的兼容性。
+    QTest::addColumn<int>("format");
+    QTest::addColumn<bool>("snapshot");
+    QTest::addColumn<QString>("key");
+    QTest::addColumn<QString>("shape");
+    for (int format = SyncJson::kOldestReadableFormat; format <= SyncJson::kFormatVersion; ++format) {
+        for (const bool snapshot : {false, true}) {
+            for (const QString& key : {QStringLiteral("records"), QStringLiteral("settings")}) {
+                for (const QString& shape : {QStringLiteral("missing"), QStringLiteral("null"),
+                                             QStringLiteral("object"), QStringLiteral("string")}) {
+                    const QByteArray name = QStringLiteral("v%1-%2-%3-%4").arg(format)
+                        .arg(snapshot ? QStringLiteral("snapshot") : QStringLiteral("changes"), key, shape).toUtf8();
+                    QTest::newRow(name.constData()) << format << snapshot << key << shape;
+                }
+            }
+            for (const QString& shape : {QStringLiteral("empty"), QStringLiteral("legacy")}) {
+                const QByteArray name = QStringLiteral("v%1-%2-%3").arg(format)
+                    .arg(snapshot ? QStringLiteral("snapshot") : QStringLiteral("changes"), shape).toUtf8();
+                QTest::newRow(name.constData()) << format << snapshot << QString() << shape;
+            }
+        }
+    }
+}
+
+void SyncTransportTests::requiredBatchCollections()
+{
+    // 保证损坏集合不能伪装成空集合通过解码，合法空数组和缺少 f 的旧式记录仍然可读。
+    QFETCH(int, format);
+    QFETCH(bool, snapshot);
+    QFETCH(QString, key);
+    QFETCH(QString, shape);
+    SyncBatch batch;
+    batch.device = kDeviceA;
+    batch.epoch = 3;
+    SyncFiles::SnapshotFile snapshotFile;
+    snapshotFile.coveredSeq = 42;
+    snapshotFile.batch = batch;
+    const QByteArray original = snapshot ? SyncFiles::encodeSnapshot(snapshotFile)
+                                        : SyncFiles::encodeChanges({42, 1790000000123, batch});
+    const QByteArray bytes = tamper(original, [&](QJsonObject& outer) {
+        QJsonObject inner = outer.value(QStringLiteral("batch")).toObject();
+        inner.insert(QStringLiteral("format"), format);
+        if (shape == QLatin1String("missing")) {
+            inner.remove(key);
+        } else if (shape == QLatin1String("null")) {
+            inner.insert(key, QJsonValue(QJsonValue::Null));
+        } else if (shape == QLatin1String("object")) {
+            inner.insert(key, QJsonObject{});
+        } else if (shape == QLatin1String("string")) {
+            inner.insert(key, QStringLiteral("[]"));
+        } else if (shape == QLatin1String("legacy")) {
+            inner.insert(QStringLiteral("records"), QJsonArray{QJsonObject{
+                {QStringLiteral("t"), QStringLiteral("tasks")}, {QStringLiteral("id"), QStringLiteral("legacy-task")}}});
+        }
+        outer.insert(QStringLiteral("batch"), inner);
+    });
+    SyncFiles::ChangeFile changeBack;
+    SyncFiles::SnapshotFile snapshotBack;
+    QString error;
+    const auto status = snapshot ? SyncFiles::decodeSnapshot(bytes, kDeviceA, {3, 42}, &snapshotBack, &error)
+                                 : SyncFiles::decodeChanges(bytes, kDeviceA, {3, 42}, &changeBack, &error);
+    const bool valid = shape == QLatin1String("empty") || shape == QLatin1String("legacy");
+    QCOMPARE(status, valid ? SyncFiles::ParseStatus::Ok : SyncFiles::ParseStatus::Corrupt);
+    if (!valid) {
+        QVERIFY(!error.isEmpty());
+    } else {
+        const SyncBatch& decoded = snapshot ? snapshotBack.batch : changeBack.batch;
+        QVERIFY(decoded.settings.isEmpty());
+        QCOMPARE(decoded.records.size(), shape == QLatin1String("legacy") ? 1 : 0);
+        if (!decoded.records.isEmpty()) {
+            QVERIFY(decoded.records.first().fields.isEmpty());
+        }
+    }
+}
+
+void SyncTransportTests::higherEpochSnapshotMissingRecordsPreservesLocalData()
+{
+    // 保证缺少记录集合的高纪元快照不会整体替换本机数据或推进本机纪元。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+    const QString first = addTask(ipad->device, QStringLiteral("本机任务甲"));
+    const QString second = addTask(ipad->device, QStringLiteral("本机任务乙"));
+    QVERIFY(!first.isEmpty() && !second.isEmpty() && first != second);
+    QVERIFY(syncOnce(*ipad));
+    const QStringList before = describe(ipad->device);
+    const QStringList titlesBefore = taskTitles(ipad->device);
+    QCOMPARE(titlesBefore.size(), 2);
+    const qint64 epoch = SyncStore(ipad->device.connection).epoch();
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QVERIFY(syncOnce(*mac));
+    const qint64 higherEpoch = SyncStore(mac->device.connection).epoch();
+    QVERIFY(higherEpoch > epoch);
+    const QString relative = SyncFiles::deviceDirectory(mac->device.id) + QLatin1Char('/')
+        + SyncFiles::snapshotFileName({higherEpoch, 0});
+    QFile file(cloud.path(mac->device, relative));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray broken = tamper(file.readAll(), [](QJsonObject& outer) {
+        QJsonObject batch = outer.value(QStringLiteral("batch")).toObject();
+        batch.remove(QStringLiteral("records"));
+        outer.insert(QStringLiteral("batch"), batch);
+    });
+    file.close();
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(file.write(broken), broken.size());
+    file.close();
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(describe(ipad->device), before);
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), epoch);
+    QCOMPARE(taskTitles(ipad->device), titlesBefore);
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::Error);
 }
 
 void SyncTransportTests::newerFormatsAreNotTreatedAsCorrupt()
@@ -2008,6 +2157,155 @@ public:
 private:
     std::shared_ptr<Stall> m_stall;
 };
+
+void SyncTransportTests::sameEpochSnapshotRequestIsServedOnce_data()
+{
+    // 保证同纪元坏快照可在原覆盖位置补发，已存在的请求能重新通知，正常补缺号不多写。
+    QTest::addColumn<bool>("alreadyRequested");
+    QTest::addColumn<bool>("corruptSnapshot");
+    QTest::newRow("压缩快照损坏") << false << true;
+    QTest::newRow("已有缺号请求的补发快照损坏") << true << true;
+    QTest::newRow("正常补缺号只写一次") << true << false;
+}
+
+void SyncTransportTests::sameEpochSnapshotRequestIsServedOnce()
+{
+    // 保证发送端没有新改动时也能补回坏快照，同一请求只写一次，接收恢复后不继续重写。
+    QFETCH(bool, alreadyRequested);
+    QFETCH(bool, corruptSnapshot);
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    SyncEngine::Options options = testOptions();
+    options.compactAfterFiles = alreadyRequested ? 100 : 2;
+    options.maintenanceIntervalMs = 0;
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, options);
+    const auto writes = std::make_shared<std::atomic<int>>(0);
+    mac->engine->setFolder(std::make_unique<SnapshotWriteCountingFolder>(cloud.replica(mac->device), writes));
+    QVERIFY(waitIdle(*mac->engine));
+    QCOMPARE(writes->load(), 0);
+    for (int batch = 1; batch <= 2; ++batch) {
+        QVERIFY(!addTask(mac->device, QStringLiteral("待补发任务 %1").arg(batch)).isEmpty());
+        QVERIFY(syncOnce(*mac));
+    }
+    SyncStore sender(mac->device.connection);
+    SyncStore receiver(ipad->device.connection);
+    const SyncPosition position{0, 2};
+    QCOMPARE(sender.outboundPosition(), position);
+    const QString snapshotPath = SyncFiles::deviceDirectory(mac->device.id) + QLatin1Char('/')
+        + SyncFiles::snapshotFileName(position);
+    const QString changesPrefix = SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/');
+    const auto holdChanges = [&changesPrefix](const QString& path) { return path.startsWith(changesPrefix); };
+    qint64 oldRequestTime = 0;
+    if (alreadyRequested) {
+        // 构造缺号检测已经完成、请求 N 已持久化并发布的边界状态；缺号发现本身由现有 lostFile 用例覆盖。
+        // 直接发布真实格式的游标，确保发送端先服务同一位置和同一指纹，再让接收端发现补发件损坏。
+        QVERIFY(receiver.setSnapshotRequest(mac->device.id, position));
+        SyncFiles::CursorFile cursor;
+        cursor.device = ipad->device.id;
+        cursor.epoch = 0;
+        cursor.writtenAtMs = QDateTime::currentMSecsSinceEpoch();
+        oldRequestTime = cursor.writtenAtMs;
+        cursor.applied = receiver.peerCursors();
+        cursor.snapshotRequests = receiver.snapshotRequests();
+        QFile file(cloud.path(ipad->device, SyncFiles::deviceDirectory(ipad->device.id)
+            + QLatin1Char('/') + SyncFiles::cursorFileName()));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        const QByteArray bytes = SyncFiles::encodeCursor(cursor);
+        QCOMPARE(file.write(bytes), bytes.size());
+        file.close();
+        cloud.deliver(ipad->device, mac->device);
+        QVERIFY(syncOnce(*mac));
+    }
+    QCOMPARE(sender.snapshotPosition(), position);
+    QCOMPARE(writes->load(), 1);
+    // 请求尚未清除时发送端先维护多轮，正常补缺号的第一次服务也必须留下指纹，不能在相等位置再写一次。
+    for (int round = 0; round < 3; ++round) {
+        QVERIFY(syncOnce(*mac));
+    }
+    QCOMPARE(writes->load(), 1);
+    cloud.deliver(mac->device, ipad->device, holdChanges);
+    if (corruptSnapshot) {
+        QFile file(cloud.path(ipad->device, snapshotPath));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QVERIFY(file.write("{broken") > 0);
+        file.close();
+        // 等墙上时间跨过已发布的请求时间戳，避免毫秒相同使新游标指纹与旧指纹偶合。
+        QTRY_VERIFY(QDateTime::currentMSecsSinceEpoch() > oldRequestTime);
+    }
+    QVERIFY(syncOnce(*ipad));
+    if (corruptSnapshot) {
+        QVERIFY(taskTitles(ipad->device).isEmpty());
+        QCOMPARE(receiver.snapshotRequests().value(mac->device.id), position);
+        cloud.deliver(ipad->device, mac->device);
+        for (int round = 0; round < 3; ++round) {
+            QVERIFY(syncOnce(*mac));
+        }
+        QCOMPARE(writes->load(), 2);
+        // 修复内容还没有交付给接收端，持续相同请求只触发这一次重写。
+        QVERIFY(taskTitles(ipad->device).isEmpty());
+        cloud.deliver(mac->device, ipad->device, holdChanges);
+        QVERIFY(syncOnce(*ipad));
+    }
+    QCOMPARE(describe(ipad->device), describe(mac->device));
+    QVERIFY(receiver.snapshotRequests().isEmpty());
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    const int expectedWrites = corruptSnapshot ? 2 : 1;
+    for (int round = 0; round < 3; ++round) {
+        cloud.exchange(mac->device, ipad->device);
+        QVERIFY(syncOnce(*mac));
+        QVERIFY(syncOnce(*ipad));
+    }
+    QCOMPARE(writes->load(), expectedWrites);
+    QCOMPARE(sender.outboundPosition(), position);
+}
+
+void SyncTransportTests::corruptBatchRequestFailureKeepsCursorAndRetries()
+{
+    // 保证唯一坏批次的补发请求存不下时不越过它，存储恢复后仍能请求快照并收回完整内容。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    SyncEngine::Options options = testOptions();
+    options.maintenanceIntervalMs = 0;
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, options);
+    QVERIFY(!addTask(mac->device, QStringLiteral("唯一待恢复批次")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+    SyncStore receiver(ipad->device.connection);
+    QCOMPARE(SyncStore(mac->device.connection).outboundPosition(), (SyncPosition{0, 1}));
+    QCOMPARE(SyncStore(mac->device.connection).snapshotPosition(), (SyncPosition{0, 0}));
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device).size(), 1);
+    cloud.deliver(mac->device, ipad->device);
+    const QString change = SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/')
+        + SyncFiles::changeFileName({0, 1});
+    QFile file(cloud.path(ipad->device, change));
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QVERIFY(file.write("{broken") > 0);
+    file.close();
+    QVERIFY(exec(ipad->device, QStringLiteral(
+        "CREATE TRIGGER fail_request BEFORE INSERT ON sync_state WHEN NEW.key LIKE 'request/%' "
+        "BEGIN SELECT RAISE(ABORT, 'request failure'); END")));
+    QVERIFY(!receiver.setSnapshotRequest(mac->device.id, {0, 1}));
+    QVERIFY(receiver.snapshotRequests().isEmpty());
+    const auto before = receiver.peerCursors();
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::Error);
+    QCOMPARE(receiver.peerCursors(), before);
+    QVERIFY(receiver.snapshotRequests().isEmpty());
+    QVERIFY(taskTitles(ipad->device).isEmpty());
+    QVERIFY(exec(ipad->device, QStringLiteral("DROP TRIGGER fail_request")));
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(receiver.snapshotRequests().value(mac->device.id), (SyncPosition{0, 1}));
+    cloud.deliver(ipad->device, mac->device);
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(SyncStore(mac->device.connection).snapshotPosition(), (SyncPosition{0, 1}));
+    cloud.deliver(mac->device, ipad->device, [&change](const QString& path) { return path == change; });
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(describe(ipad->device), describe(mac->device));
+    QCOMPARE(receiver.peerCursors().value(mac->device.id), (SyncPosition{0, 1}));
+    QVERIFY(receiver.snapshotRequests().isEmpty());
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+}
 
 void SyncTransportTests::corruptFileIsSkippedLoggedAndHealedBySnapshot()
 {
