@@ -65,14 +65,17 @@ import UniformTypeIdentifiers
                 }
             }
             Section("状态") {
-                Text(store.snapshot.statusText).foregroundStyle(store.snapshot.hasProblem ? ThemeColors.danger : ThemeColors.ink)
+                Text(store.snapshot.summaryText).foregroundStyle(store.snapshot.hasProblem ? ThemeColors.danger : ThemeColors.ink)
+                if !store.snapshot.statusText.isEmpty {
+                    Text(store.snapshot.statusText).foregroundStyle(store.snapshot.hasProblem ? ThemeColors.danger : ThemeColors.ink)
+                }
                 if !store.snapshot.statusDetail.isEmpty && store.snapshot.hasProblem {
                     Text(store.snapshot.statusDetail).foregroundStyle(ThemeColors.danger)
                 }
                 LabeledContent("上次同步", value: SyncTimeText.display(store.snapshot.lastSyncedAt))
                 LabeledContent("待同步", value: store.pendingText)
                 Button("立即同步", systemImage: "arrow.triangle.2.circlepath") { store.syncNow() }
-                    .disabled(store.snapshot.busy || !store.snapshot.hasFolder)
+                    .disabled(!store.snapshot.enabled || store.snapshot.busy || !store.snapshot.hasFolder)
                 if store.snapshot.statusKey == "needsConfirmation" {
                     Button("确认加入") { joinConfirmation = true }
                     Button("暂不加入") { store.setEnabled(false) }
@@ -94,6 +97,7 @@ import UniformTypeIdentifiers
             Button("取消", role: .cancel) {}
             Button("确认加入", role: .destructive) { store.confirmJoin() }
         } message: { Text(store.joinConfirmationText) }
+        .onAppear { store.clearNotice() }
         .task { store.refresh() }
     }
 }
@@ -181,6 +185,7 @@ import UniformTypeIdentifiers
                         if !entry.keptValue.isEmpty { Section("保留的值") { Text(entry.keptValue).textSelection(.enabled) } }
                         if !store.notice.isEmpty { Text(store.notice) }
                     }.navigationTitle(entry.title)
+                        .onAppear { store.clearNotice() }
                 } label: {
                     VStack(alignment: .leading) {
                         Text(entry.title)
@@ -204,7 +209,7 @@ import UniformTypeIdentifiers
         SettingsForm {
             Section {
                 Toggle("自动备份", isOn: Binding(get: { store.autoBackupEnabled }, set: store.setAutoBackupEnabled))
-                LabeledContent("上次备份", value: store.snapshot.lastBackupTimeIso.isEmpty ? "尚未备份" : store.snapshot.lastBackupTimeIso)
+                LabeledContent("上次备份", value: store.snapshot.lastBackupTimeIso.isEmpty ? "尚未备份" : BackupTimeText.display(store.snapshot.lastBackupTimeIso))
                 Button("创建备份", systemImage: "externaldrive") { store.createBackup() }
                     .disabled(store.working || store.snapshot.busy || store.exportURL != nil)
                 Button("恢复备份", systemImage: "arrow.uturn.backward") { importPresented = true }
@@ -216,7 +221,7 @@ import UniformTypeIdentifiers
                     Button { importURL(URL(fileURLWithPath: entry.path)) } label: {
                         VStack(alignment: .leading) {
                             Text(entry.name)
-                            Text(entry.modified).font(.caption).foregroundStyle(ThemeColors.inkMuted)
+                            Text(BackupTimeText.display(entry.modified)).font(.caption).foregroundStyle(ThemeColors.inkMuted)
                         }
                     }.disabled(store.working || store.snapshot.busy || store.exportURL != nil)
                 }

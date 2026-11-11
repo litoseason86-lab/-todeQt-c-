@@ -52,24 +52,28 @@ import Observation
         do { logs = try bridge.syncLog(limit: 200); errorMessage = "" }
         catch { errorMessage = error.localizedDescription }
     }
+    // 提示只属于当前页面和本次动作；清理在动作开始前完成，不能抹掉动作回调刚送来的新提示。
+    public func clearNotice() { notice = "" }
     // 桥接拒绝派发时显示本次原因；已派发动作的进度和失败仍由原通知与状态承接。
     private func perform(_ action: () throws -> Void) {
         do { try action() } catch { errorMessage = error.localizedDescription }
     }
     public func setEnabled(_ enabled: Bool) {
+        clearNotice()
         do { try bridge.setEnabled(enabled); refresh() }
         catch { errorMessage = error.localizedDescription }
     }
-    public func confirmJoin() { perform { try bridge.confirmJoin() } }
-    public func syncNow() { perform { try bridge.syncNow() } }
-    public func chooseFolder() { perform { try bridge.chooseFolder() } }
-    public func rebuildFolder() { perform { try bridge.rebuildFolder() } }
+    public func confirmJoin() { clearNotice(); perform { try bridge.confirmJoin() } }
+    public func syncNow() { clearNotice(); perform { try bridge.syncNow() } }
+    public func chooseFolder() { clearNotice(); perform { try bridge.chooseFolder() } }
+    public func rebuildFolder() { clearNotice(); perform { try bridge.rebuildFolder() } }
     public func requestPairingSheet() { pairingSheetRequested = true }
     public func cancelPairingSheet() {
         pairingSheetRequested = false
         pairingJoinStarted = false
     }
     public func selectTransport(_ transport: String) {
+        clearNotice()
         if transport == "server" {
             if !isServerTransport { requestPairingSheet() }
             return
@@ -78,6 +82,7 @@ import Observation
         perform { try bridge.switchToICloud() }
     }
     public func submitPairingCode(_ code: String) {
+        clearNotice()
         guard canSubmitPairingCode(code) else { return }
         pairingJoinStarted = true
         do {
@@ -88,8 +93,9 @@ import Observation
             errorMessage = error.localizedDescription
         }
     }
-    public func switchToICloud() { perform { try bridge.switchToICloud() } }
+    public func switchToICloud() { clearNotice(); perform { try bridge.switchToICloud() } }
     public func copy(_ entry: SyncLogEntry) {
+        clearNotice()
         guard entry.canCopyLostValue else { return }
         perform { try bridge.copyLostValue(entry.lostValue) }
     }

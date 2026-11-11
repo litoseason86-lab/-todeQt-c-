@@ -127,6 +127,7 @@ private struct OperationBlockModifier: ViewModifier {
     let store: ShellStore
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     func body(content: Content) -> some View {
+        let operationText = store.operationText.isEmpty ? "正在处理数据" : store.operationText
         content
             .disabled(store.operationBlocksUI)
             .overlay {
@@ -138,13 +139,13 @@ private struct OperationBlockModifier: ViewModifier {
                         }.ignoresSafeArea()
                         VStack(spacing: 16) {
                             ProgressView()
-                            Text(store.operationText.isEmpty ? "正在恢复数据" : store.operationText)
+                            Text(operationText)
                         }
                         .padding(28)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                     }
                     .accessibilityAddTraits(.isModal)
-                    .accessibilityLabel("正在恢复数据，暂时不能操作")
+                    .accessibilityLabel(operationText + "，暂时不能操作")
                 }
             }
     }

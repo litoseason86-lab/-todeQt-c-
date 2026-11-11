@@ -1,7 +1,96 @@
+import Foundation
 import IPadCore
 import XCTest
 
 @MainActor final class SettingsTransferTests: XCTestCase {
+    // 产品保证：每次同步用户动作先清掉旧通知，随后回调送达的新通知仍可展示。
+    func testSyncActionsClearOldNoticeAndKeepLaterNotice() {
+        let actions: [(String, (SettingsSyncStore) -> Void)] = [
+            ("setEnabled", { $0.setEnabled(true) }),
+            ("confirmJoin", { $0.confirmJoin() }),
+            ("syncNow", { $0.syncNow() }),
+            ("chooseFolder", { $0.chooseFolder() }),
+            ("rebuildFolder", { $0.rebuildFolder() }),
+            ("selectTransport", { $0.selectTransport("server") }),
+            ("submitPairingCode", { $0.submitPairingCode("pairing-code") }),
+            ("switchToICloud", { $0.switchToICloud() }),
+            ("copy", { $0.copy(SyncLogEntry(id: 1, kind: "edit", kindLabel: "", time: "", title: "",
+                summary: "", detail: "", fieldLabel: "", lostValue: "旧内容", keptValue: "", canCopyLostValue: false)) })
+        ]
+        for (name, action) in actions {
+            let bridge = SettingsSyncFake()
+            let store = SettingsSyncStore(bridge: bridge)
+            bridge.onNotice?("上次操作的通知")
+            XCTAssertEqual(store.notice, "上次操作的通知", name)
+            action(store)
+            XCTAssertEqual(store.notice, "", name)
+            bridge.onNotice?("本次动作完成")
+            XCTAssertEqual(store.notice, "本次动作完成", name)
+        }
+    }
+
+    // 产品保证：同步动作过程中回调产生的通知和复制反馈不会被动作收尾清空。
+    func testSyncActionCallbackNoticeSurvivesActionCompletion() {
+        let bridge = SettingsSyncFake()
+        let store = SettingsSyncStore(bridge: bridge)
+        bridge.onNotice?("旧通知")
+        XCTAssertEqual(store.notice, "旧通知")
+        bridge.onPairingCodeSubmitted = { [unowned bridge] in bridge.onNotice?("配对请求已送出") }
+        store.submitPairingCode("pairing-code")
+        XCTAssertEqual(store.notice, "配对请求已送出")
+        let entry = SyncLogEntry(id: 1, kind: "edit", kindLabel: "", time: "", title: "",
+            summary: "", detail: "", fieldLabel: "", lostValue: "可复制的原文", keptValue: "", canCopyLostValue: true)
+        store.copy(entry)
+        XCTAssertEqual(bridge.copied, "可复制的原文")
+        XCTAssertEqual(store.notice, "已复制丢失值")
+    }
+
+    // 产品保证：进入新同步页面或日志详情清除旧提示后，仍能收到后续通知与复制反馈。
+    func testClearSyncNoticePreservesFutureCallbacks() {
+        let bridge = SettingsSyncFake()
+        let store = SettingsSyncStore(bridge: bridge)
+        bridge.onNotice?("上一页通知")
+        XCTAssertEqual(store.notice, "上一页通知")
+        store.clearNotice()
+        XCTAssertEqual(store.notice, "")
+        bridge.onCopyRequested?("旧日志值")
+        XCTAssertEqual(store.notice, "已复制丢失值")
+        store.clearNotice()
+        XCTAssertEqual(store.notice, "")
+        bridge.onNotice?("新页面通知")
+        XCTAssertEqual(store.notice, "新页面通知")
+    }
+
+    // 产品保证：本地整秒或小数秒备份时间均显示到分钟，去掉 ISO 分隔符而不改变本地日期时间。
+    func testBackupTimeFormatsLocalTimestampsToMinutes() {
+        XCTAssertEqual(BackupTimeText.display("2026-11-11T20:15:03"), "2026-11-11 20:15")
+        XCTAssertEqual(BackupTimeText.display("2026-11-11T20:15:03.123"), "2026-11-11 20:15")
+    }
+
+    // 产品保证：带偏移或 Z 的备份时间按绝对时刻转换成本地时间，结果不依赖测试机器所在时区。
+    func testBackupTimeConvertsZonedTimestampsToLocalTime() throws {
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        // 预期绝对时刻由固定公历的 UTC 分量构造，再用测试进程本地时区显示，不改共享默认时区。
+        for (input, utcHour) in [("2026-11-11T20:15:03+11:00", 9), ("2026-11-11T20:15:03Z", 20)] {
+            let date = try XCTUnwrap(utcCalendar.date(from: DateComponents(
+                year: 2026, month: 11, day: 11, hour: utcHour, minute: 15, second: 3)))
+            XCTAssertEqual(BackupTimeText.display(input), formatter.string(from: date), input)
+        }
+    }
+
+    // 产品保证：损坏或缺失的备份时间不伪造成另一个日期，保留原串供页面选择缺省文案。
+    func testBackupTimePreservesUnparseableInput() {
+        for input in ["无法解析的备份时间", "", "2026-13-41T25:61:00"] {
+            XCTAssertEqual(BackupTimeText.display(input), input)
+        }
+    }
+
     // 产品保证：恢复确认显示同步提醒；待删项提交失败绝不调用恢复，并清理导入副本。
     func testRestoreCommitFailurePreventsRestoreAndKeepsWarning() throws {
         let bridge = SettingsBackupFake(); let files = SettingsFilesFake()
