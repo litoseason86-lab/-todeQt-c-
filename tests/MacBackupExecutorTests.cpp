@@ -183,6 +183,7 @@ private slots:
     void unreapedExecutorMakesAbandonmentSticky();
     void incompleteAndAbnormalResultsFail_data();
     void incompleteAndAbnormalResultsFail();
+    void chunkedPartialPipeReadsSucceedAndCoalescedExtraLineFails();
     void shutdownStopsAnUnresponsiveExecutorWithinDeadline();
     void failuresLogOnlyStandardErrorTail_data();
     void failuresLogOnlyStandardErrorTail();
@@ -417,6 +418,30 @@ void MacBackupExecutorTests::incompleteAndAbnormalResultsFail()
     }
     QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("target"))));
     QVERIFY(!executor.hasAbandonedWork());
+}
+
+// 保证分两次跨间隔到达的半包输出能拼成完整结果成功提交，而粘连第二行多余输出的管道结果必须拒绝。
+void MacBackupExecutorTests::chunkedPartialPipeReadsSucceedAndCoalescedExtraLineFails()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto guard = std::make_shared<GuardedProcessControl>();
+    MacBackupExecutor executor(QStringLiteral(POMODORO_BACKUP_STUB_PATH), guard);
+
+    {
+        EnvironmentValue env("POMODORO_BACKUP_STUB_MODE", "chunked-success");
+        const auto okResult = executor.stageCopy(directory.filePath(QStringLiteral("source")),
+                                                 directory.filePath(QStringLiteral("target")), 100, {});
+        QVERIFY2(okResult.success, qPrintable(okResult.error));
+        QVERIFY(okResult.committed);
+    }
+    {
+        EnvironmentValue env("POMODORO_BACKUP_STUB_MODE", "coalesced-extra");
+        const auto badResult = executor.stageCopy(directory.filePath(QStringLiteral("source")),
+                                                  directory.filePath(QStringLiteral("target2")), 100, {});
+        QVERIFY(!badResult.success);
+        QVERIFY(!badResult.error.isEmpty());
+    }
 }
 
 void MacBackupExecutorTests::shutdownStopsAnUnresponsiveExecutorWithinDeadline()

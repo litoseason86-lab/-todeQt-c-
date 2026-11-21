@@ -279,20 +279,26 @@ QVariantMap FocusSessionController::autoStartCandidate(int selectedTaskId, const
         return candidate;
     }
 
+    const int pendingId = m_pendingDeletion ? m_pendingDeletion->taskId() : -1;
     const QString title = selectedTitle.trimmed();
     if (selectedTaskId > 0 && !title.isEmpty()) {
-        // 选中项只在少数路径里清空，在今日页删掉任务不会清它；拿已删除的编号去启动，
-        // 服务端插入 0 行而失败，快捷键就既没启动也没展开选择器。所以先按编号回查。
-        const QVariantMap found = m_tasks->getTask(selectedTaskId);
-        if (found.value(QStringLiteral("id")).toInt() == selectedTaskId) {
-            candidate[QStringLiteral("id")] = selectedTaskId;
-            candidate[QStringLiteral("title")] = title;
-            return candidate;
+        // 待删撤销窗口中的任务已对界面隐藏，视为已失效，回落到今日首个未完成任务。
+        if (pendingId > 0 && selectedTaskId == pendingId) {
+            candidate[QStringLiteral("selectionStale")] = true;
+        } else {
+            // 选中项只在少数路径里清空，在今日页删掉任务不会清它；拿已删除的编号去启动，
+            // 服务端插入 0 行而失败，快捷键就既没启动也没展开选择器。所以先按编号回查。
+            const QVariantMap found = m_tasks->getTask(selectedTaskId);
+            if (found.value(QStringLiteral("id")).toInt() == selectedTaskId) {
+                const QString currentTitle = found.value(QStringLiteral("title")).toString().trimmed();
+                candidate[QStringLiteral("id")] = selectedTaskId;
+                candidate[QStringLiteral("title")] = currentTitle.isEmpty() ? title : currentTitle;
+                return candidate;
+            }
+            candidate[QStringLiteral("selectionStale")] = true;
         }
-        candidate[QStringLiteral("selectionStale")] = true;
     }
 
-    const int pendingId = m_pendingDeletion ? m_pendingDeletion->taskId() : -1;
     // getTasksByDate 已按「未完成在前、display_order 升序」排好。
     const QVariantList today = m_tasks->getTasksByDate(logicalToday());
     for (const QVariant& value : today) {

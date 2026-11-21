@@ -1338,6 +1338,35 @@ private slots:
         const auto status = spy.first().at(1).toJsonObject().value("structuredContent").toObject();
         QCOMPARE(status.value("connected"), QJsonValue(true));
     }
+    void syncRestoreUncertaintyBlocksToolsAndSnapshotReplaceRotatesSession()
+    {
+        // 产品保证：同步恢复不确定态按备份恢复忙态阻断工具读写，整库快照替换后轮换应用会话编号使旧写入会话失效。
+        Host host;
+        QVERIFY(host.access.setEnabled(true));
+        QVERIFY(host.access.setWriteEnabled(true));
+        host.access.setDataHandler([](Tool, const QJsonObject&) {
+            return makeToolSuccessResult({{"categories", QJsonArray{}}});
+        });
+
+        const QString initialSession = host.access.sessionId();
+        QVERIFY(!initialSession.isEmpty());
+        QVERIFY(!host.access.dispatch(Tool::ListCategories, {}).value("isError").toBool());
+
+        QVERIFY(QMetaObject::invokeMethod(&host.access, "setSyncRestoreUncertain", Q_ARG(bool, true)));
+        const QJsonObject blockedStatus = host.access.appStatus();
+        const QJsonArray blocks = blockedStatus.value("blocks").toArray();
+        QCOMPARE(blocks.size(), 1);
+        QCOMPARE(blocks.first().toObject().value("reason").toString(), QStringLiteral("backup_restore"));
+        QCOMPARE(code(host.access.dispatch(Tool::ListCategories, {})), QStringLiteral("APP_BUSY"));
+
+        QVERIFY(QMetaObject::invokeMethod(&host.access, "setSyncRestoreUncertain", Q_ARG(bool, false)));
+        QVERIFY(!host.access.dispatch(Tool::ListCategories, {}).value("isError").toBool());
+
+        QVERIFY(QMetaObject::invokeMethod(&host.access, "rotateSession"));
+        QVERIFY(host.access.sessionId() != initialSession);
+        QCOMPARE(code(host.access.dispatch(Tool::CreateTask, createArguments(initialSession))),
+                 QStringLiteral("SESSION_EXPIRED"));
+    }
 };
 QTEST_GUILESS_MAIN(McpIntegrationTests)
 #include "McpIntegrationTests.moc"

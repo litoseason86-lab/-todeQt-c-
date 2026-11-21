@@ -54,6 +54,8 @@ class PendingDeletion : public QObject
     Q_PROPERTY(bool sessionIsRest READ sessionIsRest NOTIFY changed)
     Q_PROPERTY(QString title READ title NOTIFY changed)
     Q_PROPERTY(bool active READ active NOTIFY changed)
+    // 操作代次：每次入槽、提交、撤销或换库退场单调递增，供界面绑定撤销/退场闭包，杜绝迟到回调串槽。
+    Q_PROPERTY(qint64 generation READ generation NOTIFY changed)
     // 撤销窗口时长（毫秒），默认 5000。小于等于 0 的值忽略；改它只影响下一次请求，不重启进行中的计时。
     Q_PROPERTY(int delayMs READ delayMs WRITE setDelayMs NOTIFY delayMsChanged)
 
@@ -65,6 +67,7 @@ public:
     bool sessionIsRest() const { return m_sessionIsRest; }
     QString title() const { return m_title; }
     bool active() const { return m_taskId > 0 || m_sessionId > 0; }
+    qint64 generation() const { return m_generation; }
     int delayMs() const { return m_delayMs; }
     // 同步提交中的底层失败已由本槽认领；桥接据此跳过原始提示，包括不在桥接调用内的自动到期。
     bool isCommitting() const { return m_committing; }
@@ -84,6 +87,11 @@ public:
     Q_INVOKABLE bool commit();
     // 撤销：停计时，有待删项就清槽。不碰数据库，不发 retired()。
     Q_INVOKABLE void cancel();
+    // 按操作代次提交或撤销：代次已过期（已换库、已提交或被新删除顶替）时静默忽略。
+    Q_INVOKABLE bool commitGeneration(qint64 generation);
+    Q_INVOKABLE void cancelGeneration(qint64 generation);
+    // 整库替换或恢复换库触发的外部退场：不触库，先停计时、递增代次并清槽，再发 retired() 与 changed()。
+    void retireForExternalReset();
 
 signals:
     void changed();
@@ -102,6 +110,7 @@ private:
     int m_sessionId = -1;
     bool m_sessionIsRest = false;
     QString m_title;
+    qint64 m_generation = 0;
     int m_delayMs = 5000;
     bool m_automaticCommitSuspended = false;
     int m_activeDelayMs = 5000;

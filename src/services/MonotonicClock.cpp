@@ -13,14 +13,21 @@ const SystemMonotonicClock* SystemMonotonicClock::instance()
 
 qint64 SystemMonotonicClock::nowNsecs() const
 {
-    // timebase 把 mach 计数单位换算成纳秒；Apple Silicon 上通常是 125/3。缓存一次即可。
-    static mach_timebase_info_data_t timebase = {0, 0};
+    // timebase 把 mach 计数单位换算成纳秒；Apple Silicon 上通常是 125/3。
+    // C++11 静态局部初始化保证主线程与 AppleNotificationBackend GCD 线程并发读取时无数据竞争。
+    static const mach_timebase_info_data_t timebase = [] {
+        mach_timebase_info_data_t info{0, 0};
+        mach_timebase_info(&info);
+        return info;
+    }();
     if (timebase.denom == 0) {
-        mach_timebase_info(&timebase);
+        return 0;
     }
     // mach_continuous_time：单调，且包含系统休眠期间流逝的时间（对合盖/睡眠场景至关重要）。
-    const uint64_t ticks = mach_continuous_time();
-    return static_cast<qint64>(ticks) * timebase.numer / timebase.denom;
+    // 使用 128 位无符号中间值避免 ticks * numer 在长时间运行后发生有符号整数溢出。
+    __extension__ using UInt128 = unsigned __int128;
+    const UInt128 ticks = mach_continuous_time();
+    return static_cast<qint64>((ticks * timebase.numer) / timebase.denom);
 }
 
 QString SystemMonotonicClock::bootSessionId() const

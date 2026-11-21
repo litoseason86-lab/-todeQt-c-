@@ -38,6 +38,21 @@ int main()
         std::puts("{\"success\":true,\"error\":\"\",\"committed\":false}");
         return 0;
     }
+    if (mode == "chunked-success") {
+        // 先写半行并刷新管道，停顿后再补齐后半行与换行，模拟分片读取。
+        std::fputs("{\"success\":true,\"error\":\"", stdout);
+        std::fflush(stdout);
+        ::usleep(20000);
+        std::puts("\",\"committed\":true}");
+        std::fflush(stdout);
+        return 0;
+    }
+    if (mode == "coalesced-extra") {
+        // 同一缓冲内紧跟第二条多余数据，模拟粘包/伪造多行输出。
+        std::puts("{\"success\":true,\"error\":\"\",\"committed\":true}\n{\"extra\":1}");
+        std::fflush(stdout);
+        return 0;
+    }
     if (mode == "committed-hang") {
         std::puts("{\"success\":true,\"error\":\"\",\"committed\":true}");
         std::fflush(stdout);

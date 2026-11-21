@@ -1,7 +1,7 @@
 #include <QCoreApplication>
-#include <QCryptographicHash>
 #include <QDate>
 #include <QFile>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -47,6 +47,7 @@ private slots:
     void updateGoalIgnoredWriteKeepsModelUnchanged();
     void updateGoalChangesWritesOnlyGivenFields();
     void deleteGoalRemovesModelDatabaseAndRefreshesPrimary();
+    void deleteGoalPurgesGhostRowWhenAlreadyRemovedExternally();
     void reorderMovesModelPersistsOrdersAndRefreshesPrimary();
     void reorderFailureKeepsOriginalModelOrder();
     void reorderIgnoredUpdateKeepsOriginalModelOrder();
@@ -71,11 +72,15 @@ void CountdownServiceTests::initTestCase()
     m_tempDir = new QTemporaryDir();
     QVERIFY(m_tempDir->isValid());
 
-    // 偏好域按构建目录区分，免得几个工作区同时跑本程序时互相改设置；原因见 ServiceTests::initTestCase。
-    const QByteArray buildDirDigest = QCryptographicHash::hash(
-        QCoreApplication::applicationDirPath().toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
-    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTest-") + QString::fromLatin1(buildDirDigest));
+    // 偏好统一写入临时目录 INI，直接运行二进制也不触碰宿主机 ~/Library/Preferences/。
+    const QString settingsDir = m_tempDir->filePath(QStringLiteral("preferences"));
+    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTests"));
     QCoreApplication::setApplicationName(QStringLiteral("CountdownServiceTests"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir);
+    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, settingsDir);
+    AppSettings::instance()->reload();
+
     m_databasePath = m_tempDir->filePath(QStringLiteral("countdown-test.sqlite"));
     QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
 }
@@ -522,6 +527,45 @@ void CountdownServiceTests::syncReferenceDateUpdatesBothPathsAndNotifies()
                                     CountdownModel::DaysRemainingRole).toInt(), 23);
     QCOMPARE(service->primaryGoal().toMap().value(QStringLiteral("daysRemaining")).toInt(), 23);
     QCOMPARE(primarySpy.count(), 1);
+}
+
+void CountdownServiceTests::deleteGoalPurgesGhostRowWhenAlreadyRemovedExternally()
+{
+    // 产品保证：目标在外部（如同步）已被先行从数据库删除而模型尚未刷新时，调用 deleteGoal 返回 false、发出错误提示，并立即重读数据库清除幽灵行与过期主目标。
+    CountdownService* service = CountdownService::instance();
+    const QDate target = LogicalDay::today(AppSettings::instance()->dayStartHour()).addDays(15);
+    QVERIFY(service->addGoal(QStringLiteral("将被外部删掉的目标"), target));
+    QVERIFY(service->addGoal(QStringLiteral("保留的次要目标"), target.addDays(10)));
+    QCOMPARE(service->model()->rowCount(), 2);
+    const int ghostId = goalIdAt(service->model(), 0);
+    QCOMPARE(service->primaryGoal().toMap().value(QStringLiteral("goalId")).toInt(), ghostId);
+
+    // 模拟外部连接/同步先行删掉了数据库行，内存模型里仍留着幽灵项。
+    QSqlQuery externalDelete(DatabaseManager::instance()->database());
+    externalDelete.prepare(QStringLiteral("DELETE FROM countdown_goals WHERE id = :id"));
+    externalDelete.bindValue(QStringLiteral(":id"), ghostId);
+    QVERIFY(externalDelete.exec());
+    QCOMPARE(externalDelete.numRowsAffected(), 1);
+    QCOMPARE(service->model()->rowCount(), 2);
+
+    QStringList signalOrder;
+    QObject guard;
+    connect(service, &CountdownService::goalsReloaded, &guard, [&] {
+        signalOrder.append(QStringLiteral("goalsReloaded"));
+    });
+    connect(service, &CountdownService::operationFailed, &guard, [&](const QString& msg) {
+        signalOrder.append(QStringLiteral("operationFailed:") + msg);
+    });
+
+    QVERIFY(!service->deleteGoal(ghostId));
+    QCOMPARE(service->model()->rowCount(), 1);
+    QCOMPARE(nameAt(service->model(), 0), QStringLiteral("保留的次要目标"));
+    QCOMPARE(service->primaryGoal().toMap().value(QStringLiteral("name")).toString(),
+             QStringLiteral("保留的次要目标"));
+    // 必须先 goalsReloaded 再 operationFailed，防止页面在收到重载信号时把刚报出的错误冲掉。
+    QCOMPARE(signalOrder.size(), 2);
+    QCOMPARE(signalOrder.at(0), QStringLiteral("goalsReloaded"));
+    QVERIFY(signalOrder.at(1).contains(QStringLiteral("目标不存在")));
 }
 
 QTEST_GUILESS_MAIN(CountdownServiceTests)

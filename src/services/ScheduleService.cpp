@@ -674,20 +674,24 @@ bool ScheduleService::setPeriods(const QVariantList& periods)
 
     QSqlQuery clearQuery(db);
     if (!clearQuery.exec(QStringLiteral("DELETE FROM schedule_periods"))) {
-        qWarning() << "Failed to clear schedule periods:" << clearQuery.lastError().text();
-        reportFailure(QStringLiteral("保存节次失败: %1").arg(clearQuery.lastError().text()));
+        const QString errorText = clearQuery.lastError().text();
+        qWarning() << "Failed to clear schedule periods:" << errorText;
+        clearQuery.finish();
         db.rollback();
+        reportFailure(QStringLiteral("保存节次失败: %1").arg(errorText));
         return false;
     }
+    clearQuery.finish();
 
     QSqlQuery insertQuery(db);
     if (!insertQuery.prepare(QStringLiteral(
             "INSERT INTO schedule_periods (period_index, start_minutes, end_minutes) "
             "VALUES (?, ?, ?)"))) {
-        qWarning() << "Failed to prepare schedule period insert:"
-                   << insertQuery.lastError().text();
-        reportFailure(QStringLiteral("保存节次失败: %1").arg(insertQuery.lastError().text()));
+        const QString errorText = insertQuery.lastError().text();
+        qWarning() << "Failed to prepare schedule period insert:" << errorText;
+        insertQuery.finish();
         db.rollback();
+        reportFailure(QStringLiteral("保存节次失败: %1").arg(errorText));
         return false;
     }
 
@@ -696,12 +700,15 @@ bool ScheduleService::setPeriods(const QVariantList& periods)
         insertQuery.addBindValue(normalized.at(i).startMinutes);
         insertQuery.addBindValue(normalized.at(i).endMinutes);
         if (!insertQuery.exec()) {
-            qWarning() << "Failed to insert schedule period:" << insertQuery.lastError().text();
-            reportFailure(QStringLiteral("保存节次失败: %1").arg(insertQuery.lastError().text()));
+            const QString errorText = insertQuery.lastError().text();
+            qWarning() << "Failed to insert schedule period:" << errorText;
+            insertQuery.finish();
             db.rollback();
+            reportFailure(QStringLiteral("保存节次失败: %1").arg(errorText));
             return false;
         }
     }
+    insertQuery.finish();
 
     if (!db.commit()) {
         qWarning() << "Failed to commit schedule periods:" << db.lastError().text();

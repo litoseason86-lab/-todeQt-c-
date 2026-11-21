@@ -34,6 +34,7 @@ public:
         QString id;   // 预约的 id，或撤销的前缀
         int fireAfterSeconds = 0;
         QString title;
+        QString body;
         bool playSound = false;
         ScheduleCallback callback;
     };
@@ -60,15 +61,15 @@ public:
     bool isAuthorized() const override { return true; }
     void requestAuthorization() override {}
 
-    void schedule(const QString& id, int fireAfterSeconds, const QString& title, const QString&,
+    void schedule(const QString& id, int fireAfterSeconds, const QString& title, const QString& body,
                   bool playSound, ScheduleCallback callback) override
     {
-        calls.append({QStringLiteral("schedule"), id, fireAfterSeconds, title, playSound, std::move(callback)});
+        calls.append({QStringLiteral("schedule"), id, fireAfterSeconds, title, body, playSound, std::move(callback)});
     }
     void cancelScheduled(const QString& prefix, const QString& keepId, ScheduleCallback callback) override
     {
         Q_UNUSED(keepId);
-        calls.append({QStringLiteral("cancel"), prefix, 0, QString(), false, std::move(callback)});
+        calls.append({QStringLiteral("cancel"), prefix, 0, QString(), QString(), false, std::move(callback)});
     }
 
     // 以 success 答复第 index 次调用，并按结果更新「待投递」集合。
@@ -121,6 +122,7 @@ private slots:
     void stopBeforeExpiryCancels();
     void soundChangeReschedulesCurrentSegment_data();
     void soundChangeReschedulesCurrentSegment();
+    void breakConfigChangesRescheduleCurrentSegment();
     void unchangedSoundDoesNotReschedule();
     void queuedScheduleUsesCurrentRemainingTime_data();
     void queuedScheduleUsesCurrentRemainingTime();
@@ -709,6 +711,85 @@ void PhaseAlarmCoordinatorTests::breakCompletionRemembersLongBreakAndFallsBackTo
     tick();
     settle();
     QCOMPARE(directChimes, 1);
+}
+
+void PhaseAlarmCoordinatorTests::breakConfigChangesRescheduleCurrentSegment()
+{
+    // 产品保证：番茄工作段运行期间修改短休息时长、长休息开关、长休息时长或长休息间隔时，系统预约立即撤销旧通知并以更新后的休息文案重新预约。
+    AppSettings* settings = AppSettings::instance();
+    settings->setBreakMinutes(5);
+    settings->setLongBreakEnabled(true);
+    settings->setLongBreakMinutes(15);
+    settings->setLongBreakInterval(4);
+    FocusTimer::instance()->m_completedPomodoros = 1;
+
+    m_coordinator->start();
+    settle();
+    QCOMPARE(m_backend->calls.size(), 1);
+    m_backend->answer(0, true); // 初始 CancelAll
+    settle();
+
+    QVERIFY(startPomodoro(25) > 0);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 2);
+    QCOMPARE(m_backend->calls.at(1).kind, QStringLiteral("schedule"));
+    QVERIFY(m_backend->calls.at(1).body.contains(QStringLiteral("5")));
+    m_backend->answer(1, true);
+    settle();
+    QVERIFY(m_coordinator->coversPhase(FocusTimer::WorkPhase));
+
+    // 1. 修改短休息时长（第 2 个番茄在间隔 4 下完成后是短休息）：必须触发 cancel + 新 schedule。
+    settings->setBreakMinutes(10);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 3);
+    QCOMPARE(m_backend->calls.at(2).kind, QStringLiteral("cancel"));
+    m_backend->answer(2, true);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 4);
+    QCOMPARE(m_backend->calls.at(3).kind, QStringLiteral("schedule"));
+    QVERIFY(m_backend->calls.at(3).body.contains(QStringLiteral("10")));
+    m_backend->answer(3, true);
+    settle();
+
+    // 2. 将长休息间隔从 4 改为 2（第 2 个番茄完成后即进入长休息）：必须再次重约。
+    settings->setLongBreakInterval(2);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 5);
+    QCOMPARE(m_backend->calls.at(4).kind, QStringLiteral("cancel"));
+    m_backend->answer(4, true);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 6);
+    QCOMPARE(m_backend->calls.at(5).kind, QStringLiteral("schedule"));
+    QVERIFY(m_backend->calls.at(5).body.contains(QStringLiteral("15")));
+    m_backend->answer(5, true);
+    settle();
+
+    // 3. 修改长休息时长：必须重约。
+    settings->setLongBreakMinutes(25);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 7);
+    QCOMPARE(m_backend->calls.at(6).kind, QStringLiteral("cancel"));
+    m_backend->answer(6, true);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 8);
+    QCOMPARE(m_backend->calls.at(7).kind, QStringLiteral("schedule"));
+    QVERIFY(m_backend->calls.at(7).body.contains(QStringLiteral("25")));
+    m_backend->answer(7, true);
+    settle();
+
+    // 4. 关闭长休息开关：必须重约回短休息 10 分钟。
+    settings->setLongBreakEnabled(false);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 9);
+    QCOMPARE(m_backend->calls.at(8).kind, QStringLiteral("cancel"));
+    m_backend->answer(8, true);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 10);
+    QCOMPARE(m_backend->calls.at(9).kind, QStringLiteral("schedule"));
+    QVERIFY(m_backend->calls.at(9).body.contains(QStringLiteral("10")));
+    m_backend->answer(9, true);
+    settle();
+    QCOMPARE(m_backend->pending.size(), 1);
 }
 
 QTEST_GUILESS_MAIN(PhaseAlarmCoordinatorTests)

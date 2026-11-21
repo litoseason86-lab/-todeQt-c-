@@ -213,6 +213,7 @@ private slots:
     void isoDateParsing_data();
     void isoDateParsing();
     void dateRangeIsInclusiveAndCapped();
+    void taskWriteDatesEnforceBusinessYearBounds();
     void unknownFieldsNullAndWrongTypesAreRejected();
     void integersRejectFractionsAndOutOfRange();
     void stateTokenMustBeLowercaseHex();
@@ -749,13 +750,14 @@ void McpProtocolTests::everyBusyReasonHasScopeAndNextAction()
     }
     QCOMPARE(names, (QStringList{QStringLiteral("editing"), QStringLiteral("dragging"),
                                  QStringLiteral("pending_delete"), QStringLiteral("backup_restore"),
-                                 QStringLiteral("shutting_down")}));
+                                 QStringLiteral("shutting_down"), QStringLiteral("active_focus")}));
 
     QCOMPARE(McpContracts::busyReasonScope(BusyReason::Editing), BlockScope::AllWrites);
     QCOMPARE(McpContracts::busyReasonScope(BusyReason::Dragging), BlockScope::AllWrites);
     QCOMPARE(McpContracts::busyReasonScope(BusyReason::PendingDelete), BlockScope::Task);
     QCOMPARE(McpContracts::busyReasonScope(BusyReason::BackupRestore), BlockScope::AllData);
     QCOMPARE(McpContracts::busyReasonScope(BusyReason::ShuttingDown), BlockScope::AllData);
+    QCOMPARE(McpContracts::busyReasonScope(BusyReason::ActiveFocus), BlockScope::Task);
 }
 
 void McpProtocolTests::busyErrorListsEveryBlock()
@@ -1104,6 +1106,33 @@ void McpProtocolTests::pathErrorDetailsOmitFullPath()
     const QJsonObject pathErrorSchema = outputProperty(Tool::GetStatus, QStringLiteral("path_error"));
     QVERIFY(McpContracts::validateAgainstSchema(details, pathErrorSchema).ok());
     QVERIFY(McpContracts::validateAgainstSchema(relative, pathErrorSchema).ok());
+}
+
+void McpProtocolTests::taskWriteDatesEnforceBusinessYearBounds()
+{
+    // 产品保证：任务写入与改期只接受 2000 至 2100 年的有效日期，而只读查询过滤器仍可读取历史年份数据。
+    const QJsonObject rescheduleBase = with(updateIdentity(), QStringLiteral("date"), QStringLiteral("2026-09-18"));
+
+    for (const QString& outOfRangeDate : {QStringLiteral("1999-12-31"), QStringLiteral("2101-01-01")}) {
+        const auto createRes = validate(Tool::CreateTask, with(validCreateArguments(), QStringLiteral("date"), outOfRangeDate));
+        QVERIFY2(hasError(createRes, QStringLiteral("date"), QStringLiteral("date_out_of_range")),
+                 qPrintable(describe(createRes)));
+
+        const auto rescheduleRes = validate(Tool::RescheduleTask, with(rescheduleBase, QStringLiteral("date"), outOfRangeDate));
+        QVERIFY2(hasError(rescheduleRes, QStringLiteral("date"), QStringLiteral("date_out_of_range")),
+                 qPrintable(describe(rescheduleRes)));
+    }
+
+    for (const QString& boundaryDate : {QStringLiteral("2000-01-01"), QStringLiteral("2100-12-31")}) {
+        QVERIFY(validate(Tool::CreateTask, with(validCreateArguments(), QStringLiteral("date"), boundaryDate)).ok());
+        QVERIFY(validate(Tool::RescheduleTask, with(rescheduleBase, QStringLiteral("date"), boundaryDate)).ok());
+    }
+
+    // 只读查询工具允许查询 2000 年以前的历史数据，不受写入年份边界限制。
+    QVERIFY(validate(Tool::ListTasks, {{"start_date", "1999-12-01"}, {"end_date", "1999-12-31"}}).ok());
+    QVERIFY(validate(Tool::GetFocusSummary, {{"start_date", "1999-12-01"}, {"end_date", "1999-12-31"}}).ok());
+    QVERIFY(validate(Tool::ListKnowledgeGaps,
+                     {{"status", "unresolved"}, {"due_from", "1999-12-01"}, {"due_to", "1999-12-31"}}).ok());
 }
 
 QTEST_GUILESS_MAIN(McpProtocolTests)

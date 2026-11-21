@@ -225,6 +225,8 @@ QVariantMap emptyDayStats()
     result.insert(QStringLiteral("completionRate"), 0.0);
     result.insert(QStringLiteral("sessionCount"), 0);
     result.insert(QStringLiteral("pomodoroCount"), 0);
+    result.insert(QStringLiteral("goalMinutes"), 0);
+    result.insert(QStringLiteral("goalProgressPercent"), 0.0);
     return result;
 }
 
@@ -551,10 +553,17 @@ QVariantMap StatisticsService::getDayStats(const QDate& date) const
     }
 
     const auto metrics = querySessionMetrics(date, date);
-    const auto counts = queryTaskCountsByDay(date, date).value(date.toString(Qt::ISODate));
+    const QString dateIso = date.toString(Qt::ISODate);
+    const auto counts = queryTaskCountsByDay(date, date).value(dateIso);
     const int totalDuration = metrics.seconds;
     const int completedTasks = counts.second;
     const int totalTasks = counts.first;
+    // 复用同一份 totalDuration 零 SQL 计算单日目标进度，与 getWeeklyReview 的 todayGoal 口径一致，
+    // 避免前端为取今日目标进度整套触发多表聚合周复盘。
+    const int goalMinutes = AppSettings::instance()->dailyFocusGoalMinutesForDate(dateIso);
+    const double goalProgressPercent = goalMinutes > 0
+        ? static_cast<double>(totalDuration) * 100.0 / (static_cast<double>(goalMinutes) * 60.0)
+        : 0.0;
 
     stats.insert(QStringLiteral("totalDuration"), totalDuration);
     stats.insert(QStringLiteral("completedTasks"), completedTasks);
@@ -562,6 +571,8 @@ QVariantMap StatisticsService::getDayStats(const QDate& date) const
     stats.insert(QStringLiteral("completionRate"), totalTasks > 0 ? static_cast<double>(completedTasks) / totalTasks : 0.0);
     stats.insert(QStringLiteral("sessionCount"), metrics.sessions);
     stats.insert(QStringLiteral("pomodoroCount"), metrics.pomodoros);
+    stats.insert(QStringLiteral("goalMinutes"), goalMinutes);
+    stats.insert(QStringLiteral("goalProgressPercent"), goalProgressPercent);
     return stats;
 }
 
@@ -704,19 +715,25 @@ QVariantMap StatisticsService::getDayComparison(const QDate& date) const
     }
 
     const QDate previousDate = date.addDays(-1);
+    // 合并当日与昨日会话指标和任务计数，将 6 次扫描降至 3 次（2 次 focus_sessions + 1 次 tasks）。
+    const SessionMetrics currentMetrics = querySessionMetrics(date, date);
+    const SessionMetrics previousMetrics = querySessionMetrics(previousDate, previousDate);
+    const auto taskCounts = queryTaskCountsByDay(previousDate, date);
+    const int currentCompleted = taskCounts.value(date.toString(Qt::ISODate)).second;
+    const int previousCompleted = taskCounts.value(previousDate.toString(Qt::ISODate)).second;
 
     QVariantMap result;
     result.insert(QStringLiteral("duration"),
-                  buildComparisonResult(calculateTotalDuration(date),
-                                        calculateTotalDuration(previousDate),
+                  buildComparisonResult(currentMetrics.seconds,
+                                        previousMetrics.seconds,
                                         QStringLiteral("昨天")));
     result.insert(QStringLiteral("sessionCount"),
-                  buildComparisonResult(getFocusSessionCount(date, date),
-                                        getFocusSessionCount(previousDate, previousDate),
+                  buildComparisonResult(currentMetrics.sessions,
+                                        previousMetrics.sessions,
                                         QStringLiteral("昨天")));
     result.insert(QStringLiteral("taskCompletion"),
-                  buildComparisonResult(countCompletedTasks(date),
-                                        countCompletedTasks(previousDate),
+                  buildComparisonResult(currentCompleted,
+                                        previousCompleted,
                                         QStringLiteral("昨天")));
     return result;
 }
@@ -733,31 +750,20 @@ QVariantMap StatisticsService::getWeekComparison(const QDate& weekStart) const
     const QDate previousWeekStart = weekStart.addDays(-7);
     const QDate previousWeekEnd = weekStart.addDays(-1);
 
-    // 这里原本按天循环调 14 次单日查询。每次查询的谓词都是
-    // `date(start_time, shift) BETWEEN ...`，`date()` 包住索引列会让 idx_sessions_start
-    // 失效（实测 EXPLAIN QUERY PLAN 为 SCAN），于是一次周对比要全表扫描 14 遍。
-    //
-    // 改成两次区间查询是可证明等价的：每条会话只属于一个逻辑日，区间谓词两端闭合，
-    // 「7 天各自求和」与「同一区间求和」的行集和过滤条件完全相同。
-    // 实测（11000 行、重度用户三年量级）：40 次逐日查询 82ms，合成后 1ms。
-    //
-    // 注意这里刻意不去动 `date()` 谓词本身。改成裸范围比较还能再快一个量级，
-    // 但那要把逻辑日边界从 SQL 挪进 C++，牵涉夏令时，而收益只有 0.8ms——不值当。
-    const int currentDuration =
-        queryTotalDurationForRange(weekStart, weekEnd, QStringLiteral("week comparison"));
-    const int previousDuration = queryTotalDurationForRange(
-        previousWeekStart, previousWeekEnd, QStringLiteral("previous week comparison"));
+    // 本周与上周的时长、有效天数、专注次数共用同一行集，经 querySessionMetrics 合为 2 次扫描（原 6 次）。
+    const SessionMetrics currentMetrics = querySessionMetrics(weekStart, weekEnd);
+    const SessionMetrics previousMetrics = querySessionMetrics(previousWeekStart, previousWeekEnd);
 
     QVariantMap result;
     result.insert(QStringLiteral("duration"),
-                  buildComparisonResult(currentDuration, previousDuration, QStringLiteral("上周")));
+                  buildComparisonResult(currentMetrics.seconds, previousMetrics.seconds, QStringLiteral("上周")));
     result.insert(QStringLiteral("effectiveDays"),
-                  buildComparisonResult(getEffectiveDays(weekStart, weekEnd),
-                                        getEffectiveDays(previousWeekStart, previousWeekEnd),
+                  buildComparisonResult(currentMetrics.effectiveDays,
+                                        previousMetrics.effectiveDays,
                                         QStringLiteral("上周")));
     result.insert(QStringLiteral("sessionCount"),
-                  buildComparisonResult(getFocusSessionCount(weekStart, weekEnd),
-                                        getFocusSessionCount(previousWeekStart, previousWeekEnd),
+                  buildComparisonResult(currentMetrics.sessions,
+                                        previousMetrics.sessions,
                                         QStringLiteral("上周")));
     return result;
 }
@@ -1101,6 +1107,9 @@ QVariantList StatisticsService::getMonthWeeklySummary(int year, int month) const
 
     const QDate firstDay(year, month, 1);
     const QDate lastDay(year, month, firstDay.daysInMonth());
+    // 按月一次查出各逻辑日专注时长再按周分段累加，将按周循环的 5–6 次全表扫描降至 1 次。
+    const QHash<QString, int> dailyDurations =
+        queryDurationsByLogicalDay(firstDay, lastDay, QStringLiteral("month weekly summary"));
 
     QDate weekStart = firstDay;
     int weekNumber = 1;
@@ -1112,10 +1121,14 @@ QVariantList StatisticsService::getMonthWeeklySummary(int year, int month) const
             weekEnd = lastDay;
         }
 
+        int weekDuration = 0;
+        for (QDate day = weekStart; day <= weekEnd; day = day.addDays(1)) {
+            weekDuration += dailyDurations.value(day.toString(Qt::ISODate), 0);
+        }
+
         QVariantMap week;
         week.insert(QStringLiteral("label"), QStringLiteral("第%1周").arg(weekNumber));
-        week.insert(QStringLiteral("duration"),
-                    queryTotalDurationForRange(weekStart, weekEnd, QStringLiteral("month weekly summary")));
+        week.insert(QStringLiteral("duration"), weekDuration);
         week.insert(QStringLiteral("startDate"), weekStart.toString(Qt::ISODate));
         week.insert(QStringLiteral("endDate"), weekEnd.toString(Qt::ISODate));
         result.append(week);

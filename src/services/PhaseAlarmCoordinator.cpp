@@ -19,11 +19,17 @@ PhaseAlarmCoordinator::PhaseAlarmCoordinator(FocusTimer* timer,
     connect(m_timer, &FocusTimer::runningStateChanged, this, &PhaseAlarmCoordinator::requestReconcile);
     connect(m_timer, &FocusTimer::phaseChanged, this, &PhaseAlarmCoordinator::requestReconcile);
     connect(m_timer, &FocusTimer::modeChanged, this, &PhaseAlarmCoordinator::requestReconcile);
-    // 系统预约保存的是当时的声音内容，设置变化后必须撤销重约，不能复用同一运行段的旧内容。
-    connect(AppSettings::instance(), &AppSettings::soundEnabledChanged, this, [this] {
+    // 系统预约固化了当时的声音与休息时长提示正文，相关设置变化后必须置脏撤销重约，不能复用旧预约内容。
+    const auto markContentDirty = [this] {
         m_contentDirty = true;
         requestReconcile();
-    });
+    };
+    AppSettings* settings = AppSettings::instance();
+    connect(settings, &AppSettings::soundEnabledChanged, this, markContentDirty);
+    connect(settings, &AppSettings::breakMinutesChanged, this, markContentDirty);
+    connect(settings, &AppSettings::longBreakEnabledChanged, this, markContentDirty);
+    connect(settings, &AppSettings::longBreakMinutesChanged, this, markContentDirty);
+    connect(settings, &AppSettings::longBreakIntervalChanged, this, markContentDirty);
     // 完成信号在计时器结算的同一调用栈里发出，先于排队的对账，这里只记下「是自然到点」。
     const auto markNaturalEnd = [this](int) {
         m_naturalEndPending = true;

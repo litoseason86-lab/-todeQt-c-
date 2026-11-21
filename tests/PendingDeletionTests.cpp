@@ -1,3 +1,5 @@
+#include <QCoreApplication>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -19,6 +21,7 @@ class PendingDeletionTests : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void deletionFailureKeepsSpecificReasonAndData_data();
     void deletionFailureKeepsSpecificReasonAndData();
     void pendingFailureCarriesTitleAndReason_data();
@@ -42,8 +45,11 @@ private slots:
     void suspendingActiveWindowRestartsItsOriginalDelayOnResume();
     void cancelDuringSuspensionKeepsTaskWithoutRetired();
     void secondRequestDuringSuspensionCommitsFirstAndHoldsSecond();
+    void generationGuardRejectsStaleCommitAndCancelAndExternalResetRetires();
+    void reentrantCommitOrCancelInsideRetiredDoesNotDoubleDeleteOrReportError();
 
 private:
+    QTemporaryDir m_settingsDir;
     QTemporaryDir* m_tempDir = nullptr;
 };
 
@@ -103,6 +109,19 @@ int insertRestSession()
 }
 
 } // namespace
+
+void PendingDeletionTests::initTestCase()
+{
+    // 偏好统一写入临时目录 INI，直接运行二进制也不触碰宿主机 ~/Library/Preferences/。
+    QVERIFY(m_settingsDir.isValid());
+    const QString settingsDir = m_settingsDir.path();
+    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("PendingDeletionTests"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir);
+    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, settingsDir);
+    AppSettings::instance()->reload();
+}
 
 void PendingDeletionTests::init()
 {
@@ -692,6 +711,79 @@ void PendingDeletionTests::pendingFailureCarriesTitleAndReason()
     QVERIFY(query.exec("DROP TRIGGER t33_failure"));
     QVERIFY(kind == "task" ? pending.requestTask(record, "重试") : pending.requestSession(record, "重试", kind == "rest"));
     QVERIFY(pending.commit()); QCOMPARE(failed.count(), 2); QCOMPARE(rowCount(table, record), 0);
+}
+
+// 产品保证：外部换库退场先清槽、递增代次再发 retired/changed；过期代次的提交与撤销静默忽略，绝不误操作新入槽项。
+void PendingDeletionTests::generationGuardRejectsStaleCommitAndCancelAndExternalResetRetires()
+{
+    PendingDeletion pending(TaskManager::instance(), FocusHistoryService::instance());
+    pending.setDelayMs(60000);
+    const int taskA = makeTask(QStringLiteral("旧库任务A"));
+    const int taskB = makeTask(QStringLiteral("新库任务B"));
+    QVERIFY(taskA > 0 && taskB > 0);
+
+    QVERIFY(pending.requestTask(taskA, QStringLiteral("旧库任务A")));
+    const qint64 genA = pending.generation();
+    QVERIFY(genA > 0);
+
+    QSignalSpy retiredSpy(&pending, &PendingDeletion::retired);
+    QSignalSpy changedSpy(&pending, &PendingDeletion::changed);
+    bool activeDuringRetired = true;
+    qint64 genDuringRetired = 0;
+    connect(&pending, &PendingDeletion::retired, this, [&] {
+        activeDuringRetired = pending.active();
+        genDuringRetired = pending.generation();
+    });
+
+    pending.retireForExternalReset();
+    QCOMPARE(retiredSpy.count(), 1);
+    QCOMPARE(changedSpy.count(), 1);
+    QVERIFY(!activeDuringRetired);
+    QVERIFY(genDuringRetired > genA);
+    QVERIFY(!pending.active());
+    QCOMPARE(rowCount(QStringLiteral("tasks"), taskA), 1);
+
+    // 放入新任务 B，旧代次 genA 的任何迟到提交或撤销都不得触碰任务 B。
+    QVERIFY(pending.requestTask(taskB, QStringLiteral("新库任务B")));
+    const qint64 genB = pending.generation();
+    QVERIFY(genB > genDuringRetired);
+    QVERIFY(pending.commitGeneration(genA));
+    pending.cancelGeneration(genA);
+    QVERIFY(pending.active());
+    QCOMPARE(pending.taskId(), taskB);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), taskB), 1);
+
+    // 匹配代次 genB 正常提交落库。
+    QVERIFY(pending.commitGeneration(genB));
+    QVERIFY(!pending.active());
+    QCOMPARE(rowCount(QStringLiteral("tasks"), taskB), 0);
+}
+
+// 产品保证：retired() 回调里重入 commit() 或 cancel() 不会二次删库、不会清掉进行中的槽或发出虚假 commitFailed。
+void PendingDeletionTests::reentrantCommitOrCancelInsideRetiredDoesNotDoubleDeleteOrReportError()
+{
+    PendingDeletion pending(TaskManager::instance(), FocusHistoryService::instance());
+    pending.setDelayMs(60000);
+    const int taskId = makeTask(QStringLiteral("防重入任务"));
+    QVERIFY(taskId > 0);
+    QVERIFY(pending.requestTask(taskId, QStringLiteral("防重入任务")));
+    const qint64 gen = pending.generation();
+
+    QSignalSpy failedSpy(&pending, &PendingDeletion::commitFailed);
+    QSignalSpy retiredSpy(&pending, &PendingDeletion::retired);
+    bool reentrantCommitResult = true;
+    connect(&pending, &PendingDeletion::retired, this, [&] {
+        reentrantCommitResult = pending.commit();
+        pending.cancel();
+        pending.cancelGeneration(gen);
+    });
+
+    QVERIFY(pending.commit());
+    QVERIFY(!reentrantCommitResult);
+    QCOMPARE(retiredSpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+    QVERIFY(!pending.active());
+    QCOMPARE(rowCount(QStringLiteral("tasks"), taskId), 0);
 }
 
 QTEST_GUILESS_MAIN(PendingDeletionTests)

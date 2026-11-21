@@ -5,6 +5,8 @@
 #include <QObject>
 #include <QTimer>
 
+#include <functional>
+
 class QSqlDatabase;
 class MonotonicClock;
 class ApplicationActivity;
@@ -65,6 +67,8 @@ public:
     RecoveryPolicy recoveryPolicy() const;
     // 前后台状态来源，不转移所有权。为空时视为始终在前台（桌面与多数测试的默认）。
     void setApplicationActivity(const ApplicationActivity* activity);
+    // 注入运行期阻塞判定（例如备份/恢复遮罩期间禁止启动或继续计时）；由 SharedApp 装配，销毁时清空。
+    void setOperationBlockedProvider(std::function<bool()> provider);
     void setFreeTimingAllowed(bool allowed);
     bool freeTimingAllowed() const;
     void setManualRestAllowed(bool allowed);
@@ -94,11 +98,14 @@ public:
     // 用户完全结束番茄循环时重置连续计数，下一轮长休息节奏从头开始。
     Q_INVOKABLE bool resetPomodoroCount();
     // 明确放弃循环：活动记录收尾与计数清零同事务，失败时保留可重试的活动状态。
-    bool stopAndResetPomodoroCycle();
+    Q_INVOKABLE bool stopAndResetPomodoroCycle();
 
     // 数据库初始化后调用。默认（桌面）把中断的会话恢复为暂停状态，关闭应用期间不会被误算为专注时间；
     // CatchUpOffline 策略下，同一次开机内被结束的番茄段与自由计时改为按单调时钟补回离线时段并继续计时。
-    bool restoreInterruptedSession();
+    // 备份恢复或回滚重开数据库时传入 allowOfflineCatchUp = false，一律按快照检查点恢复为暂停，不补算备份后的时间。
+    bool restoreInterruptedSession(bool allowOfflineCatchUp = true);
+    // 供备份恢复回滚调用：不写库，仅清空内存中属于失败目标库的计时态并广播状态变化，让回滚后的原库可安全重新加载。
+    void discardInMemoryStateForReload();
     // 应用退出前同步单调时钟到数据库；不结束会话，下一次启动仍可继续。
     void prepareForShutdown();
     // 只把当前进度写入活动快照，不暂停、不改变任何状态。移动端进入后台时调用：
@@ -158,6 +165,8 @@ private:
     friend class FocusSessionControllerTests;
     // 共享装配测试推进可控时钟，验证生命周期连线确实把最新进度落盘，并隔离单例状态。
     friend class SharedAppTests;
+    // 备份恢复测试注入可控时钟，验证移动端恢复策略下恢复备份不会凭空补算流逝时长。
+    friend class BackupServiceTests;
 
     explicit FocusTimer(QObject* parent = nullptr);
 
@@ -175,6 +184,7 @@ private:
     // 本段到点的时刻是否落在应用离开前台期间（此刻不在前台，或到点早于最近一次回到前台）。
     bool expiredInBackground() const;
     bool hasActiveTimer() const;
+    bool isOperationBlocked() const;
     // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
     // durationWasCorrected 为真时 end_time 按 start_time + durationSeconds 写入，
     // 让记录占用的区间与用户确认的时长一致，而不是继续横跨到「现在」。
@@ -229,6 +239,7 @@ private:
     bool m_completionFailureNotified = false;
     RecoveryPolicy m_recoveryPolicy = RecoveryPolicy::PauseOnRestore;
     const ApplicationActivity* m_activity = nullptr;
+    std::function<bool()> m_operationBlockedProvider;
     bool m_freeTimingAllowed = true;
     bool m_manualRestAllowed = true;
     quint64 m_runSegmentSerial = 0;

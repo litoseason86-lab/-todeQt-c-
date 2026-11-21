@@ -113,6 +113,7 @@ private slots:
     void convertDueGapsToTasksConvertsOnlyDueUnresolvedWithoutOpenTask();
     void convertDueGapsToTasksKeepsSuccessesAndReportsTheLastFailure();
     void convertDueGapsToTasksWithNothingDueChangesNothing();
+    void emptyStringDueDateBehavesAsUnscheduledOnReopenAndConvert();
     void operationsFailSafelyWhenDatabaseIsClosed();
 
 private:
@@ -1116,4 +1117,30 @@ void KnowledgeGapServiceTests::conversionRejectsOverlongNotesAndSearchIsLiteral(
     QVERIFY(count.exec(QStringLiteral("SELECT COUNT(*) FROM tasks")));
     QVERIFY(count.next());
     QCOMPARE(count.value(0).toInt(), 0);
+}
+
+void KnowledgeGapServiceTests::emptyStringDueDateBehavesAsUnscheduledOnReopenAndConvert()
+{
+    // 产品保证：历史空串 due_date 与 NULL 同等按未排期处理，reopenGap 回到未安排，convertToTask 补写任务日期。
+    auto* service = KnowledgeGapService::instance();
+    const int resolvedGap = service->captureGap(QStringLiteral("历史空串重开"), 0, 0);
+    const int convertGap = service->captureGap(QStringLiteral("历史空串转任务"), 0, 0);
+    QVERIFY(resolvedGap > 0 && convertGap > 0);
+    QVERIFY(service->resolveGap(resolvedGap, QStringLiteral("已解决")));
+
+    QSqlQuery patch(DatabaseManager::instance()->database());
+    QVERIFY(patch.exec(QStringLiteral("UPDATE knowledge_gaps SET due_date = '' WHERE id IN (%1, %2)")
+                           .arg(resolvedGap).arg(convertGap)));
+    patch.finish();
+
+    QVERIFY(service->reopenGap(resolvedGap));
+    const QVariantMap reopened = service->getGap(resolvedGap);
+    QCOMPARE(reopened.value(QStringLiteral("status")).toInt(), static_cast<int>(KnowledgeGapService::StatusOpen));
+
+    const QDate targetDate = logicalToday();
+    const int newTaskId = service->convertToTask(convertGap, targetDate);
+    QVERIFY(newTaskId > 0);
+    const QVariantMap converted = service->getGap(convertGap);
+    QCOMPARE(converted.value(QStringLiteral("status")).toInt(), static_cast<int>(KnowledgeGapService::StatusScheduled));
+    QCOMPARE(converted.value(QStringLiteral("dueDate")).toString(), targetDate.toString(Qt::ISODate));
 }

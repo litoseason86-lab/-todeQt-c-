@@ -1,9 +1,11 @@
 #include "TrashService.h"
 
 #include "AppSettings.h"
+#include "BackupOperations.h"
 #include "DatabaseManager.h"
 #include "FocusHistoryService.h"
 #include "LogicalDay.h"
+#include "MemoService.h"
 #include "RoutineManager.h"
 #include "SyncNotifier.h"
 #include "TaskManager.h"
@@ -11,6 +13,7 @@
 
 #include <QDate>
 #include <QDebug>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -39,16 +42,58 @@ QVariant nullableStr(const QJsonObject& o, const char* key)
     return v.isString() ? QVariant(v.toString()) : QVariant();
 }
 
-QVariant nullableInt(const QJsonObject& o, const char* key)
-{
-    const QJsonValue v = o.value(QLatin1String(key));
-    return v.isDouble() ? QVariant(static_cast<qlonglong>(v.toDouble())) : QVariant();
-}
-
 int integer(const QJsonObject& o, const char* key, int fallback = 0)
 {
     const QJsonValue v = o.value(QLatin1String(key));
-    return v.isDouble() ? static_cast<int>(v.toDouble()) : fallback;
+    qint64 parsed = 0;
+    if (!BackupOperations::strictJsonInt(v, &parsed)
+        || parsed < std::numeric_limits<int>::min() || parsed > std::numeric_limits<int>::max()) {
+        return fallback;
+    }
+    return static_cast<int>(parsed);
+}
+
+// 恢复写库前的严格整数提取：字段存在且非 null 时必须是无小数的安全整数且落在 int 范围内，拒绝小数或文本伪装。
+bool strictIntField(const QJsonObject& o, const char* key, int* out, bool allowMissing, int fallback = 0)
+{
+    const QJsonValue v = o.value(QLatin1String(key));
+    if (v.isUndefined() || v.isNull()) {
+        if (!allowMissing) {
+            return false;
+        }
+        *out = fallback;
+        return true;
+    }
+    qint64 parsed = 0;
+    if (!BackupOperations::strictJsonInt(v, &parsed)
+        || parsed < std::numeric_limits<int>::min() || parsed > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    *out = static_cast<int>(parsed);
+    return true;
+}
+
+// 可选业务日期列（如 last_generated_date、due_date）：允许缺失、null 或空串，但一旦非空必须是合法 YYYY-MM-DD。
+bool validOptionalDateField(const QJsonObject& o, const char* key, QVariant* out)
+{
+    const QJsonValue v = o.value(QLatin1String(key));
+    if (v.isUndefined() || v.isNull()) {
+        *out = QVariant();
+        return true;
+    }
+    if (!v.isString()) {
+        return false;
+    }
+    const QString text = v.toString();
+    if (text.isEmpty()) {
+        *out = QVariant(QStringLiteral(""));
+        return true;
+    }
+    if (!BackupOperations::isValidBusinessDate(text)) {
+        return false;
+    }
+    *out = QVariant(text);
+    return true;
 }
 
 QStringList stringList(const QJsonObject& o, const char* key)
@@ -111,11 +156,18 @@ QVariant categoryLocalId(QSqlDatabase& db, const QJsonObject& payload, RestoreOu
 // 这里的 QSqlQuery 都是局部变量，返回时已释放，回滚前不会留着未结束的语句。
 bool restoreTask(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
 {
-    // 日期无效（payload 损坏）时不能插出一条空日期的任务。
-    if (!QDate::fromString(str(p, "date"), Qt::ISODate).isValid()) {
+    // 入库前按与 BackupOperations::validateBusinessValues 同源的口径校验：拒绝紧凑日期、空标题与非 0/1 完成标记，避免坏行毒化后续备份。
+    const QString title = str(p, "title");
+    const QString date = str(p, "date");
+    int completed = 0;
+    int estimated = 0;
+    if (title.trimmed().isEmpty() || !BackupOperations::isValidBusinessDate(date)
+        || !strictIntField(p, "completed", &completed, true, 0) || (completed != 0 && completed != 1)
+        || !strictIntField(p, "estimated_minutes", &estimated, true, 0)) {
         return fail(out, kCorrupted);
     }
-    const QVariant categoryId = categoryLocalId(db, p, out);
+    const QString categorySyncId = str(p, "category_sync_id");
+    const QVariant categoryId = resolveRef(db, QStringLiteral("categories"), categorySyncId, out);
     if (!out->error.isEmpty()) {
         return false;
     }
@@ -130,11 +182,16 @@ bool restoreTask(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
         if (nameQuery.next()) {
             categoryName = nameQuery.value(0).toString();
         }
+    } else if (categorySyncId.isEmpty()) {
+        // 旧版纯文本科目任务原本就没有 category_sync_id，恢复时保留 TrashStore 记录的 category_name；
+        // 若原本挂有 category_sync_id 却已找不到（科目后来被删除），按删科目规则一并清空归入未分类。
+        const QString legacyCategoryName = str(p, "category_name");
+        if (!legacyCategoryName.trimmed().isEmpty()) {
+            categoryName = legacyCategoryName;
+        }
     }
-    // 科目找不到时 category_id 与 category 文本都置空（同删科目的做法），不留下指向不存在科目的文本。
-    const QVariant resolvedCategoryId = categoryName.isValid() ? categoryId : QVariant();
+    const QVariant resolvedCategoryId = (categoryId.isValid() && categoryName.isValid()) ? categoryId : QVariant();
 
-    const QString date = str(p, "date");
     QSqlQuery insert(db);
     // 排在原日期最后（当天最大值 +1），不插回原位置：原位置的序号可能已被别的任务占用。
     // routine_id 置空、routine_generated 置 0：例行实例恢复成普通任务（原身份已被删除记录占住）。
@@ -145,14 +202,14 @@ bool restoreTask(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
         "VALUES (:title, :category, :categoryId, NULL, 0, :estimated, :notes, "
         "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :orderDate), "
         ":date, :completed, :createdAt, :completionNote)"));
-    insert.bindValue(QStringLiteral(":title"), str(p, "title"));
+    insert.bindValue(QStringLiteral(":title"), title);
     insert.bindValue(QStringLiteral(":category"), categoryName);
     insert.bindValue(QStringLiteral(":categoryId"), resolvedCategoryId);
-    insert.bindValue(QStringLiteral(":estimated"), integer(p, "estimated_minutes"));
+    insert.bindValue(QStringLiteral(":estimated"), estimated);
     insert.bindValue(QStringLiteral(":notes"), str(p, "notes"));
     insert.bindValue(QStringLiteral(":orderDate"), date);
     insert.bindValue(QStringLiteral(":date"), date);
-    insert.bindValue(QStringLiteral(":completed"), integer(p, "completed"));
+    insert.bindValue(QStringLiteral(":completed"), completed);
     const QString createdAt = str(p, "created_at");
     insert.bindValue(QStringLiteral(":createdAt"), createdAt.isEmpty() ? isoNow() : createdAt);
     insert.bindValue(QStringLiteral(":completionNote"), str(p, "completion_note"));
@@ -230,7 +287,18 @@ bool restoreFocusSession(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome*
     const QString endText = str(p, "end_time");
     const QDateTime start = QDateTime::fromString(startText, Qt::ISODateWithMs);
     const QDateTime end = QDateTime::fromString(endText, Qt::ISODateWithMs);
-    if (!start.isValid() || !end.isValid()) {
+    int durationVal = 0;
+    const QJsonValue rawDuration = p.value(QStringLiteral("duration"));
+    const bool hasDuration = !rawDuration.isUndefined() && !rawDuration.isNull();
+    int mode = 1;
+    int completed = 0;
+    if (!BackupOperations::isValidBusinessDateTime(startText)
+        || !BackupOperations::isValidBusinessDateTime(endText)
+        || !start.isValid() || !end.isValid() || end < start
+        || (hasDuration && (!strictIntField(p, "duration", &durationVal, false) || durationVal < 0))
+        || !strictIntField(p, "mode", &mode, true, 1)
+        || !strictIntField(p, "pomodoro_completed", &completed, true, 0)
+        || (completed != 0 && completed != 1)) {
         return fail(out, kCorrupted);
     }
     // 只查区间冲突：不再查 3 分钟门槛和「不晚于现在」，恢复的是原来就有的记录。
@@ -252,9 +320,9 @@ bool restoreFocusSession(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome*
     // 时间字符串原样写回，不重新格式化，保证与删除前逐字一致。
     insert.bindValue(QStringLiteral(":start"), startText);
     insert.bindValue(QStringLiteral(":end"), endText);
-    insert.bindValue(QStringLiteral(":duration"), nullableInt(p, "duration"));
-    insert.bindValue(QStringLiteral(":mode"), integer(p, "mode", 1));
-    insert.bindValue(QStringLiteral(":completed"), integer(p, "pomodoro_completed"));
+    insert.bindValue(QStringLiteral(":duration"), hasDuration ? QVariant(durationVal) : QVariant());
+    insert.bindValue(QStringLiteral(":mode"), mode);
+    insert.bindValue(QStringLiteral(":completed"), completed);
     insert.bindValue(QStringLiteral(":category"), categoryId);
     insert.bindValue(QStringLiteral(":name"), str(p, "category_name_snapshot"));
     insert.bindValue(QStringLiteral(":color"), str(p, "category_color_snapshot"));
@@ -270,8 +338,13 @@ bool restoreRestSession(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* 
     const QString startText = str(p, "start_time");
     const QString endText = str(p, "end_time");
     const QDateTime start = QDateTime::fromString(startText, Qt::ISODateWithMs);
-    const int duration = integer(p, "duration");
-    if (!start.isValid() || duration <= 0 || !QDateTime::fromString(endText, Qt::ISODateWithMs).isValid()) {
+    int duration = 0;
+    int manual = 0;
+    if (!BackupOperations::isValidBusinessDateTime(startText)
+        || !BackupOperations::isValidBusinessDateTime(endText)
+        || !start.isValid() || !QDateTime::fromString(endText, Qt::ISODateWithMs).isValid()
+        || !strictIntField(p, "duration", &duration, false) || duration <= 0
+        || !strictIntField(p, "manual", &manual, true, 0) || (manual != 0 && manual != 1)) {
         return fail(out, kCorrupted);
     }
     // 休息按「起点 + 实际时长」占用时间（end_time 可能含暂停），候选区间也这样取，
@@ -286,7 +359,7 @@ bool restoreRestSession(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* 
     insert.bindValue(QStringLiteral(":start"), startText);
     insert.bindValue(QStringLiteral(":end"), endText);
     insert.bindValue(QStringLiteral(":duration"), duration);
-    insert.bindValue(QStringLiteral(":manual"), integer(p, "manual"));
+    insert.bindValue(QStringLiteral(":manual"), manual);
     if (!insert.exec()) {
         return fail(out, QStringLiteral("恢复失败："), insert);
     }
@@ -296,6 +369,16 @@ bool restoreRestSession(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* 
 
 bool restoreKnowledgeGap(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
 {
+    const QString title = str(p, "title");
+    int priority = 1;
+    int status = 0;
+    QVariant dueDate;
+    if (title.trimmed().isEmpty()
+        || !strictIntField(p, "priority", &priority, true, 1) || priority < 0 || priority > 2
+        || !strictIntField(p, "status", &status, true, 0) || status < 0 || status > 2
+        || !validOptionalDateField(p, "due_date", &dueDate)) {
+        return fail(out, kCorrupted);
+    }
     const QVariant category = categoryLocalId(db, p, out);
     const QVariant source = resolveRef(db, QStringLiteral("tasks"), str(p, "source_task_sync_id"), out);
     const QVariant linked = resolveRef(db, QStringLiteral("tasks"), str(p, "linked_task_sync_id"), out);
@@ -308,15 +391,15 @@ bool restoreKnowledgeGap(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome*
         "status, due_date, resolution, linked_task_id, created_at, updated_at, resolved_at) "
         "VALUES (:title, :detail, :category, :source, :sourceTitle, :priority, :status, :due, :resolution, "
         ":linked, :createdAt, :updatedAt, :resolvedAt)"));
-    insert.bindValue(QStringLiteral(":title"), str(p, "title"));
+    insert.bindValue(QStringLiteral(":title"), title);
     // 三个 NOT NULL 文本列：JSON 里是 null 时收敛成空串（str 对非字符串返回空串）。
     insert.bindValue(QStringLiteral(":detail"), str(p, "detail"));
     insert.bindValue(QStringLiteral(":category"), category);
     insert.bindValue(QStringLiteral(":source"), source);
     insert.bindValue(QStringLiteral(":sourceTitle"), str(p, "source_task_title"));
-    insert.bindValue(QStringLiteral(":priority"), integer(p, "priority", 1));
-    insert.bindValue(QStringLiteral(":status"), integer(p, "status"));
-    insert.bindValue(QStringLiteral(":due"), nullableStr(p, "due_date"));
+    insert.bindValue(QStringLiteral(":priority"), priority);
+    insert.bindValue(QStringLiteral(":status"), status);
+    insert.bindValue(QStringLiteral(":due"), dueDate);
     insert.bindValue(QStringLiteral(":resolution"), str(p, "resolution"));
     insert.bindValue(QStringLiteral(":linked"), linked);
     const QString createdAt = str(p, "created_at");
@@ -333,6 +416,15 @@ bool restoreKnowledgeGap(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome*
 
 bool restoreMemo(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
 {
+    const QString title = str(p, "title");
+    const QString body = str(p, "body");
+    // 长度按 Unicode 码点计数并拒绝空字符，与 MemoService::validateText 保持同源口径，避免含 Emoji 满字数备忘录无法恢复。
+    if (title.toUcs4().size() > MemoService::kMaxTitleLength
+        || body.toUcs4().size() > MemoService::kMaxBodyLength
+        || title.contains(QChar::Null)
+        || body.contains(QChar::Null)) {
+        return fail(out, kCorrupted);
+    }
     // 科目找不到进未分类（NULL）。排在该科目最后；越界检查同 MemoService::nextSortOrder。
     const QVariant categoryId = categoryLocalId(db, p, out);
     if (!out->error.isEmpty()) {
@@ -356,8 +448,8 @@ bool restoreMemo(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
     insert.prepare(QStringLiteral(
         "INSERT INTO memos (title, body, category_id, sort_order, created_at, updated_at) "
         "VALUES (:title, :body, :category, :order, :createdAt, :updatedAt)"));
-    insert.bindValue(QStringLiteral(":title"), str(p, "title"));
-    insert.bindValue(QStringLiteral(":body"), str(p, "body"));
+    insert.bindValue(QStringLiteral(":title"), title);
+    insert.bindValue(QStringLiteral(":body"), body);
     insert.bindValue(QStringLiteral(":category"), categoryId);
     insert.bindValue(QStringLiteral(":order"), static_cast<int>(maximum) + 1);
     insert.bindValue(QStringLiteral(":createdAt"), createdAt.isEmpty() ? nowText : createdAt);
@@ -371,6 +463,16 @@ bool restoreMemo(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
 
 bool restoreRoutine(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
 {
+    const QString title = str(p, "title");
+    int active = 1;
+    int weekdays = 127;
+    QVariant lastGeneratedDate;
+    if (title.trimmed().isEmpty()
+        || !strictIntField(p, "active", &active, true, 1) || (active != 0 && active != 1)
+        || !strictIntField(p, "weekdays", &weekdays, true, 127) || weekdays < 1 || weekdays > 127
+        || !validOptionalDateField(p, "last_generated_date", &lastGeneratedDate)) {
+        return fail(out, kCorrupted);
+    }
     const QVariant category = categoryLocalId(db, p, out);
     if (!out->error.isEmpty()) {
         return false;
@@ -381,13 +483,13 @@ bool restoreRoutine(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
         "INSERT INTO routines (title, category_id, active, display_order, last_generated_date, created_at, "
         "weekdays) VALUES (:title, :category, :active, "
         "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM routines), :stamp, :createdAt, :weekdays)"));
-    insert.bindValue(QStringLiteral(":title"), str(p, "title"));
+    insert.bindValue(QStringLiteral(":title"), title);
     insert.bindValue(QStringLiteral(":category"), category);
-    insert.bindValue(QStringLiteral(":active"), integer(p, "active", 1));
+    insert.bindValue(QStringLiteral(":active"), active);
     // 生成戳照 payload：删除时收回过当日实例的存的是空（恢复后当天补生成），其余是原值（不重复生成）。
-    insert.bindValue(QStringLiteral(":stamp"), nullableStr(p, "last_generated_date"));
+    insert.bindValue(QStringLiteral(":stamp"), lastGeneratedDate);
     insert.bindValue(QStringLiteral(":createdAt"), createdAt.isEmpty() ? isoNow() : createdAt);
-    insert.bindValue(QStringLiteral(":weekdays"), integer(p, "weekdays", 127));
+    insert.bindValue(QStringLiteral(":weekdays"), weekdays);
     if (!insert.exec()) {
         return fail(out, QStringLiteral("恢复失败："), insert);
     }
@@ -399,6 +501,22 @@ bool restoreRoutine(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
 
 bool restoreScheduleEntry(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
 {
+    const QString title = str(p, "title");
+    int weekday = 0;
+    int startMinutes = 0;
+    int endMinutes = 0;
+    int weekStart = 1;
+    int weekEnd = 30;
+    int weekParity = 0;
+    if (title.trimmed().isEmpty()
+        || !strictIntField(p, "weekday", &weekday, false) || weekday < 1 || weekday > 7
+        || !strictIntField(p, "start_minutes", &startMinutes, false) || startMinutes < 0 || startMinutes > 1439
+        || !strictIntField(p, "end_minutes", &endMinutes, false) || endMinutes < 1 || endMinutes > 1440 || endMinutes <= startMinutes
+        || !strictIntField(p, "week_start", &weekStart, true, 1) || weekStart < 1
+        || !strictIntField(p, "week_end", &weekEnd, true, 30) || weekEnd < weekStart
+        || !strictIntField(p, "week_parity", &weekParity, true, 0) || weekParity < 0 || weekParity > 2) {
+        return fail(out, kCorrupted);
+    }
     const QVariant category = categoryLocalId(db, p, out);
     if (!out->error.isEmpty()) {
         return false;
@@ -410,14 +528,14 @@ bool restoreScheduleEntry(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome
         "week_end, week_parity, category_id, created_at) "
         "VALUES (:title, :location, :weekday, :start, :end, :weekStart, :weekEnd, :parity, :category, "
         ":createdAt)"));
-    insert.bindValue(QStringLiteral(":title"), str(p, "title"));
+    insert.bindValue(QStringLiteral(":title"), title);
     insert.bindValue(QStringLiteral(":location"), str(p, "location"));
-    insert.bindValue(QStringLiteral(":weekday"), integer(p, "weekday"));
-    insert.bindValue(QStringLiteral(":start"), integer(p, "start_minutes"));
-    insert.bindValue(QStringLiteral(":end"), integer(p, "end_minutes"));
-    insert.bindValue(QStringLiteral(":weekStart"), integer(p, "week_start", 1));
-    insert.bindValue(QStringLiteral(":weekEnd"), integer(p, "week_end", 30));
-    insert.bindValue(QStringLiteral(":parity"), integer(p, "week_parity"));
+    insert.bindValue(QStringLiteral(":weekday"), weekday);
+    insert.bindValue(QStringLiteral(":start"), startMinutes);
+    insert.bindValue(QStringLiteral(":end"), endMinutes);
+    insert.bindValue(QStringLiteral(":weekStart"), weekStart);
+    insert.bindValue(QStringLiteral(":weekEnd"), weekEnd);
+    insert.bindValue(QStringLiteral(":parity"), weekParity);
     insert.bindValue(QStringLiteral(":category"), category);
     insert.bindValue(QStringLiteral(":createdAt"), createdAt.isEmpty() ? isoNow() : createdAt);
     if (!insert.exec()) {
@@ -429,6 +547,11 @@ bool restoreScheduleEntry(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome
 
 bool restoreCountdownGoal(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
 {
+    const QString name = str(p, "name");
+    const QString targetDate = str(p, "target_date");
+    if (name.trimmed().isEmpty() || !BackupOperations::isValidBusinessDate(targetDate)) {
+        return fail(out, kCorrupted);
+    }
     const QString createdAt = str(p, "created_at");
     const QString nowText = isoNow(); // 写法同 CountdownService 新建：本地时间 ISODate
     QSqlQuery insert(db);
@@ -436,8 +559,8 @@ bool restoreCountdownGoal(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome
         "INSERT INTO countdown_goals (name, target_date, display_order, created_at, updated_at) "
         "VALUES (:name, :target, (SELECT COALESCE(MAX(display_order), -1) + 1 FROM countdown_goals), "
         ":createdAt, :updatedAt)"));
-    insert.bindValue(QStringLiteral(":name"), str(p, "name"));
-    insert.bindValue(QStringLiteral(":target"), str(p, "target_date"));
+    insert.bindValue(QStringLiteral(":name"), name);
+    insert.bindValue(QStringLiteral(":target"), targetDate);
     insert.bindValue(QStringLiteral(":createdAt"), createdAt.isEmpty() ? nowText : createdAt);
     insert.bindValue(QStringLiteral(":updatedAt"), nowText);
     if (!insert.exec()) {
@@ -462,8 +585,16 @@ QString payloadProblem(const QString& kind, const QString& payloadText, QJsonObj
         || kind == TrashStore::kKindRestSession || kind == TrashStore::kKindKnowledgeGap
         || kind == TrashStore::kKindMemo || kind == TrashStore::kKindRoutine
         || kind == TrashStore::kKindScheduleEntry || kind == TrashStore::kKindCountdownGoal;
-    // 更新版本新增的类型、或更高的内容格式：旧版读得到但不会恢复，提示更新。
-    if (!known || payload->value(QStringLiteral("v")).toInt() != TrashStore::kPayloadVersion) {
+    if (!known) {
+        return QStringLiteral("needsUpdate");
+    }
+    // 已知类型的载荷必须带有严格正整数版本号 v：缺失（如 {}）、非整数或 < 1 属于数据损坏；
+    // 只有显式写出更高整数版本（v > kPayloadVersion）才提示更新应用。
+    qint64 version = 0;
+    if (!BackupOperations::strictJsonInt(payload->value(QStringLiteral("v")), &version) || version < 1) {
+        return QStringLiteral("corrupted");
+    }
+    if (version > TrashStore::kPayloadVersion) {
         return QStringLiteral("needsUpdate");
     }
     return QString();
@@ -518,6 +649,16 @@ QDateTime TrashService::now() const
     return m_nowForTesting.isValid() ? m_nowForTesting : QDateTime::currentDateTime();
 }
 
+void TrashService::setAutoPurgeBlockedProvider(std::function<bool()> provider)
+{
+    m_autoPurgeBlockedProvider = std::move(provider);
+}
+
+bool TrashService::autoPurgeBlocked() const
+{
+    return m_autoPurgeBlockedProvider && m_autoPurgeBlockedProvider();
+}
+
 QVariantMap TrashService::readItems() const
 {
     if (!DatabaseManager::instance()->isOpen()) {
@@ -526,6 +667,7 @@ QVariantMap TrashService::readItems() const
     }
     QSqlDatabase db = DatabaseManager::instance()->database();
     QSqlQuery query(db);
+    query.setForwardOnly(true);
     // 同一时刻删的按编号大到小，保证排序稳定；deleted_at 是同格式的 UTC 文本，按文本排即按时间排。
     if (!query.exec(QStringLiteral("SELECT id, kind, origin_sync_id, title, payload, deleted_at FROM trash_items "
                                    "ORDER BY deleted_at DESC, id DESC"))) {
@@ -546,6 +688,9 @@ QVariantMap TrashService::readItems() const
 
     const int dayStartHour = AppSettings::instance()->dayStartHour();
     const QDate today = LogicalDay::dateOf(now().toLocalTime(), dayStartHour);
+
+    struct CachedCategory { bool found = false; QString name; QString color; };
+    QHash<QString, CachedCategory> categoryCache;
 
     QVariantList items;
     QSet<QString> seenOrigins;
@@ -580,10 +725,18 @@ QVariantMap TrashService::readItems() const
         QVariantMap details;
         QString categoryName;
         QString categoryColor;
+        const QString categorySyncId = str(payload, "category_sync_id");
         if (row.kind == TrashStore::kKindTask) {
             details = {{QStringLiteral("date"), str(payload, "date")},
                        {QStringLiteral("completed"), integer(payload, "completed") != 0},
                        {QStringLiteral("estimatedMinutes"), integer(payload, "estimated_minutes")}};
+            // 旧版纯文本科目任务无 category_sync_id，列表展示与 restoreTask 保持同口径回退 category_name。
+            if (categorySyncId.isEmpty()) {
+                const QString legacyCategoryName = str(payload, "category_name");
+                if (!legacyCategoryName.trimmed().isEmpty()) {
+                    categoryName = legacyCategoryName;
+                }
+            }
         } else if (row.kind == TrashStore::kKindFocusSession) {
             details = {{QStringLiteral("startTime"), str(payload, "start_time")},
                        {QStringLiteral("endTime"), str(payload, "end_time")},
@@ -615,16 +768,28 @@ QVariantMap TrashService::readItems() const
             details = {{QStringLiteral("targetDate"), str(payload, "target_date")}};
         }
 
-        // 科目按 sync_id 查本机现在的科目（含被合并后留下的那个）；查不到时只有专注记录退回当时的快照。
-        const QVariant categoryId = TrashStore::resolveSyncId(db, QStringLiteral("categories"),
-                                                              str(payload, "category_sync_id"));
-        if (categoryId.isValid()) {
-            QSqlQuery categoryQuery(db);
-            categoryQuery.prepare(QStringLiteral("SELECT name, color FROM categories WHERE id = :id"));
-            categoryQuery.bindValue(QStringLiteral(":id"), categoryId);
-            if (categoryQuery.exec() && categoryQuery.next()) {
-                categoryName = categoryQuery.value(0).toString();
-                categoryColor = categoryQuery.value(1).toString();
+        // 科目按 sync_id 查本机当前科目并按 sync_id 缓存（含未命中），避免同科目大列表反复查库；
+        // 查不到时专注记录保留快照，旧版纯文本任务保留 category_name。
+        if (!categorySyncId.isEmpty()) {
+            auto it = categoryCache.constFind(categorySyncId);
+            if (it == categoryCache.constEnd()) {
+                CachedCategory resolved;
+                const QVariant categoryId = TrashStore::resolveSyncId(db, QStringLiteral("categories"), categorySyncId);
+                if (categoryId.isValid()) {
+                    QSqlQuery categoryQuery(db);
+                    categoryQuery.prepare(QStringLiteral("SELECT name, color FROM categories WHERE id = :id"));
+                    categoryQuery.bindValue(QStringLiteral(":id"), categoryId);
+                    if (categoryQuery.exec() && categoryQuery.next()) {
+                        resolved.found = true;
+                        resolved.name = categoryQuery.value(0).toString();
+                        resolved.color = categoryQuery.value(1).toString();
+                    }
+                }
+                it = categoryCache.insert(categorySyncId, resolved);
+            }
+            if (it->found) {
+                categoryName = it->name;
+                categoryColor = it->color;
             }
         }
 
@@ -648,6 +813,10 @@ QVariantMap TrashService::readItems() const
 
 int TrashService::purgeExpired()
 {
+    // 恢复不确定或换库临界区禁止物理删除，静默返回 0（且早于判库打开，避免换库短暂关库时误报失败）。
+    if (autoPurgeBlocked()) {
+        return 0;
+    }
     // 自动维护沿用静默反馈；手动调用方在自己的同步调用期间认领这条失败信号。
     const auto failed = [this](const QString& reason) {
         emit operationFailed(QStringLiteral("清理过期废纸篓失败：%1").arg(reason));

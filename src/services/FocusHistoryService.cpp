@@ -628,15 +628,28 @@ bool FocusHistoryService::updateTimelineRecord(int sessionId, bool sourceRest, c
         return true;
     const bool targetRest = changes.contains(QStringLiteral("isRest"))
         ? changes.value(QStringLiteral("isRest")).toBool() : sourceRest;
-    const QDateTime oldStart = QDateTime::fromString(original.value("start_time").toString(), Qt::ISODate);
-    const QDateTime oldEnd = QDateTime::fromString(original.value("end_time").toString(), Qt::ISODate);
+    const QVariant rawStartTime = original.value(QStringLiteral("start_time"));
+    const QVariant rawEndTime = original.value(QStringLiteral("end_time"));
+    const int origDuration = original.value(QStringLiteral("duration")).toInt();
+    const QVariant origManual = sourceRest ? original.value(QStringLiteral("manual")) : QVariant(1);
+    const QVariant origMode = sourceRest ? QVariant(0) : original.value(QStringLiteral("mode"));
+    const QVariant origPomodoroCompleted = sourceRest ? QVariant(0) : original.value(QStringLiteral("pomodoro_completed"));
+    QVariant taskId = sourceRest ? QVariant() : original.value(QStringLiteral("task_id"));
+    CategorySnapshot snapshot{sourceRest ? QVariant() : original.value(QStringLiteral("category_id_snapshot")),
+                              sourceRest ? QStringLiteral("") : original.value(QStringLiteral("category_name_snapshot")).toString(),
+                              sourceRest ? QStringLiteral("") : original.value(QStringLiteral("category_color_snapshot")).toString()};
+    // 开事务前收掉读取语句，避免失败回滚时 SQLite 连接上仍挂着未结束的 SELECT 持有表锁。
+    original.finish();
+
+    const QDateTime oldStart = QDateTime::fromString(rawStartTime.toString(), Qt::ISODate);
+    const QDateTime oldEnd = QDateTime::fromString(rawEndTime.toString(), Qt::ISODate);
     // 只在改开始时本地化；SQLite 的 date() 遇到时区后缀会先换 UTC，早上的记录可能归到前一天。
     // 未改时间仍保留原串与精度，结束时刻从本地开始时刻计算，避免引入时区后缀。
     const QDateTime start = changes.contains(QStringLiteral("startTime"))
         ? changes.value(QStringLiteral("startTime")).toDateTime().toLocalTime() : oldStart;
     bool durationOk = true;
     const int duration = changes.contains(QStringLiteral("durationSeconds"))
-        ? changes.value(QStringLiteral("durationSeconds")).toInt(&durationOk) : original.value("duration").toInt();
+        ? changes.value(QStringLiteral("durationSeconds")).toInt(&durationOk) : origDuration;
     const QDateTime end = changes.contains(QStringLiteral("durationSeconds"))
         ? start.addSecs(duration) : oldEnd.addMSecs(oldStart.msecsTo(start));
     // 仅改归属或类型时也保留精度和暂停跨度；类型转换与原记录删除必须一起提交。
@@ -649,10 +662,6 @@ bool FocusHistoryService::updateTimelineRecord(int sessionId, bool sourceRest, c
         if (m_lastError.isEmpty()) m_lastError = QStringLiteral("时长无效");
         return false;
     }
-    QVariant taskId = sourceRest ? QVariant() : original.value("task_id");
-    CategorySnapshot snapshot{sourceRest ? QVariant() : original.value("category_id_snapshot"),
-                              sourceRest ? QStringLiteral("") : original.value("category_name_snapshot").toString(),
-                              sourceRest ? QStringLiteral("") : original.value("category_color_snapshot").toString()};
     if (!targetRest && changes.contains(QStringLiteral("taskId"))) {
         const int selectedId = changes.value(QStringLiteral("taskId")).toInt();
         taskId = selectedId > 0 ? QVariant(selectedId) : QVariant();
@@ -668,20 +677,19 @@ bool FocusHistoryService::updateTimelineRecord(int sessionId, bool sourceRest, c
     QSqlQuery write(db);
     QStringList columns{QStringLiteral("start_time"), QStringLiteral("end_time"), QStringLiteral("duration")};
     QVariantList values{
-        changes.contains(QStringLiteral("startTime")) ? start.toString(Qt::ISODateWithMs) : original.value("start_time"),
+        changes.contains(QStringLiteral("startTime")) ? start.toString(Qt::ISODateWithMs) : rawStartTime,
         changes.contains(QStringLiteral("startTime")) || changes.contains(QStringLiteral("durationSeconds"))
-            ? end.toString(Qt::ISODateWithMs) : original.value("end_time"), duration};
+            ? end.toString(Qt::ISODateWithMs) : rawEndTime, duration};
     if (targetRest) {
         columns << QStringLiteral("manual");
-        values << (sourceRest ? original.value("manual") : QVariant(1));
+        values << origManual;
     } else {
         columns << QStringLiteral("task_id") << QStringLiteral("category_id_snapshot")
                 << QStringLiteral("category_name_snapshot") << QStringLiteral("category_color_snapshot")
                 << QStringLiteral("mode") << QStringLiteral("pomodoro_completed");
         // 修正原专注归属保留完成事实；从休息转为专注只能算自由补录，不能凭空产生番茄。
         values << taskId << snapshot.id << snapshot.name << snapshot.color
-               << (sourceRest ? QVariant(0) : original.value("mode"))
-               << (sourceRest ? QVariant(0) : original.value("pomodoro_completed"));
+               << origMode << origPomodoroCompleted;
     }
     const QString targetTable = targetRest ? QStringLiteral("rest_sessions") : QStringLiteral("focus_sessions");
     QStringList fragments;
@@ -694,12 +702,14 @@ bool FocusHistoryService::updateTimelineRecord(int sessionId, bool sourceRest, c
     if (sourceRest == targetRest) write.addBindValue(sessionId);
     bool ok = write.exec() && write.numRowsAffected() == 1;
     if (!ok) m_lastError = write.lastError().text();
+    write.finish();
     if (ok && sourceRest != targetRest) {
         QSqlQuery remove(db);
         remove.prepare(QStringLiteral("DELETE FROM %1 WHERE id = :id").arg(sourceTable));
         remove.bindValue(QStringLiteral(":id"), sessionId);
         ok = remove.exec() && remove.numRowsAffected() == 1;
         if (!ok) m_lastError = remove.lastError().text();
+        remove.finish();
     }
     if (!ok || !db.commit()) {
         db.rollback();

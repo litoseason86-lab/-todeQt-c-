@@ -100,6 +100,7 @@ private slots:
     void menuStopRequestsConfirmationForLongFreeFocus();
     void menuStopKeepsPomodoroStreakOutsidePomodoroMode();
     void menuStopCycleFailureKeepsActiveSession();
+    void operationBlocksUiPreventsTraySessionMutations();
     void pausedStateOffersResumeAndKeepsTiming();
     void breakStateIsDistinguished();
     void manualRestStateIsDistinguished();
@@ -289,6 +290,39 @@ void PlatformControlTests::menuStopCycleFailureKeepsActiveSession()
     QCOMPARE(failed.count(), 1);
     QVERIFY(!failed.first().first().toString().isEmpty());
     QVERIFY(query.exec(QStringLiteral("DROP TRIGGER fail_cycle")));
+    controller.requestStop();
+    QVERIFY(!timer->hasActiveSession());
+}
+
+void PlatformControlTests::operationBlocksUiPreventsTraySessionMutations()
+{
+    // 产品保证：注入的恢复阻断谓词为真期间，菜单栏暂停、继续与结束动作均被拦截，不在数据库临界区内改写计时会话。
+    auto* timer = FocusTimer::instance();
+    TrayController controller(timer);
+    bool blocked = false;
+    controller.setOperationBlockedProvider([&blocked] { return blocked; });
+
+    const int taskId = insertTaskRow(QStringLiteral("恢复阻断保护任务"));
+    QVERIFY(taskId > 0);
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("恢复阻断保护任务"), 25 * 60));
+    QVERIFY(timer->isRunning());
+    QVERIFY(timer->hasActiveSession());
+
+    blocked = true;
+    controller.requestPause();
+    QVERIFY(timer->isRunning());
+    controller.requestStop();
+    QVERIFY(timer->hasActiveSession());
+
+    blocked = false;
+    controller.requestPause();
+    QVERIFY(!timer->isRunning());
+
+    blocked = true;
+    controller.requestResume();
+    QVERIFY(!timer->isRunning());
+
+    blocked = false;
     controller.requestStop();
     QVERIFY(!timer->hasActiveSession());
 }

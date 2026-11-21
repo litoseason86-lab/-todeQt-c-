@@ -1054,7 +1054,8 @@ void validateNode(const QJsonValue& value, const QJsonObject& schema, const QStr
 // —— 语义校验（schema 通过之后） ——
 
 std::optional<QDate> checkDate(const QJsonObject& arguments, const QString& field,
-                               QList<FieldError>& errors)
+                               QList<FieldError>& errors,
+                               bool enforceTaskWriteYearBounds = false)
 {
     if (!arguments.contains(field)) {
         return std::nullopt;
@@ -1062,6 +1063,10 @@ std::optional<QDate> checkDate(const QJsonObject& arguments, const QString& fiel
     const std::optional<QDate> date = parseIsoDate(arguments.value(field).toString());
     if (!date) {
         errors.append({field, QStringLiteral("invalid_date"), QStringLiteral("不是日历上存在的日期")});
+        return date;
+    }
+    if (enforceTaskWriteYearBounds && (date->year() < 2000 || date->year() > 2100)) {
+        errors.append({field, QStringLiteral("date_out_of_range"), QStringLiteral("日期年份必须在 2000 至 2100 之间")});
     }
     return date;
 }
@@ -1475,7 +1480,7 @@ QString errorNextAction(ErrorCode code)
 QList<BusyReason> allBusyReasons()
 {
     return {BusyReason::Editing, BusyReason::Dragging, BusyReason::PendingDelete,
-            BusyReason::BackupRestore, BusyReason::ShuttingDown};
+            BusyReason::BackupRestore, BusyReason::ShuttingDown, BusyReason::ActiveFocus};
 }
 
 QString busyReasonName(BusyReason reason)
@@ -1491,6 +1496,8 @@ QString busyReasonName(BusyReason reason)
         return QStringLiteral("backup_restore");
     case BusyReason::ShuttingDown:
         return QStringLiteral("shutting_down");
+    case BusyReason::ActiveFocus:
+        return QStringLiteral("active_focus");
     }
     Q_UNREACHABLE();
     return QString();
@@ -1504,7 +1511,8 @@ BlockScope busyReasonScope(BusyReason reason)
         // 编辑或拖动期间任何外部写入都会触发整表刷新，销毁输入行或让拖动集合过期。
         return BlockScope::AllWrites;
     case BusyReason::PendingDelete:
-        // 撤销删除窗口只影响被隐藏的那一条任务，其他任务照常可写。
+    case BusyReason::ActiveFocus:
+        // 撤销删除窗口与正在专注计时只影响对应单条任务，其他任务照常可写。
         return BlockScope::Task;
     case BusyReason::BackupRestore:
     case BusyReason::ShuttingDown:
@@ -1536,6 +1544,7 @@ bool busyReasonRetryable(BusyReason reason)
     case BusyReason::PendingDelete:
     case BusyReason::BackupRestore:
     case BusyReason::ShuttingDown:
+    case BusyReason::ActiveFocus:
         return false;
     }
     Q_UNREACHABLE();
@@ -1558,6 +1567,9 @@ QString busyReasonNextAction(BusyReason reason)
     case BusyReason::ShuttingDown:
         return QStringLiteral(
             "应用正在退出：请用户重新打开番茄Todo 后重新获取 app_session_id，不要向退出中的应用重发。");
+    case BusyReason::ActiveFocus:
+        return QStringLiteral(
+            "该任务正在番茄Todo 中专注计时：请用户先结束当前专注，再将任务标记为完成；不要循环重试。");
     }
     Q_UNREACHABLE();
     return QString();
@@ -1672,7 +1684,7 @@ ValidationResult validateToolArguments(Tool tool, const QJsonObject& arguments)
         break;
     case Tool::CreateTask:
         checkTaskText(effective, result.errors);
-        checkDate(effective, QStringLiteral("date"), result.errors);
+        checkDate(effective, QStringLiteral("date"), result.errors, true);
         checkUuid(effective, QStringLiteral("app_session_id"), result.errors);
         checkUuid(effective, QStringLiteral("idempotency_key"), result.errors);
         break;
@@ -1682,7 +1694,7 @@ ValidationResult validateToolArguments(Tool tool, const QJsonObject& arguments)
         checkUpdateHasFields(effective, result.errors);
         break;
     case Tool::RescheduleTask:
-        checkDate(effective, QStringLiteral("date"), result.errors);
+        checkDate(effective, QStringLiteral("date"), result.errors, true);
         checkUuid(effective, QStringLiteral("app_session_id"), result.errors);
         break;
     case Tool::SetTaskCompleted:

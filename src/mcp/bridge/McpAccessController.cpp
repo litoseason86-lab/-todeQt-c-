@@ -180,10 +180,21 @@ void McpAccessController::beginRestore()
     rotateSession();
     setRestoreBlocked(true);
 }
+bool McpAccessController::restoreBlocked() const
+{
+    return m_restoreBlocked || m_syncRestoreUncertain;
+}
 void McpAccessController::setRestoreBlocked(bool blocked)
 {
     m_restoreBlocked = blocked;
     if (blocked && m_server) m_server->rejectQueued(busyError());
+    emit stateChanged();
+}
+void McpAccessController::setSyncRestoreUncertain(bool uncertain)
+{
+    if (m_syncRestoreUncertain == uncertain) return;
+    m_syncRestoreUncertain = uncertain;
+    if (uncertain && m_server) m_server->rejectQueued(busyError());
     emit stateChanged();
 }
 void McpAccessController::shutdown()
@@ -199,7 +210,7 @@ QJsonObject McpAccessController::busyError() const
     QList<BusyBlock> blocks = m_blockProvider ? m_blockProvider() : QList<BusyBlock>{};
     // 来源是给模型看的稳定英文键，与界面登记的来源同一种写法；给人看的说明见 blockSummary()。
     if (m_shuttingDown) blocks.append({BusyReason::ShuttingDown, QStringLiteral("app.shutdown"), 0});
-    else if (m_restoreBlocked) blocks.append({BusyReason::BackupRestore, QStringLiteral("backup.restore"), 0});
+    else if (restoreBlocked()) blocks.append({BusyReason::BackupRestore, QStringLiteral("backup.restore"), 0});
     return blocks.isEmpty() ? QJsonObject{} : makeBusyError(blocks);
 }
 QJsonObject McpAccessController::appStatus() const
@@ -219,7 +230,7 @@ QJsonObject McpAccessController::dispatchImpl(Tool tool, const QJsonObject& argu
     if (!validation.ok()) return makeToolErrorResult(makeValidationError(validation));
     if (!enabled()) return makeToolErrorResult(makeError(ErrorCode::McpDisabled, QStringLiteral("外部 AI 接入已关闭")));
     if (tool == Tool::GetStatus) return makeToolSuccessResult(appStatus());
-    if (m_shuttingDown || m_restoreBlocked) return makeToolErrorResult(busyError());
+    if (m_shuttingDown || restoreBlocked()) return makeToolErrorResult(busyError());
     if (contract(tool).access == ToolAccess::Write) {
         if (!writeEnabled()) return makeToolErrorResult(makeError(ErrorCode::PermissionDenied, QStringLiteral("未允许 AI 修改任务")));
         // 按 UUID 比较而不是按字符串：schema 接受大写十六进制，同一个会话写成大写不能被当成过期。
@@ -288,6 +299,9 @@ QString McpAccessController::blockSummary() const
             descriptions.append(described.isEmpty() ? QStringLiteral("有任务正在拖动") : described);
         } else if (reason == QStringLiteral("pending_delete")) {
             descriptions.append(QStringLiteral("任务 #%1 处于撤销删除窗口，AI 暂时不能读取或修改它")
+                                    .arg(block.value("task_id").toInteger()));
+        } else if (reason == QStringLiteral("active_focus")) {
+            descriptions.append(QStringLiteral("任务 #%1 正在专注计时，AI 暂时不能将其标记完成")
                                     .arg(block.value("task_id").toInteger()));
         } else if (reason == QStringLiteral("backup_restore")) {
             descriptions.append(QStringLiteral("正在恢复备份，AI 的读写暂停"));

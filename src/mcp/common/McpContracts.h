@@ -199,7 +199,7 @@ QString errorCodeName(ErrorCode code);
 bool errorRetryable(ErrorCode code);
 QString errorNextAction(ErrorCode code);
 
-enum class BusyReason { Editing, Dragging, PendingDelete, BackupRestore, ShuttingDown };
+enum class BusyReason { Editing, Dragging, PendingDelete, BackupRestore, ShuttingDown, ActiveFocus };
 
 // 阻断的影响范围：all_data 连读取也暂停（恢复、退出），all_writes 只挡新写入，
 // task 只影响某一条任务（撤销删除窗口中的任务）。

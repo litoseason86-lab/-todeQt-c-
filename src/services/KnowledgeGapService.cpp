@@ -528,10 +528,10 @@ bool KnowledgeGapService::reopenGap(int gapId)
     }
 
     QSqlQuery query(DatabaseManager::instance()->database());
-    // 重新打开时按 due_date 回推状态，并清掉 resolved_at；resolution 保留下来当笔记。
+    // 重新打开时按 due_date 回推状态（兼容历史空串），并清掉 resolved_at；resolution 保留下来当笔记。
     query.prepare(QStringLiteral(
         "UPDATE knowledge_gaps "
-        "SET status = CASE WHEN due_date IS NULL THEN :openStatus ELSE :scheduledStatus END, "
+        "SET status = CASE WHEN due_date IS NULL OR due_date = '' THEN :openStatus ELSE :scheduledStatus END, "
         "    resolved_at = NULL, updated_at = :updatedAt "
         "WHERE id = :id AND status = :resolvedStatus"));
     query.bindValue(QStringLiteral(":openStatus"), static_cast<int>(StatusOpen));
@@ -717,7 +717,7 @@ int KnowledgeGapService::convertToTask(int gapId, const QVariant& dateValue)
     QSqlQuery updateGapQuery(db);
     updateGapQuery.prepare(QStringLiteral(
         "UPDATE knowledge_gaps SET status = :status, "
-        "due_date = CASE WHEN due_date IS NULL OR due_date > :taskDate THEN :taskDate2 ELSE due_date END, "
+        "due_date = CASE WHEN due_date IS NULL OR due_date = '' OR due_date > :taskDate THEN :taskDate2 ELSE due_date END, "
         "linked_task_id = :taskId, updated_at = :updatedAt WHERE id = :id"));
     updateGapQuery.bindValue(QStringLiteral(":status"), static_cast<int>(StatusScheduled));
     // 两个条件分别命名，绑定时明确各自使用同一个任务日期。

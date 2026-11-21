@@ -14,7 +14,9 @@
 #include <QSqlQuery>
 #include <QtGlobal>
 #include <QScopedValueRollback>
+#include <QTimeZone>
 #include <limits>
+#include <utility>
 
 namespace {
 // 恢复时单调时钟与墙钟「走过的时长」允许的误差。自动校时的微调通常不到一秒；
@@ -25,6 +27,25 @@ bool storageFailure(QString* error, const QString& reason)
 {
     if (error) *error = reason;
     return false;
+}
+
+// 落库的 start_time / end_time 均为不带偏移的本地 ISO 文本；跨秋季夏令时回拨或向西切时区时，
+// 真实 UTC 虽已前进，转回本地字面墙钟却可能早于「开始字面时刻 + 计时秒数」（甚至早于开始时刻），
+// 导致后续历史编辑按本地时间解析时判定 end_time <= start_time 而锁死。这里按字面墙钟兜底推进。
+QDateTime ensureMinimumWallClockSpan(const QDateTime& startLocal,
+                                     const QDateTime& candidateEndLocal,
+                                     int durationSeconds)
+{
+    if (!startLocal.isValid() || !candidateEndLocal.isValid() || durationSeconds < 0) {
+        return candidateEndLocal;
+    }
+    const QDateTime startLiteral(startLocal.date(), startLocal.time(), QTimeZone::UTC);
+    const QDateTime minEndLiteral = startLiteral.addSecs(durationSeconds);
+    const QDateTime endLiteral(candidateEndLocal.date(), candidateEndLocal.time(), QTimeZone::UTC);
+    if (endLiteral < minEndLiteral) {
+        return QDateTime(minEndLiteral.date(), minEndLiteral.time(), QTimeZone::LocalTime);
+    }
+    return candidateEndLocal;
 }
 
 bool isCompletedPomodoroSession(bool naturalCompletion,
@@ -141,6 +162,16 @@ void FocusTimer::setApplicationActivity(const ApplicationActivity* activity)
     m_activity = activity;
 }
 
+void FocusTimer::setOperationBlockedProvider(std::function<bool()> provider)
+{
+    m_operationBlockedProvider = std::move(provider);
+}
+
+bool FocusTimer::isOperationBlocked() const
+{
+    return m_operationBlockedProvider && m_operationBlockedProvider();
+}
+
 void FocusTimer::setFreeTimingAllowed(bool allowed)
 {
     if (m_freeTimingAllowed == allowed) {
@@ -214,6 +245,9 @@ bool FocusTimer::startBreakForTask(int breakSeconds, int taskId, const QString& 
 bool FocusTimer::startManualRest()
 {
     if (m_cycleNotificationInProgress) return false;
+    if (isOperationBlocked()) {
+        return failOperation(QStringLiteral("启动主动休息"), QStringLiteral("正在备份或恢复数据，请稍后再试"));
+    }
     // 平台不开放主动休息时（目前是 iPad）服务层兜底拒绝，与界面隐藏入口同一个开关。
     if (!m_manualRestAllowed) {
         qWarning() << "Failed to start manual rest: free timing is disabled on this platform";
@@ -262,6 +296,9 @@ bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& 
 {
     // 循环提交通知期间拒绝同步重入；正常用户入口不会在通知栈里再次启动。
     if (m_cycleNotificationInProgress) return false;
+    if (isOperationBlocked()) {
+        return failOperation(QStringLiteral("启动休息"), QStringLiteral("正在备份或恢复数据，请稍后再试"));
+    }
     if (hasActiveTimer()) {
         qWarning() << "Failed to start break: focus timer already has an active session"
                    << "sessionId=" << m_sessionId << "phase=" << m_phase;
@@ -312,6 +349,9 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     // 循环提交通知期间拒绝同步重入，不能在尚未收尾的计时上再建会话。
     if (m_cycleNotificationInProgress) return false;
     const QString action = mode == PomodoroMode ? QStringLiteral("启动番茄专注") : QStringLiteral("启动自由专注");
+    if (isOperationBlocked()) {
+        return failOperation(action, QStringLiteral("正在备份或恢复数据，请稍后再试"));
+    }
     // 同一时间只允许一个活动会话，否则专注时长统计会被重叠记录污染。
     if (hasActiveTimer()) {
         qWarning() << "Failed to start focus: focus timer already has an active session"
@@ -454,6 +494,9 @@ bool FocusTimer::resumeFocus()
     // 主线程同步结算中用户操作不可达，这里只静默拦截通知回调重入；发失败信号会经
     // Mac 的 showToast 提交待删，再由 taskDeleted → handleTaskDeleted 回来修改计时状态。
     if (m_cycleNotificationInProgress) return false;
+    if (isOperationBlocked()) {
+        return failOperation(QStringLiteral("继续计时"), QStringLiteral("正在备份或恢复数据，请稍后再试"));
+    }
     const bool canResumeBreak = m_mode == PomodoroMode && m_phase == BreakPhase;
     const bool canResumeManualRest = m_mode == ManualRestMode && m_phase == ManualRestPhase;
     if (m_sessionId == -1 && !canResumeBreak && !canResumeManualRest) {
@@ -523,12 +566,14 @@ bool FocusTimer::stopFocusImpl(QString* failureReason)
                 // 把它们记进区间会让时间轴显示一段远长于时长的休息，也会挡住这段时间的补录。
                 const QDateTime restStart = m_startTime.isValid()
                     ? m_startTime : QDateTime::currentDateTime().addSecs(-duration);
+                const QDateTime restEnd = ensureMinimumWallClockSpan(
+                    restStart, restStart.addSecs(duration), duration);
                 QSqlQuery query(db);
                 query.prepare(QStringLiteral(
                     "INSERT INTO rest_sessions (start_time, end_time, duration, manual) "
                     "VALUES (:start, :end, :duration, :manual)"));
                 query.bindValue(QStringLiteral(":start"), restStart.toString(Qt::ISODateWithMs));
-                query.bindValue(QStringLiteral(":end"), restStart.addSecs(duration).toString(Qt::ISODateWithMs));
+                query.bindValue(QStringLiteral(":end"), restEnd.toString(Qt::ISODateWithMs));
                 query.bindValue(QStringLiteral(":duration"), duration);
                 query.bindValue(QStringLiteral(":manual"), m_phase == ManualRestPhase ? 1 : 0);
                 saved = query.exec();
@@ -605,6 +650,8 @@ bool FocusTimer::requiresFreeFocusStopConfirmation(int thresholdHours) const
 
 bool FocusTimer::discardFreeFocus()
 {
+    // 同步结算通知尚未收尾时拒绝重入，避免先停表冻结时间再在底层被拦。
+    if (m_cycleNotificationInProgress) return false;
     if (m_sessionId == -1 || m_mode != FreeMode || m_phase != NoPhase) {
         qWarning() << "Failed to discard free focus: no active free-focus session";
         return failOperation(QStringLiteral("丢弃专注"), QStringLiteral("没有进行中的自由专注"));
@@ -916,6 +963,9 @@ bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion,
     if (m_startTime.isValid() && endTime < m_startTime.addSecs(durationSeconds)) {
         endTime = m_startTime.addSecs(durationSeconds);
     }
+    if (m_startTime.isValid()) {
+        endTime = ensureMinimumWallClockSpan(m_startTime, endTime, durationSeconds);
+    }
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "UPDATE focus_sessions SET end_time = :endTime, duration = :duration, "
@@ -1156,7 +1206,7 @@ void FocusTimer::handleTaskRestored(int taskId, const QList<int>& focusSessionId
     emit currentTaskChanged();
 }
 
-bool FocusTimer::restoreInterruptedSession()
+bool FocusTimer::restoreInterruptedSession(bool allowOfflineCatchUp)
 {
     if (m_cycleNotificationInProgress) return false;
     if (hasActiveTimer()) {
@@ -1178,7 +1228,6 @@ bool FocusTimer::restoreInterruptedSession()
     }
     const int cycleCount = cycle.value(0).toInt();
     cycle.finish();
-    applyCycleCount(cycleCount);
 
     QSqlQuery stateQuery(db);
     if (!stateQuery.exec(QStringLiteral(R"SQL(
@@ -1192,8 +1241,13 @@ bool FocusTimer::restoreInterruptedSession()
     }
 
     if (!stateQuery.next()) {
-        const bool cleanupSucceeded = cleanupOrphanedSessions();
-        return cleanupSucceeded;
+        stateQuery.finish();
+        if (!cleanupOrphanedSessions()) {
+            return false;
+        }
+        // 所有读校验与孤儿清理成功后才提交周期计数，避免恢复失败时提前污染内存。
+        applyCycleCount(cycleCount);
+        return true;
     }
 
     const int restoredSessionId = stateQuery.value(0).isNull() ? -1 : stateQuery.value(0).toInt();
@@ -1203,6 +1257,8 @@ bool FocusTimer::restoreInterruptedSession()
     const int restoredMode = stateQuery.value(4).toInt();
     const int restoredPhase = stateQuery.value(5).toInt();
     const int restoredTarget = qMax(0, stateQuery.value(6).toInt());
+    const QString rawStartTime = stateQuery.value(8).toString();
+    const QString rawUpdatedAt = stateQuery.value(9).toString();
     // 恢复锚点（旧快照这几列为空或默认 0，按「未在运行」处理，不补任何离线时段）。
     const bool restoredRunning = stateQuery.value(10).toInt() == 1;
     const qint64 restoredAccumulatedMs = stateQuery.value(11).toLongLong();
@@ -1211,6 +1267,7 @@ bool FocusTimer::restoreInterruptedSession()
     const QString restoredBootId = stateQuery.value(13).toString();
     const bool restoredHasWallStart = !stateQuery.value(14).isNull();
     const qint64 restoredSegmentStartUtcMs = stateQuery.value(14).toLongLong();
+    stateQuery.finish();
 
     // 任务可能在会话进行中被删除：外键把 task_id 置空，但标题快照仍在。
     // 已经计入的进行中会话必须照常恢复（与休息段同一宽容口径），
@@ -1228,10 +1285,10 @@ bool FocusTimer::restoreInterruptedSession()
         && restoredSessionId == -1 && restoredTaskId == -1 && restoredTitle.isEmpty()
         && restoredTarget == 0;
 
-    QDateTime restoredStartTime = QDateTime::fromString(stateQuery.value(8).toString(), Qt::ISODate);
+    QDateTime restoredStartTime = QDateTime::fromString(rawStartTime, Qt::ISODate);
     if (!restoredStartTime.isValid()) {
         // 旧版休息快照没有起点，只能以最后检查点减去有效秒数兼容恢复。
-        restoredStartTime = QDateTime::fromString(stateQuery.value(9).toString(), Qt::ISODate)
+        restoredStartTime = QDateTime::fromString(rawUpdatedAt, Qt::ISODate)
                                 .addSecs(-restoredElapsed);
         if (!restoredStartTime.isValid()) {
             restoredStartTime = QDateTime::currentDateTime().addSecs(-restoredElapsed);
@@ -1252,18 +1309,21 @@ bool FocusTimer::restoreInterruptedSession()
             restoredStartTime = QDateTime::fromString(sessionQuery.value(0).toString(), Qt::ISODate);
             sessionRowValid = restoredStartTime.isValid();
         }
+        sessionQuery.finish();
     }
 
     if (!(isFreeFocus || isPomodoroWork || isPomodoroBreak || isManualRest) || !sessionRowValid) {
         qWarning() << "Discarding invalid active focus state"
                    << "sessionId=" << restoredSessionId << "mode=" << restoredMode
                    << "phase=" << restoredPhase;
-        if (!clearActiveState(db)) {
+        if (!clearActiveState(db) || !cleanupOrphanedSessions()) {
             return false;
         }
-        return cleanupOrphanedSessions();
+        applyCycleCount(cycleCount);
+        return true;
     }
 
+    const int previousCompletedPomodoros = m_completedPomodoros;
     m_sessionId = restoredSessionId;
     m_currentTaskId = restoredTaskId;
     m_currentTaskTitle = restoredTitle;
@@ -1295,7 +1355,8 @@ bool FocusTimer::restoreInterruptedSession()
     // 只会少补，不会多记。离线时长本身始终只用单调时钟计算，墙钟只参与核对。
     // 两边都读得到开机标识（例如 macOS）时，标识不同同样视为换过开机。
     bool resumedRunning = false;
-    if (m_recoveryPolicy == RecoveryPolicy::CatchUpOffline
+    if (allowOfflineCatchUp
+        && m_recoveryPolicy == RecoveryPolicy::CatchUpOffline
         && (isPomodoroWork || isPomodoroBreak || isFreeFocus)
         && restoredRunning && restoredHasSegmentStart && restoredHasWallStart
         && restoredAccumulatedMs >= 0) {
@@ -1319,7 +1380,18 @@ bool FocusTimer::restoreInterruptedSession()
         }
     }
 
+    // 恢复为暂停但库里仍留着 running=1 或旧运行锚点时，必须立即落盘清掉锚点：
+    // 暂停态不会触发周期检查点，若随后异常终止且下次启动启用 CatchUpOffline，旧锚点会被误拿去补算离线时长。
+    if (!resumedRunning && (restoredRunning || restoredHasSegmentStart || restoredHasWallStart)) {
+        if (!persistActiveState()) {
+            m_completedPomodoros = previousCompletedPomodoros;
+            resetSession();
+            return false;
+        }
+    }
+
     if (!cleanupOrphanedSessions()) {
+        m_completedPomodoros = previousCompletedPomodoros;
         resetSession();
         return false;
     }
@@ -1335,6 +1407,20 @@ bool FocusTimer::restoreInterruptedSession()
     emit completedPomodorosChanged();
     emit tick();
     return true;
+}
+
+void FocusTimer::discardInMemoryStateForReload()
+{
+    if (!hasActiveTimer()) {
+        return;
+    }
+    // 恢复失败即将回滚原库：不写库、立即清掉内存中属于目标库的计时态，防止回滚期间退出写脏原库或阻挡原库重载。
+    resetSession();
+    emit runningStateChanged();
+    emit currentTaskChanged();
+    emit modeChanged();
+    emit phaseChanged();
+    emit tick();
 }
 
 void FocusTimer::prepareForShutdown()

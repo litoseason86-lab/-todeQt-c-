@@ -9,6 +9,7 @@
 // FocusTimer 声明 friend class TimingRobustnessTests，测试可直接注入时钟并触发内部计时器。
 #include "../src/services/FocusTimer.h"
 #include "../src/services/MonotonicClock.h"
+#include <QTimeZone>
 
 namespace {
 
@@ -136,6 +137,7 @@ private slots:
     void resumePersistFailureStaysPaused();
     void freeTimingDisallowedRejectsOnlyFreeFocus();
     void manualRestDisallowedRejectsOnlyManualRest();
+    void dstFallBackPreservesNonInvertedLiteralFocusAndRestTimes();
 
 private:
     void tick() { QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection)); }
@@ -1078,6 +1080,64 @@ void TimingRobustnessTests::manualRestDisallowedRejectsOnlyManualRest()
 
     QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("只关主动休息")));
     QCOMPARE(failedSpy.count(), 1);
+}
+
+void TimingRobustnessTests::dstFallBackPreservesNonInvertedLiteralFocusAndRestTimes()
+{
+    // 产品保证：跨秋季夏令时回拨 1 小时或西向改时区结算专注/休息时，落库的无偏移本地字面 end_time 绝不早于 start_time + duration。
+    const QByteArray oldTz = qgetenv("TZ");
+    const auto restoreTz = qScopeGuard([oldTz] {
+        if (oldTz.isNull()) {
+            qunsetenv("TZ");
+        } else {
+            qputenv("TZ", oldTz);
+        }
+        tzset();
+    });
+    qputenv("TZ", "America/New_York");
+    tzset();
+
+    const QTimeZone ny("America/New_York");
+    QVERIFY(ny.isValid());
+    // 2026-11-01 01:30:00 EDT（UTC 2026-11-01 05:30:00Z），45 分钟后进入 01:15:00 EST（UTC 06:15:00Z）
+    const QDateTime utcStart(QDate(2026, 11, 1), QTime(5, 30, 0), QTimeZone::UTC);
+    const QDateTime localStart = utcStart.toTimeZone(ny).toLocalTime();
+    QCOMPARE(localStart.toString(Qt::ISODate), QStringLiteral("2026-11-01T01:30:00"));
+
+    const int taskId = insertTask(QStringLiteral("跨夏令时回拨任务"));
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("跨夏令时回拨任务")));
+    QSqlQuery fixStart(DatabaseManager::instance()->database());
+    fixStart.prepare(QStringLiteral("UPDATE focus_sessions SET start_time = :s WHERE id = :id"));
+    fixStart.bindValue(QStringLiteral(":s"), localStart.toString(Qt::ISODate));
+    fixStart.bindValue(QStringLiteral(":id"), timer->m_sessionId);
+    QVERIFY(fixStart.exec());
+    timer->m_startTime = localStart;
+    m_clock.advanceSecs(45 * 60);
+    // 用修正时长路径确定性复现 startTime.addSecs(2700) 在回拨点产生的 01:15:00 本地墙钟
+    QVERIFY(timer->stopFreeFocusWithDuration(45 * 60));
+
+    QSqlQuery checkFocus(DatabaseManager::instance()->database());
+    QVERIFY(checkFocus.exec(QStringLiteral("SELECT start_time, end_time, duration FROM focus_sessions WHERE end_time IS NOT NULL")));
+    QVERIFY(checkFocus.next());
+    const QString savedStart = checkFocus.value(0).toString();
+    const QString savedEnd = checkFocus.value(1).toString();
+    QCOMPARE(savedStart, QStringLiteral("2026-11-01T01:30:00"));
+    QVERIFY2(savedEnd >= QStringLiteral("2026-11-01T02:15:00"), qPrintable(savedEnd));
+    QCOMPARE(checkFocus.value(2).toInt(), 45 * 60);
+
+    // 休息段跨越同一夏令时回拨点同理：字面 end_time 不得早于 start_time
+    QVERIFY(timer->startBreak(45 * 60));
+    timer->m_startTime = localStart;
+    m_clock.advanceSecs(45 * 60);
+    QVERIFY(timer->stopFocus());
+
+    QSqlQuery checkRest(DatabaseManager::instance()->database());
+    QVERIFY(checkRest.exec(QStringLiteral("SELECT start_time, end_time, duration FROM rest_sessions")));
+    QVERIFY(checkRest.next());
+    const QString restStart = checkRest.value(0).toString();
+    const QString restEnd = checkRest.value(1).toString();
+    QVERIFY2(restEnd > restStart, qPrintable(restStart + QStringLiteral(" -> ") + restEnd));
 }
 
 QTEST_GUILESS_MAIN(TimingRobustnessTests)

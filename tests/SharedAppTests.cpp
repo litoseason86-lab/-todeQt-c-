@@ -3,6 +3,7 @@
 #include <QClipboard>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
@@ -21,7 +22,9 @@
 #include "services/AppSettings.h"
 #include "services/ApplicationActivity.h"
 #include "services/BackupService.h"
+#include "services/CategoryManager.h"
 #include "services/DatabaseManager.h"
+#include "services/ExportService.h"
 #include "services/FocusHistoryService.h"
 #include "services/FocusTimer.h"
 #include "services/KnowledgeGapService.h"
@@ -37,6 +40,7 @@
 #include "services/RoutineRules.h"
 #include "services/SyncNotifier.h"
 #include "services/SyncController.h"
+#include "services/TaskInteractionCoordinator.h"
 #include "services/TaskManager.h"
 #include "services/TrashService.h"
 #include "services/TrayController.h"
@@ -134,12 +138,20 @@ private slots:
     void routineChangesMaterializeTodayAndNotify();
     void restoreUsesRestoredDayBoundaryBeforePurgingTrash_data();
     void restoreUsesRestoredDayBoundaryBeforePurgingTrash();
+    void restoreBlocksRoutineMaterializationUntilSafeCompletion_data();
+    void restoreBlocksRoutineMaterializationUntilSafeCompletion();
     void unsafeRestoreKeepsMaintenanceBlockedUntilSafeCompletion();
     void interruptedRestoreKeepsTrashAfterRestart_data();
     void interruptedRestoreKeepsTrashAfterRestart();
+    void sharedAppDestructionClearsSingletonProviders();
     void syncClipboardCopyWiring();
     void sharedAppWiresBackupServicePreparationCallbackToSyncController();
     void sharedAppRestoreFailureSafetyClassificationWiringAndLifecycle();
+    void shutdownWaitsForInFlightAsyncExportBeforeClosingDatabase();
+    void corruptTrashOrSyncRecordsDoNotPoisonSubsequentBackup();
+    void sharedAppWiresPendingDeletionToInteractionsAndCancelsOnSnapshotReplace_data();
+    void sharedAppWiresPendingDeletionToInteractionsAndCancelsOnSnapshotReplace();
+    void sharedAppWiresTrayOperationBlockedProviderToBackupService();
 
 private:
     QTemporaryDir m_preferences;
@@ -274,9 +286,8 @@ void SharedAppTests::shutdownStepsNamesAndExecutionOrder()
     }
     app.lifecycle().setFlushDraftsHook([&] {
         observed.append(QStringLiteral("flushDrafts"));
-        QVERIFY(DatabaseManager::instance()->isOpen());
-        QVERIFY(pending->active());
-        QVERIFY(TaskManager::instance()->addTask(QStringLiteral("退出草稿"), QDate::currentDate()));
+        return DatabaseManager::instance()->isOpen() && pending->active()
+            && TaskManager::instance()->addTask(QStringLiteral("退出草稿"), QDate::currentDate());
     });
     connect(pending, &PendingDeletion::retired, &app, [&] {
         observed.append(QStringLiteral("commitPendingDeletion"));
@@ -284,7 +295,8 @@ void SharedAppTests::shutdownStepsNamesAndExecutionOrder()
         QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='退出草稿'")).toInt(), 1);
     });
     QStringList expected = {QStringLiteral("flushDrafts"), QStringLiteral("commitPendingDeletion"),
-        QStringLiteral("focusTimer"), QStringLiteral("backup"), QStringLiteral("sync"), QStringLiteral("databaseClose")};
+        QStringLiteral("focusTimer"), QStringLiteral("backup"), QStringLiteral("export"),
+        QStringLiteral("sync"), QStringLiteral("databaseClose")};
     if (!mobile) {
         expected.prepend(QStringLiteral("preShutdown"));
     }
@@ -360,6 +372,7 @@ void SharedAppTests::applicationStateTransitions()
         draftSaveCount++;
         // 草稿处理必须晚于 GuiApplicationActivity 驱动的检查点，随后同步才能看到最新落盘状态。
         progressAtDraftSave.append(queryValue(QStringLiteral("SELECT elapsed_seconds FROM active_focus_state")).toInt());
+        return true;
     });
 
     // 先重置当前应用状态为 Active
@@ -747,6 +760,70 @@ void SharedAppTests::restoreUsesRestoredDayBoundaryBeforePurgingTrash()
     QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE title='确实到期'")).toInt(), 0);
 }
 
+// 产品保证：同步与异步恢复在设置尚未重载完成前绝不因 databaseChanged 提前生成例行，恢复安全完成后才按新库与新设置生成。
+void SharedAppTests::restoreBlocksRoutineMaterializationUntilSafeCompletion_data()
+{
+    QTest::addColumn<bool>("asynchronous");
+    QTest::newRow("synchronous") << false;
+    QTest::newRow("asynchronous") << true;
+}
+
+void SharedAppTests::restoreBlocksRoutineMaterializationUntilSafeCompletion()
+{
+    QFETCH(bool, asynchronous);
+    auto* backup = BackupService::instance();
+    const QString previousSettingsPath = backup->m_settingsFilePath;
+    const QString previousBackupsDir = backup->m_backupsDir;
+    const auto restoreConfiguration = qScopeGuard([=] {
+        backup->configure(previousSettingsPath, previousBackupsDir);
+    });
+    backup->configure(QString(), m_tempDir->filePath(QStringLiteral("routine-restore-backups")));
+
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    SharedApp app(options);
+    QVERIFY(app.openDatabase());
+    app.startDay();
+
+    QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("恢复后才生成的例行"), 0, 127));
+    // addRoutine 发出的 routinesChanged 是 QueuedConnection；先排空事件队列再清除生成戳，避免延迟回调污染备份基线。
+    QCoreApplication::processEvents();
+    const int routineId = queryValue(QStringLiteral("SELECT id FROM routines WHERE title='恢复后才生成的例行'")).toInt();
+    QVERIFY(routineId > 0);
+    // 清除生成戳和今日实例，使备份中该例行处于“待生成”状态；
+    // 准备期间屏蔽同步触发器，避免 SQL 删实例写入 tasks 删除墓碑，导致恢复后遵循「删除优先」跳过生成。
+    QVERIFY(executeSql(QStringLiteral("UPDATE sync_runtime SET applying=1 WHERE singleton_id=1")));
+    QVERIFY(executeSql(QStringLiteral("DELETE FROM tasks WHERE routine_id = %1").arg(routineId)));
+    QVERIFY(executeSql(QStringLiteral("UPDATE routines SET last_generated_date = NULL WHERE id = %1").arg(routineId)));
+    QVERIFY(executeSql(QStringLiteral("UPDATE sync_runtime SET applying=0 WHERE singleton_id=1")));
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='恢复后才生成的例行'")).toInt(), 0);
+
+    const QString backupPath = m_tempDir->filePath(QStringLiteral("routine-restore.tomatobackup"));
+    QVERIFY(backup->createBackup(backupPath));
+
+    // 在 databaseChanged 触发瞬间检查：此时恢复设置尚未重载，不能抢跑生成例行。
+    int generatedCountAtDatabaseChanged = -1;
+    const auto conn = connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged, this, [&] {
+        if (generatedCountAtDatabaseChanged < 0) {
+            generatedCountAtDatabaseChanged =
+                queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='恢复后才生成的例行'")).toInt();
+        }
+    });
+    const auto disconnectConn = qScopeGuard([&] { QObject::disconnect(conn); });
+
+    QSignalSpy completed(backup, &BackupService::restoreCompleted);
+    if (asynchronous) {
+        backup->requestRestore(backupPath);
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 10000);
+    } else {
+        QVERIFY(backup->restoreBackup(backupPath));
+        QCOMPARE(completed.count(), 1);
+    }
+    QVERIFY2(completed.first().at(0).toBool(), qPrintable(completed.first().at(1).toString()));
+    QCOMPARE(generatedCountAtDatabaseChanged, 0);
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='恢复后才生成的例行'")).toInt(), 1);
+}
+
 // 产品保证：恢复中或不安全失败后不自动清理，外部拒绝通知不解除保护，安全完成后恢复正常维护。
 void SharedAppTests::unsafeRestoreKeepsMaintenanceBlockedUntilSafeCompletion()
 {
@@ -831,10 +908,39 @@ void SharedAppTests::interruptedRestoreKeepsTrashAfterRestart()
     restarted.startDay();
     QVERIFY(restarted.services().syncController()->hasProblem());
     QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+    // 直接通过 TrashService 调用 purgeExpired()（模拟打开废纸篓页）同样受恢复不确定准入门禁拦截。
+    QVERIFY(TrashService::instance()->autoPurgeBlocked());
+    QCOMPARE(TrashService::instance()->purgeExpired(), 0);
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
     auto* boundary = LogicalDayService::instance()->findChild<QTimer*>(QStringLiteral("logicalDayBoundaryTimer"));
     QVERIFY(boundary != nullptr);
     QVERIFY(QMetaObject::invokeMethod(boundary, "timeout", Qt::DirectConnection));
     QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+}
+
+// 产品保证：SharedApp 销毁时清空注入到进程单例的阻塞回调，后续调用不会解引用悬空 this。
+void SharedAppTests::sharedAppDestructionClearsSingletonProviders()
+{
+    {
+        SharedApp::Options options;
+        options.databasePath = m_testDbPath;
+        SharedApp app(options);
+        QVERIFY(app.openDatabase());
+        app.startDay();
+        emit BackupService::instance()->restoreStarted();
+        QVERIFY(TrashService::instance()->autoPurgeBlocked());
+    }
+    // SharedApp 已析构，所有注入回调应被清空，直接调用三个单例不崩溃且不受旧实例阻断。
+    QVERIFY(!TrashService::instance()->autoPurgeBlocked());
+    QCOMPARE(TrashService::instance()->purgeExpired(), 0);
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("析构后任务"), QDate::currentDate()));
+    const int taskId = queryValue(QStringLiteral("SELECT id FROM tasks WHERE title='析构后任务'")).toInt();
+    QVERIFY(taskId > 0);
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("析构后任务")));
+    FocusTimer::instance()->resetSession();
+    const QString csvPath = m_tempDir->filePath(QStringLiteral("after-destroy.csv"));
+    QVERIFY(ExportService::instance()->exportTasks(QDate::currentDate(), QDate::currentDate(), csvPath));
+    QVERIFY(QFileInfo::exists(csvPath));
 }
 
 void SharedAppTests::syncClipboardCopyWiring()
@@ -1159,4 +1265,275 @@ void SharedAppTests::backgroundRequestsBackupCancellation()
     lifecycle.handleApplicationStateChanged(Qt::ApplicationSuspended);
     QVERIFY(another->stopped());
     service->m_operation.reset();
+}
+
+void SharedAppTests::shutdownWaitsForInFlightAsyncExportBeforeClosingDatabase()
+{
+    // 产品保证：退出时若有正在后台运行的异步导出任务，AppLifecycle 在关闭数据库前先等待其完成收尾，并拒绝退出阶段新发起的异步导出。
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    SharedApp app(options);
+    QVERIFY(app.openDatabase());
+
+    const QDate day = QDate::currentDate();
+    for (int i = 0; i < 40; ++i) {
+        QVERIFY(TaskManager::instance()->addTask(QStringLiteral("导出任务 %1").arg(i), day));
+    }
+    const QString exportDir = m_tempDir->filePath(QStringLiteral("shutdown-export"));
+    ExportService* exporter = ExportService::instance();
+    exporter->requestExportAll(day, day, exportDir);
+    QVERIFY(exporter->busy());
+
+    app.lifecycle().shutdown();
+
+    // shutdown 返回时在途导出必须已经结束且写出成对 CSV，主库已安全关闭。
+    QVERIFY(!exporter->busy());
+    QVERIFY(!DatabaseManager::instance()->isOpen());
+    const QString tasksCsv = QDir(exportDir).filePath(
+        exporter->generateFileName(QStringLiteral("tasks"), day, day));
+    QVERIFY(QFileInfo::exists(tasksCsv));
+
+    // 退出阶段禁止再接受新的异步导出请求。
+    QSignalSpy rejectedSpy(exporter, &ExportService::exportCompleted);
+    exporter->requestExportTasks(day, day, m_tempDir->filePath(QStringLiteral("late.csv")));
+    QVERIFY(!exporter->busy());
+    QCOMPARE(rejectedSpy.count(), 1);
+    QCOMPARE(rejectedSpy.first().first().toBool(), false);
+}
+
+void SharedAppTests::corruptTrashOrSyncRecordsDoNotPoisonSubsequentBackup()
+{
+    // 产品保证：违反业务域契约的废纸篓载荷或远端同步记录在落库前被拦截，不会进入主库阻断后续任何手动/自动备份。
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    SharedApp app(options);
+    QVERIFY(app.openDatabase());
+
+    // 1. 废纸篓里存在 target_date 为空的坏倒计时载荷：恢复被拒绝，不入 countdown_goals。
+    QVERIFY(executeSql(QStringLiteral(
+        "INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+        "VALUES ('countdown_goal', 'bad-goal', '坏目标', '{\"v\":1,\"name\":\"考研\",\"target_date\":\"\"}', '2026-10-10T10:00:00.000Z')")));
+    const int trashId = queryValue(QStringLiteral("SELECT MAX(id) FROM trash_items")).toInt();
+    QVERIFY(trashId > 0);
+    const QVariantMap trashRes = TrashService::instance()->restoreItem(trashId);
+    QVERIFY(!trashRes.value(QStringLiteral("ok")).toBool());
+    // 清理测试插入的废纸篓行后验证主库未被坏 countdown_goals 污染，紧接着再测远端同步拦住坏 trash_items
+    QVERIFY(executeSql(QStringLiteral("DELETE FROM trash_items WHERE id = %1").arg(trashId)));
+
+    // 2. 远端同步发来坏日期任务、小数 weekdays 例行、非 JSON 载荷废纸篓：全部单条跳过。
+    const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
+    const SyncVersion v{1790000000100LL, remote};
+    SyncRecord badTask;
+    badTask.table = QStringLiteral("tasks");
+    badTask.syncId = QStringLiteral("bad-sync-task");
+    badTask.fields = {
+        {QStringLiteral("title"), {QStringLiteral("坏日期任务"), v, {}}},
+        {QStringLiteral("date"), {QStringLiteral("20260203"), v, {}}},
+        {QStringLiteral("completed"), {0, v, {}}},
+    };
+    SyncRecord badRoutine;
+    badRoutine.table = QStringLiteral("routines");
+    badRoutine.syncId = QStringLiteral("bad-sync-routine");
+    badRoutine.fields = {
+        {QStringLiteral("title"), {QStringLiteral("小数例行"), v, {}}},
+        {QStringLiteral("active"), {1, v, {}}},
+        {QStringLiteral("weekdays"), {5.5, v, {}}},
+    };
+    SyncRecord badTrash;
+    badTrash.table = QStringLiteral("trash_items");
+    badTrash.syncId = QStringLiteral("bad-sync-trash");
+    badTrash.fields = {
+        {QStringLiteral("kind"), {QStringLiteral("task"), v, {}}},
+        {QStringLiteral("title"), {QStringLiteral("非JSON废纸篓"), v, {}}},
+        {QStringLiteral("payload"), {QStringLiteral("not-valid-json{"), v, {}}},
+        {QStringLiteral("deleted_at"), {QStringLiteral("2026-10-10T10:00:00.000Z"), v, {}}},
+    };
+    SyncBatch batch;
+    batch.device = remote;
+    batch.epoch = SyncStore().epoch();
+    batch.records = {badTask, badRoutine, badTrash};
+    const SyncStore::ApplyResult syncRes = SyncStore().applyRemote(batch);
+    QVERIFY2(syncRes.ok, qPrintable(syncRes.error));
+    QCOMPARE(syncRes.skippedRecords, 3);
+
+    const QString backupPath = m_tempDir->filePath(QStringLiteral("after-rejected-bad-rows.tomatobackup"));
+    QVERIFY2(BackupService::instance()->createBackup(backupPath),
+             qPrintable(BackupService::instance()->lastError()));
+}
+
+void SharedAppTests::sharedAppWiresPendingDeletionToInteractionsAndCancelsOnSnapshotReplace_data()
+{
+    QTest::addColumn<bool>("draftSaveFails");
+    QTest::addColumn<bool>("cursorSaveFails");
+    QTest::newRow("normal") << false << false;
+    QTest::newRow("draft-save-blocks-replacement") << true << false;
+    QTest::newRow("cursor-failure-rolls-back-atomically") << false << true;
+}
+
+void SharedAppTests::sharedAppWiresPendingDeletionToInteractionsAndCancelsOnSnapshotReplace()
+{
+    // 产品保证：草稿保存失败或游标写入失败均原子保留旧库与待删槽；快照事务提交后立即退场旧库待删槽并递增代次。
+    QFETCH(bool, draftSaveFails);
+    QFETCH(bool, cursorSaveFails);
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    SharedApp app(options);
+    QVERIFY(app.openDatabase());
+
+    const QString folder = m_tempDir->filePath(QStringLiteral("snapshot_replace_pending_sync"));
+    app.setUpSync(makeTestPlatform(folder));
+    app.startDay();
+    app.createInteractionServices();
+
+    auto* sync = app.services().syncController();
+    auto* pending = app.services().pendingDeletion();
+    auto* interactions = app.services().taskInteractionCoordinator();
+    QVERIFY(sync != nullptr);
+    QVERIFY(pending != nullptr);
+    QVERIFY(interactions != nullptr);
+
+    sync->setEnabled(true);
+    QVERIFY(waitIdle(sync->engine()));
+
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("无界面待删任务"), QDate::currentDate()));
+    const int taskId = queryValue(QStringLiteral("SELECT id FROM tasks WHERE title='无界面待删任务'")).toInt();
+    QVERIFY(taskId > 0);
+
+    pending->setDelayMs(3600000);
+    QVERIFY(pending->requestTask(taskId, QStringLiteral("无界面待删任务")));
+    QVERIFY(pending->active());
+    const qint64 genBeforeReplace = pending->generation();
+    QSignalSpy pendingRetiredSpy(pending, &PendingDeletion::retired);
+    QCOMPARE(interactions->pendingTaskIds(), QSet<int>({taskId}));
+
+    // 远端设备发布更高纪元的整库快照（例如另一台设备恢复了备份），本机拉取替换后必须取消旧库待删槽。
+    const QString remote = QStringLiteral("abcdef0123456789abcdef0123456789");
+    const qint64 nextEpoch = SyncStore().epoch() + 1;
+    const SyncVersion v{1790000010000LL, remote};
+    SyncRecord remoteTask;
+    remoteTask.table = QStringLiteral("tasks");
+    remoteTask.syncId = QStringLiteral("remote-restored-task");
+    remoteTask.fields = {
+        {QStringLiteral("title"), {QStringLiteral("快照保留任务"), v, {}}},
+        {QStringLiteral("date"), {QDate::currentDate().toString(Qt::ISODate), v, {}}},
+        {QStringLiteral("completed"), {0, v, {}}},
+        {QStringLiteral("display_order"), {1, v, {}}},
+        {QStringLiteral("estimated_minutes"), {25, v, {}}},
+        {QStringLiteral("notes"), {QString(), v, {}}},
+        {QStringLiteral("completion_note"), {QString(), v, {}}},
+    };
+    SyncFiles::SnapshotFile snap;
+    snap.coveredSeq = 1;
+    snap.writtenAtMs = 1790000010000LL;
+    snap.batch.device = remote;
+    snap.batch.epoch = nextEpoch;
+    snap.batch.records = {remoteTask};
+
+    const QString remoteDir = QDir(folder).filePath(SyncFiles::deviceDirectory(remote));
+    QVERIFY(QDir().mkpath(remoteDir));
+    QFile snapFile(QDir(remoteDir).filePath(SyncFiles::snapshotFileName({nextEpoch, 1})));
+    QVERIFY(snapFile.open(QIODevice::WriteOnly));
+    QVERIFY(snapFile.write(SyncFiles::encodeSnapshot(snap)) > 0);
+    snapFile.close();
+
+    if (cursorSaveFails) {
+        QSqlQuery fault(DatabaseManager::instance()->database());
+        QVERIFY(fault.exec(QStringLiteral(
+            "CREATE TEMP TRIGGER reject_snapshot_cursor BEFORE INSERT ON sync_state "
+            "WHEN NEW.key LIKE 'cursor/%' BEGIN SELECT RAISE(ABORT, 'cursor write failed'); END")));
+    }
+    int draftSaves = 0;
+    int notifications = 0;
+    int categoryRefreshes = 0;
+    bool oldTaskPresentDuringFlush = false;
+    bool pendingAtRefresh = false;
+    app.lifecycle().setFlushDraftsHook([&] {
+        ++draftSaves;
+        oldTaskPresentDuringFlush = oldTaskPresentDuringFlush
+            || queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='无界面待删任务'")).toInt() == 1;
+        return !draftSaveFails;
+    });
+    connect(sync, &SyncController::snapshotReplaced, &app, [&] { ++notifications; });
+    connect(CategoryManager::instance(), &CategoryManager::categoriesChanged, &app, [&] {
+        ++categoryRefreshes;
+        pendingAtRefresh = pendingAtRefresh || pending->active();
+    });
+    sync->syncNow();
+    QVERIFY(waitIdle(sync->engine()));
+    const int expectedDraftSaves = (draftSaveFails || cursorSaveFails) ? 2 : 1;
+    if (draftSaveFails) {
+        QCOMPARE(sync->engine()->status(), SyncEngine::Status::BackupFailed);
+        QVERIFY(sync->statusDetail().contains(QStringLiteral("草稿尚未保存")));
+        QCOMPARE(SyncStore().epoch(), nextEpoch - 1);
+        QCOMPARE(notifications, 0);
+        QCOMPARE(categoryRefreshes, 0);
+        QVERIFY(pending->active());
+        QCOMPARE(interactions->pendingTaskIds(), QSet<int>({taskId}));
+
+        // 下轮保存成功后自动替换，失败的尝试没有消耗快照。
+        draftSaveFails = false;
+        sync->syncNow();
+        QVERIFY(waitIdle(sync->engine()));
+    } else if (cursorSaveFails) {
+        // 游标写入已合入 replaceWithSnapshot 同一个 SQLite 事务：失败整笔回滚，旧库、纪元与待删槽保持完整。
+        QCOMPARE(sync->engine()->status(), SyncEngine::Status::Error);
+        QVERIFY(sync->statusDetail().contains(QStringLiteral("游标")));
+        QCOMPARE(SyncStore().epoch(), nextEpoch - 1);
+        QCOMPARE(notifications, 0);
+        QCOMPARE(categoryRefreshes, 0);
+        QVERIFY(pending->active());
+        QCOMPARE(pendingRetiredSpy.count(), 0);
+        QCOMPARE(interactions->pendingTaskIds(), QSet<int>({taskId}));
+
+        // 移除故障触发器后下一轮正常提交替换，并退场旧待删槽。
+        QVERIFY(executeSql(QStringLiteral("DROP TRIGGER reject_snapshot_cursor")));
+        sync->syncNow();
+        QVERIFY(waitIdle(sync->engine()));
+    }
+    QCOMPARE(SyncStore().epoch(), nextEpoch);
+    QCOMPARE(notifications, 1);
+    QVERIFY(categoryRefreshes > 0);
+    QVERIFY(!pendingAtRefresh);
+    QCOMPARE(draftSaves, expectedDraftSaves);
+    QVERIFY(oldTaskPresentDuringFlush);
+
+    QVERIFY(!pending->active());
+    QCOMPARE(pendingRetiredSpy.count(), 1);
+    QVERIFY(pending->generation() > genBeforeReplace);
+    QVERIFY(interactions->pendingTaskIds().isEmpty());
+}
+
+void SharedAppTests::sharedAppWiresTrayOperationBlockedProviderToBackupService()
+{
+    // 产品保证：SharedApp 将菜单栏控制器的阻断谓词接到 BackupService::operationBlocksUi，真实恢复临界区内菜单栏动作不改动计时状态。
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    SharedApp app(options);
+    QVERIFY(app.openDatabase());
+
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("共享装配阻断任务"), QDate::currentDate()));
+    const int taskId = queryValue(QStringLiteral("SELECT id FROM tasks WHERE title='共享装配阻断任务'")).toInt();
+    QVERIFY(taskId > 0);
+    auto* timer = FocusTimer::instance();
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("共享装配阻断任务"), 25 * 60));
+    QVERIFY(timer->isRunning());
+
+    auto* backup = BackupService::instance();
+    backup->configure(m_tempDir->filePath(QStringLiteral("shared-tray.ini")),
+                      m_tempDir->filePath(QStringLiteral("shared-tray-backups")));
+    QSignalSpy backupDone(backup, &BackupService::backupCompleted);
+    backup->requestBackup(m_tempDir->filePath(QStringLiteral("shared-tray.tomatobackup")));
+    QVERIFY(backup->operationBlocksUi());
+
+    auto* tray = app.services().trayController();
+    QVERIFY(tray != nullptr);
+    tray->requestPause();
+    QVERIFY(timer->isRunning());
+    tray->requestStop();
+    QVERIFY(timer->hasActiveSession());
+
+    QTRY_COMPARE(backupDone.count(), 1);
+    QVERIFY(!backup->operationBlocksUi());
+    tray->requestStop();
+    QVERIFY(!timer->hasActiveSession());
 }

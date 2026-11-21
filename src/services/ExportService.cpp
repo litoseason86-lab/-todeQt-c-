@@ -1,37 +1,67 @@
 #include "ExportService.h"
 
 #include "AppSettings.h"
+#include "BackupOperations.h"
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
 #include "LogicalDay.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QCoreApplication>
-#include <QDateTime>
 #include <QFutureWatcher>
 #include <QSaveFile>
-#include <QThread>
-#include <QtConcurrent>
+#include <QSettings>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QTextStream>
+#include <QThread>
 #include <QTimeZone>
 #include <QUuid>
+#include <QtConcurrent>
+
+#include <memory>
+#include <utility>
 
 ExportService::ExportService(QObject* parent)
     : QObject(parent)
 {
+    // 测试换库重开时解除退出拦截，使同一进程内的单例在下一轮测试仍可正常导出。
+    connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged, this, [this] {
+        m_shuttingDown = false;
+    });
+}
+
+ExportService::~ExportService()
+{
+    // 正常退出已由 AppLifecycle 调用 prepareForShutdown()；析构兜底防止异常路径遗留后台线程。
+    prepareForShutdown();
 }
 
 ExportService* ExportService::instance()
 {
     static ExportService service;
     return &service;
+}
+
+void ExportService::setOperationBlockedProvider(std::function<bool()> provider)
+{
+    m_operationBlockedProvider = std::move(provider);
+}
+
+bool ExportService::isOperationBlocked() const
+{
+    return m_operationBlockedProvider && m_operationBlockedProvider();
+}
+
+QString ExportService::currentEffectiveSettingsPath() const
+{
+    const std::unique_ptr<QSettings> settings = BackupOperations::openSettings(QString());
+    return settings ? settings->fileName() : QString();
 }
 
 QDate ExportService::normalizeDate(const QVariant& value) const
@@ -127,15 +157,32 @@ QString ExportService::sessionCategoryExpression() const
 int ExportService::countRows(const QSqlDatabase& database,
                              const QString& fromAndWhereSql,
                              const QDate& startDate,
-                             const QDate& endDate) const
+                             const QDate& endDate,
+                             bool* ok,
+                             QString* error) const
 {
+    if (ok) {
+        *ok = true;
+    }
+    if (error) {
+        error->clear();
+    }
     QSqlQuery query(database);
+    query.setForwardOnly(true);
     query.prepare(QStringLiteral("SELECT COUNT(*) %1").arg(fromAndWhereSql));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 
     if (!query.exec() || !query.next()) {
-        qWarning() << "Failed to count export rows:" << query.lastError().text();
+        const QString reason = query.lastError().isValid()
+            ? query.lastError().text() : QStringLiteral("无法读取记录总数");
+        qWarning() << "Failed to count export rows:" << reason;
+        if (ok) {
+            *ok = false;
+        }
+        if (error) {
+            *error = reason;
+        }
         return 0;
     }
 
@@ -159,20 +206,38 @@ bool ExportService::exportTasks(const QVariant& startDateValue,
                                 const QVariant& endDateValue,
                                 const QString& filePath)
 {
+    if (m_shuttingDown) {
+        emit exportCompleted(false, QStringLiteral("应用正在退出，已取消导出"));
+        return false;
+    }
+    if (isOperationBlocked()) {
+        emit exportCompleted(false, QStringLiteral("正在备份或恢复数据，请稍后再试"));
+        return false;
+    }
     const QDate startDate = normalizeDate(startDateValue);
     const QDate endDate = normalizeDate(endDateValue);
-    return exportTasksToFile(startDate, endDate, filePath, true, QString());
+    const QString sourceDatabasePath = DatabaseManager::instance()->database().databaseName();
+    const ExportOutcome outcome = exportTasksToFile(
+        startDate, endDate, filePath, QString(), sourceDatabasePath, currentEffectiveSettingsPath());
+    emit exportCompleted(outcome.success, outcome.message);
+    return outcome.success;
 }
 
-bool ExportService::exportTasksToFile(const QDate& startDate,
-                                      const QDate& endDate,
-                                      const QString& filePath,
-                                      bool emitSuccess,
-                                      const QString& workerDatabasePath)
+ExportService::ExportOutcome ExportService::exportTasksToFile(const QDate& startDate,
+                                                              const QDate& endDate,
+                                                              const QString& filePath,
+                                                              const QString& workerDatabasePath,
+                                                              const QString& sourceDatabasePath,
+                                                              const QString& effectiveSettingsPath)
 {
     if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
-        emit exportCompleted(false, QStringLiteral("日期范围无效"));
-        return false;
+        return {false, QStringLiteral("日期范围无效")};
+    }
+
+    QString pathError;
+    if (!BackupOperations::checkProtectedOutputPath(
+            filePath, sourceDatabasePath, effectiveSettingsPath, QStringLiteral("导出目标"), &pathError)) {
+        return {false, pathError};
     }
 
     // 守卫必须先于 db 构造，C++ 才会先销毁 db，再调用 removeDatabase。
@@ -183,27 +248,25 @@ bool ExportService::exportTasksToFile(const QDate& startDate,
     } guard;
     QSqlDatabase db = acquireDatabase(workerDatabasePath, &guard.name);
     if (!db.isOpen()) {
-        emit exportCompleted(false, QStringLiteral("数据库未打开"));
-        return false;
+        return {false, QStringLiteral("数据库未打开")};
     }
 
-    return exportTasksUsingDatabase(db, startDate, endDate, filePath, emitSuccess);
+    return exportTasksUsingDatabase(db, startDate, endDate, filePath);
 }
 
-bool ExportService::exportTasksUsingDatabase(const QSqlDatabase& database,
-                                             const QDate& startDate,
-                                             const QDate& endDate,
-                                             const QString& filePath,
-                                             bool emitSuccess)
+ExportService::ExportOutcome ExportService::exportTasksUsingDatabase(const QSqlDatabase& database,
+                                                                     const QDate& startDate,
+                                                                     const QDate& endDate,
+                                                                     const QString& filePath)
 {
     // 写入层只使用调用者给的连接，不自行开连接或嵌套事务；
     // 这样“全部导出”才能让两份 CSV 共享同一个 SQLite 读快照。
 
-    // QSaveFile 写入同目录临时文件，只有 commit 成功才原子替换目标；任何中途失败都保留旧文件。
+    // QSaveFile 写入同目录临时文件，禁用直写回退以保证仅 commit 成功才原子替换目标，中途失败保留旧文件。
     QSaveFile file(filePath);
+    file.setDirectWriteFallback(false);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        emit exportCompleted(false, QStringLiteral("无法创建文件: %1").arg(file.errorString()));
-        return false;
+        return {false, QStringLiteral("无法创建文件: %1").arg(file.errorString())};
     }
 
     QTextStream out(&file);
@@ -217,9 +280,17 @@ bool ExportService::exportTasksUsingDatabase(const QSqlDatabase& database,
         "LEFT JOIN categories c ON t.category_id = c.id "
         "WHERE t.date >= :startDate AND t.date <= :endDate");
     // 先统计总数，让 UI 可以显示确定进度，而不是只能显示加载状态。
-    const int total = countRows(database, fromAndWhere, startDate, endDate);
+    bool countOk = true;
+    QString countError;
+    const int total = countRows(database, fromAndWhere, startDate, endDate, &countOk, &countError);
+    if (!countOk) {
+        file.cancelWriting();
+        return {false, QStringLiteral("数据库查询失败: %1").arg(countError)};
+    }
 
     QSqlQuery query(database);
+    // 流式只向前读取，避免大结果集在 Qt SQL 缓存中整份物化。
+    query.setForwardOnly(true);
     query.prepare(QStringLiteral(
         "SELECT t.id, t.title, %1 AS category_name, t.date, t.completed, t.created_at "
         "%2 "
@@ -229,9 +300,10 @@ bool ExportService::exportTasksUsingDatabase(const QSqlDatabase& database,
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 
     if (!query.exec()) {
+        const QString error = query.lastError().text();
+        query.finish();
         file.cancelWriting();
-        emit exportCompleted(false, QStringLiteral("数据库查询失败: %1").arg(query.lastError().text()));
-        return false;
+        return {false, QStringLiteral("数据库查询失败: %1").arg(error)};
     }
 
     int current = 0;
@@ -239,9 +311,9 @@ bool ExportService::exportTasksUsingDatabase(const QSqlDatabase& database,
         out << query.value(0).toInt() << ','
             << escapeCsvField(query.value(1).toString()) << ','
             << escapeCsvField(query.value(2).toString()) << ','
-            << query.value(3).toString() << ','
+            << escapeCsvField(query.value(3).toString()) << ','
             << (query.value(4).toBool() ? QStringLiteral("已完成") : QStringLiteral("未完成")) << ','
-            << formatDateTime(query.value(5)) << '\n';
+            << escapeCsvField(formatDateTime(query.value(5))) << '\n';
         ++current;
         // 逐行发信号在 2 万行时就是 2 万次跨线程排队投递，比写文件本身还贵。
         // 每 200 行报一次，末尾再补一次准确值。
@@ -249,38 +321,63 @@ bool ExportService::exportTasksUsingDatabase(const QSqlDatabase& database,
             emit exportProgress(current, total);
         }
     }
+    if (query.lastError().isValid()) {
+        const QString error = query.lastError().text();
+        query.finish();
+        file.cancelWriting();
+        return {false, QStringLiteral("数据库查询失败: %1").arg(error)};
+    }
+    query.finish();
 
     emit exportProgress(current, total);
     return finishCsvFile(file,
                          out,
-                         QStringLiteral("成功导出 %1 条任务记录").arg(current),
-                         emitSuccess);
+                         QStringLiteral("成功导出 %1 条任务记录").arg(current));
 }
 
 bool ExportService::exportFocusSessions(const QVariant& startDateValue,
                                         const QVariant& endDateValue,
                                         const QString& filePath)
 {
+    if (m_shuttingDown) {
+        emit exportCompleted(false, QStringLiteral("应用正在退出，已取消导出"));
+        return false;
+    }
+    if (isOperationBlocked()) {
+        emit exportCompleted(false, QStringLiteral("正在备份或恢复数据，请稍后再试"));
+        return false;
+    }
     const QDate startDate = normalizeDate(startDateValue);
     const QDate endDate = normalizeDate(endDateValue);
-    return exportFocusSessionsToFile(startDate,
-                                     endDate,
-                                     filePath,
-                                     true,
-                                     QString(),
-                                     AppSettings::instance()->dayStartHour());
+    const QString sourceDatabasePath = DatabaseManager::instance()->database().databaseName();
+    const ExportOutcome outcome = exportFocusSessionsToFile(
+        startDate,
+        endDate,
+        filePath,
+        QString(),
+        sourceDatabasePath,
+        currentEffectiveSettingsPath(),
+        AppSettings::instance()->dayStartHour());
+    emit exportCompleted(outcome.success, outcome.message);
+    return outcome.success;
 }
 
-bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
-                                              const QDate& endDate,
-                                              const QString& filePath,
-                                              bool emitSuccess,
-                                              const QString& workerDatabasePath,
-                                              int dayStartHour)
+ExportService::ExportOutcome ExportService::exportFocusSessionsToFile(const QDate& startDate,
+                                                                      const QDate& endDate,
+                                                                      const QString& filePath,
+                                                                      const QString& workerDatabasePath,
+                                                                      const QString& sourceDatabasePath,
+                                                                      const QString& effectiveSettingsPath,
+                                                                      int dayStartHour)
 {
     if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
-        emit exportCompleted(false, QStringLiteral("日期范围无效"));
-        return false;
+        return {false, QStringLiteral("日期范围无效")};
+    }
+
+    QString pathError;
+    if (!BackupOperations::checkProtectedOutputPath(
+            filePath, sourceDatabasePath, effectiveSettingsPath, QStringLiteral("导出目标"), &pathError)) {
+        return {false, pathError};
     }
 
     // 与任务导出保持同一销毁顺序：db 和全部查询先销毁，最后才移除命名连接。
@@ -290,28 +387,25 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
     } guard;
     QSqlDatabase db = acquireDatabase(workerDatabasePath, &guard.name);
     if (!db.isOpen()) {
-        emit exportCompleted(false, QStringLiteral("数据库未打开"));
-        return false;
+        return {false, QStringLiteral("数据库未打开")};
     }
 
-    return exportFocusSessionsUsingDatabase(
-        db, startDate, endDate, filePath, emitSuccess, dayStartHour);
+    return exportFocusSessionsUsingDatabase(db, startDate, endDate, filePath, dayStartHour);
 }
 
-bool ExportService::exportFocusSessionsUsingDatabase(const QSqlDatabase& database,
-                                                     const QDate& startDate,
-                                                     const QDate& endDate,
-                                                     const QString& filePath,
-                                                     bool emitSuccess,
-                                                     int dayStartHour)
+ExportService::ExportOutcome ExportService::exportFocusSessionsUsingDatabase(const QSqlDatabase& database,
+                                                                             const QDate& startDate,
+                                                                             const QDate& endDate,
+                                                                             const QString& filePath,
+                                                                             int dayStartHour)
 {
     // 与任务 CSV 一样，这一层不管理连接和事务，由外层决定是
     // 单文件读取，还是两份文件共享一个读快照。
 
     QSaveFile file(filePath);
+    file.setDirectWriteFallback(false);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        emit exportCompleted(false, QStringLiteral("无法创建文件: %1").arg(file.errorString()));
-        return false;
+        return {false, QStringLiteral("无法创建文件: %1").arg(file.errorString())};
     }
 
     QTextStream out(&file);
@@ -335,9 +429,16 @@ bool ExportService::exportFocusSessionsUsingDatabase(const QSqlDatabase& databas
                                      .arg(LogicalDay::sqlShift(dayStartHour))
                                      .arg(FocusSessionRules::kMinimumValidDurationSeconds);
     // 先统计总数，让 UI 可以显示确定进度，而不是只能显示加载状态。
-    const int total = countRows(database, fromAndWhere, startDate, endDate);
+    bool countOk = true;
+    QString countError;
+    const int total = countRows(database, fromAndWhere, startDate, endDate, &countOk, &countError);
+    if (!countOk) {
+        file.cancelWriting();
+        return {false, QStringLiteral("数据库查询失败: %1").arg(countError)};
+    }
 
     QSqlQuery query(database);
+    query.setForwardOnly(true);
     query.prepare(QStringLiteral(
         "SELECT f.id, f.task_id, COALESCE(t.title, '未关联任务') AS task_title, "
         "%1 AS category_name, f.start_time, f.end_time, COALESCE(f.duration, 0) "
@@ -347,20 +448,21 @@ bool ExportService::exportFocusSessionsUsingDatabase(const QSqlDatabase& databas
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 
     if (!query.exec()) {
+        const QString error = query.lastError().text();
+        query.finish();
         file.cancelWriting();
-        emit exportCompleted(false, QStringLiteral("数据库查询失败: %1").arg(query.lastError().text()));
-        return false;
+        return {false, QStringLiteral("数据库查询失败: %1").arg(error)};
     }
 
     int current = 0;
     while (query.next()) {
         const int durationMinutes = query.value(6).toInt() / 60;
         out << query.value(0).toInt() << ','
-            << (query.value(1).isNull() ? QStringLiteral("-1") : query.value(1).toString()) << ','
+            << (query.value(1).isNull() ? QStringLiteral("-1") : escapeCsvField(query.value(1).toString())) << ','
             << escapeCsvField(query.value(2).toString()) << ','
             << escapeCsvField(query.value(3).toString()) << ','
-            << formatDateTime(query.value(4)) << ','
-            << formatDateTime(query.value(5)) << ','
+            << escapeCsvField(formatDateTime(query.value(4))) << ','
+            << escapeCsvField(formatDateTime(query.value(5))) << ','
             << durationMinutes << '\n';
         ++current;
         // 逐行发信号在 2 万行时就是 2 万次跨线程排队投递，比写文件本身还贵。
@@ -369,53 +471,80 @@ bool ExportService::exportFocusSessionsUsingDatabase(const QSqlDatabase& databas
             emit exportProgress(current, total);
         }
     }
+    if (query.lastError().isValid()) {
+        const QString error = query.lastError().text();
+        query.finish();
+        file.cancelWriting();
+        return {false, QStringLiteral("数据库查询失败: %1").arg(error)};
+    }
+    query.finish();
 
     emit exportProgress(current, total);
     return finishCsvFile(file,
                          out,
-                         QStringLiteral("成功导出 %1 条专注记录").arg(current),
-                         emitSuccess);
+                         QStringLiteral("成功导出 %1 条专注记录").arg(current));
 }
 
 bool ExportService::exportAll(const QVariant& startDateValue,
                               const QVariant& endDateValue,
                               const QString& dirPath)
 {
+    if (m_shuttingDown) {
+        emit exportCompleted(false, QStringLiteral("应用正在退出，已取消导出"));
+        return false;
+    }
+    if (isOperationBlocked()) {
+        emit exportCompleted(false, QStringLiteral("正在备份或恢复数据，请稍后再试"));
+        return false;
+    }
     const QDate startDate = normalizeDate(startDateValue);
     const QDate endDate = normalizeDate(endDateValue);
-    return exportAllToDirectory(startDate,
-                                endDate,
-                                dirPath,
-                                QString(),
-                                AppSettings::instance()->dayStartHour());
+    const QString sourceDatabasePath = DatabaseManager::instance()->database().databaseName();
+    const ExportOutcome outcome = exportAllToDirectory(
+        startDate,
+        endDate,
+        dirPath,
+        QString(),
+        sourceDatabasePath,
+        currentEffectiveSettingsPath(),
+        AppSettings::instance()->dayStartHour());
+    emit exportCompleted(outcome.success, outcome.message);
+    return outcome.success;
 }
 
-bool ExportService::exportAllToDirectory(const QDate& startDate,
-                                         const QDate& endDate,
-                                         const QString& dirPath,
-                                         const QString& workerDatabasePath,
-                                         int dayStartHour)
+ExportService::ExportOutcome ExportService::exportAllToDirectory(const QDate& startDate,
+                                                                 const QDate& endDate,
+                                                                 const QString& dirPath,
+                                                                 const QString& workerDatabasePath,
+                                                                 const QString& sourceDatabasePath,
+                                                                 const QString& effectiveSettingsPath,
+                                                                 int dayStartHour)
 {
     if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
-        emit exportCompleted(false, QStringLiteral("日期范围无效"));
-        return false;
+        return {false, QStringLiteral("日期范围无效")};
     }
 
     QDir dir(dirPath);
     if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
-        emit exportCompleted(false, QStringLiteral("无法创建导出目录"));
-        return false;
+        return {false, QStringLiteral("无法创建导出目录")};
     }
 
     const QString tasksPath = dir.filePath(generateFileName(QStringLiteral("tasks"), startDate, endDate));
     const QString sessionsPath = dir.filePath(generateFileName(QStringLiteral("focus_sessions"), startDate, endDate));
 
+    QString pathError;
+    if (!BackupOperations::checkProtectedOutputPath(
+            tasksPath, sourceDatabasePath, effectiveSettingsPath, QStringLiteral("导出目标"), &pathError)
+        || !BackupOperations::checkProtectedOutputPath(
+            sessionsPath, sourceDatabasePath, effectiveSettingsPath, QStringLiteral("导出目标"), &pathError)) {
+        return {false, pathError};
+    }
+
     const QFileInfo tasksInfo(tasksPath);
     const QFileInfo sessionsInfo(sessionsPath);
     if ((tasksInfo.exists() && !tasksInfo.isFile())
         || (sessionsInfo.exists() && !sessionsInfo.isFile())) {
-        emit exportCompleted(false, QStringLiteral("导出目标不是普通文件"));
-        return false;
+        return {false, QStringLiteral("导出目标不是普通文件")};
     }
 
     const QString stagingSuffix = QStringLiteral(".staging-%1")
@@ -431,15 +560,11 @@ bool ExportService::exportAllToDirectory(const QDate& startDate,
     } guard;
     QSqlDatabase db = acquireDatabase(workerDatabasePath, &guard.name);
     if (!db.isOpen()) {
-        emit exportCompleted(false, QStringLiteral("数据库未打开"));
-        return false;
+        return {false, QStringLiteral("数据库未打开")};
     }
 
     if (!db.transaction()) {
-        emit exportCompleted(false,
-                             QStringLiteral("无法开始导出快照: %1")
-                                 .arg(db.lastError().text()));
-        return false;
+        return {false, QStringLiteral("无法开始导出快照: %1").arg(db.lastError().text())};
     }
 
     auto rollbackAndCleanStaged = [&db, &stagedTasksPath, &stagedSessionsPath]() {
@@ -452,9 +577,10 @@ bool ExportService::exportAllToDirectory(const QDate& startDate,
 
     // 两份 CSV 必须在同一连接、同一显式读事务内完成查询；
     // 文件对的原子替换只保证一起落盘，不能代替 SQLite 快照一致性。
-    if (!exportTasksUsingDatabase(db, startDate, endDate, stagedTasksPath, false)) {
+    const ExportOutcome tasksOutcome = exportTasksUsingDatabase(db, startDate, endDate, stagedTasksPath);
+    if (!tasksOutcome.success) {
         rollbackAndCleanStaged();
-        return false;
+        return tasksOutcome;
     }
 
     if (m_betweenExportFilesHookForTest) {
@@ -464,57 +590,51 @@ bool ExportService::exportAllToDirectory(const QDate& startDate,
         hook();
     }
 
-    if (!exportFocusSessionsUsingDatabase(
-            db, startDate, endDate, stagedSessionsPath, false, dayStartHour)) {
+    const ExportOutcome sessionsOutcome = exportFocusSessionsUsingDatabase(
+        db, startDate, endDate, stagedSessionsPath, dayStartHour);
+    if (!sessionsOutcome.success) {
         rollbackAndCleanStaged();
-        return false;
+        return sessionsOutcome;
     }
 
     if (!db.commit()) {
         const QString error = db.lastError().text();
         rollbackAndCleanStaged();
-        emit exportCompleted(false,
-                             QStringLiteral("提交导出快照失败: %1").arg(error));
-        return false;
+        return {false, QStringLiteral("提交导出快照失败: %1").arg(error)};
     }
 
-    if (!commitExportPair(stagedTasksPath, tasksPath, stagedSessionsPath, sessionsPath)) {
+    const ExportOutcome pairOutcome = commitExportPair(
+        stagedTasksPath, tasksPath, stagedSessionsPath, sessionsPath);
+    if (!pairOutcome.success) {
         QFile::remove(stagedTasksPath);
         QFile::remove(stagedSessionsPath);
-        return false;
+        return pairOutcome;
     }
 
-    emit exportCompleted(true, QStringLiteral("导出完成: %1").arg(dir.absolutePath()));
-    return true;
+    return {true, QStringLiteral("导出完成: %1").arg(dir.absolutePath())};
 }
 
-bool ExportService::finishCsvFile(QSaveFile& file,
-                                  QTextStream& stream,
-                                  const QString& successMessage,
-                                  bool emitSuccess)
+ExportService::ExportOutcome ExportService::finishCsvFile(QSaveFile& file,
+                                                          QTextStream& stream,
+                                                          const QString& successMessage)
 {
     stream.flush();
     if (stream.status() != QTextStream::Ok) {
         file.cancelWriting();
-        emit exportCompleted(false, QStringLiteral("写入 CSV 失败"));
-        return false;
+        return {false, QStringLiteral("写入 CSV 失败")};
     }
 
     if (!file.commit()) {
-        emit exportCompleted(false, QStringLiteral("提交文件失败: %1").arg(file.errorString()));
-        return false;
+        return {false, QStringLiteral("提交文件失败: %1").arg(file.errorString())};
     }
 
-    if (emitSuccess) {
-        emit exportCompleted(true, successMessage);
-    }
-    return true;
+    return {true, successMessage};
 }
 
-bool ExportService::commitExportPair(const QString& stagedTasksPath,
-                                     const QString& tasksPath,
-                                     const QString& stagedSessionsPath,
-                                     const QString& sessionsPath)
+ExportService::ExportOutcome ExportService::commitExportPair(const QString& stagedTasksPath,
+                                                             const QString& tasksPath,
+                                                             const QString& stagedSessionsPath,
+                                                             const QString& sessionsPath)
 {
     const QString backupSuffix = QStringLiteral(".backup-%1")
                                      .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
@@ -532,31 +652,27 @@ bool ExportService::commitExportPair(const QString& stagedTasksPath,
     };
 
     if (hadTasks && !QFile::rename(tasksPath, tasksBackup)) {
-        emit exportCompleted(false, QStringLiteral("无法备份原任务导出文件"));
-        return false;
+        return {false, QStringLiteral("无法备份原任务导出文件")};
     }
     if (hadSessions && !QFile::rename(sessionsPath, sessionsBackup)) {
         restoreBackup(tasksBackup, tasksPath, hadTasks);
-        emit exportCompleted(false, QStringLiteral("无法备份原专注导出文件"));
-        return false;
+        return {false, QStringLiteral("无法备份原专注导出文件")};
     }
 
     if (!QFile::rename(stagedTasksPath, tasksPath)) {
         restoreBackup(tasksBackup, tasksPath, hadTasks);
         restoreBackup(sessionsBackup, sessionsPath, hadSessions);
-        emit exportCompleted(false, QStringLiteral("无法提交任务导出文件"));
-        return false;
+        return {false, QStringLiteral("无法提交任务导出文件")};
     }
 
     if (!QFile::rename(stagedSessionsPath, sessionsPath)) {
         QFile::remove(tasksPath);
         const bool tasksRestored = restoreBackup(tasksBackup, tasksPath, hadTasks);
         const bool sessionsRestored = restoreBackup(sessionsBackup, sessionsPath, hadSessions);
-        emit exportCompleted(false,
-                             tasksRestored && sessionsRestored
-                                 ? QStringLiteral("无法提交专注导出文件，原文件已恢复")
-                                 : QStringLiteral("无法提交专注导出文件，且原文件恢复失败"));
-        return false;
+        return {false,
+                tasksRestored && sessionsRestored
+                    ? QStringLiteral("无法提交专注导出文件，原文件已恢复")
+                    : QStringLiteral("无法提交专注导出文件，且原文件恢复失败")};
     }
 
     if (hadTasks) {
@@ -565,27 +681,26 @@ bool ExportService::commitExportPair(const QString& stagedTasksPath,
     if (hadSessions) {
         QFile::remove(sessionsBackup);
     }
-    return true;
+    return {true, QString()};
 }
 
 QSqlDatabase ExportService::acquireDatabase(const QString& workerDatabasePath,
                                             QString* ownedConnectionName) const
 {
     *ownedConnectionName = QString();
-    // 主线程直接复用现有连接。
-    if (QThread::currentThread() == qApp->thread()) {
+    // 主线程直接复用现有连接；若 qApp 尚未创建或已销毁则退回工作线程只读连接分支，避免空指针解引用。
+    if (qApp && QThread::currentThread() == qApp->thread()) {
         return DatabaseManager::instance()->database();
     }
 
-    // 工作线程：按线程开一条只读连接。名字带线程指针，避免并发导出撞名。
+    // 工作线程：按次开一条唯一命名只读连接，避免同毫秒重入撞名。
     // 路径由 GUI 线程在投递任务前快照。工作线程不能为了读取 databaseName()
     // 去碰主线程创建的 QSqlDatabase 句柄。
     if (workerDatabasePath.isEmpty()) {
         return QSqlDatabase();
     }
-    const QString name = QStringLiteral("ExportWorker_%1_%2")
-                             .arg(reinterpret_cast<quintptr>(QThread::currentThread()))
-                             .arg(QDateTime::currentMSecsSinceEpoch());
+    const QString name = QStringLiteral("ExportWorker_%1")
+                             .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
     db.setDatabaseName(workerDatabasePath);
     // 只读：导出不写库，所以不会和主线程产生写-写冲突。但"不写"不等于"不抢锁"——
@@ -639,20 +754,51 @@ void ExportService::setBusy(bool busy)
     emit busyChanged();
 }
 
-void ExportService::runAsync(const std::function<bool()>& work)
+void ExportService::prepareForShutdown()
 {
+    m_shuttingDown = true;
+    const QList<QFutureWatcher<ExportOutcome>*> watchers = std::move(m_activeWatchers);
+    m_activeWatchers.clear();
+    for (QFutureWatcher<ExportOutcome>* watcher : watchers) {
+        if (!watcher) {
+            continue;
+        }
+        watcher->disconnect(this);
+        watcher->waitForFinished();
+        delete watcher;
+    }
+    setBusy(false);
+}
+
+void ExportService::runAsync(const std::function<ExportOutcome()>& work)
+{
+    if (m_shuttingDown) {
+        emit exportCompleted(false, QStringLiteral("应用正在退出，已取消导出"));
+        return;
+    }
+    if (isOperationBlocked()) {
+        emit exportCompleted(false, QStringLiteral("正在备份或恢复数据，请稍后再试"));
+        return;
+    }
     if (m_busy) {
         emit exportCompleted(false, QStringLiteral("已有导出任务正在执行"));
         return;
     }
     setBusy(true);
 
-    auto* watcher = new QFutureWatcher<bool>(this);
+    auto* watcher = new QFutureWatcher<ExportOutcome>(this);
+    m_activeWatchers.append(watcher);
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher]() {
+        const ExportOutcome outcome = watcher->result();
+        m_activeWatchers.removeOne(watcher);
         watcher->deleteLater();
-        setBusy(false);
-        // 成功/失败的具体消息由 work 内部 emit exportCompleted 给出，
-        // 这里只负责把 busy 放回去——两处都发会让界面收到两次完成。
+        // 先复位 busy 再发射 exportCompleted：确保完成回调里立即发起下一次导出或备份恢复时不再误判忙碌。
+        if (m_activeWatchers.isEmpty()) {
+            setBusy(false);
+        }
+        if (!m_shuttingDown) {
+            emit exportCompleted(outcome.success, outcome.message);
+        }
     });
     watcher->setFuture(QtConcurrent::run(work));
 }
@@ -664,8 +810,9 @@ void ExportService::requestExportTasks(const QVariant& startDateValue,
     const QDate start = normalizeDate(startDateValue);
     const QDate end = normalizeDate(endDateValue);
     const QString databasePath = DatabaseManager::instance()->database().databaseName();
-    runAsync([this, start, end, filePath, databasePath]() {
-        return exportTasksToFile(start, end, filePath, true, databasePath);
+    const QString settingsPath = currentEffectiveSettingsPath();
+    runAsync([this, start, end, filePath, databasePath, settingsPath]() {
+        return exportTasksToFile(start, end, filePath, databasePath, databasePath, settingsPath);
     });
 }
 
@@ -676,10 +823,11 @@ void ExportService::requestExportFocusSessions(const QVariant& startDateValue,
     const QDate start = normalizeDate(startDateValue);
     const QDate end = normalizeDate(endDateValue);
     const QString databasePath = DatabaseManager::instance()->database().databaseName();
+    const QString settingsPath = currentEffectiveSettingsPath();
     const int dayStartHour = AppSettings::instance()->dayStartHour();
-    runAsync([this, start, end, filePath, databasePath, dayStartHour]() {
+    runAsync([this, start, end, filePath, databasePath, settingsPath, dayStartHour]() {
         return exportFocusSessionsToFile(
-            start, end, filePath, true, databasePath, dayStartHour);
+            start, end, filePath, databasePath, databasePath, settingsPath, dayStartHour);
     });
 }
 
@@ -690,9 +838,10 @@ void ExportService::requestExportAll(const QVariant& startDateValue,
     const QDate start = normalizeDate(startDateValue);
     const QDate end = normalizeDate(endDateValue);
     const QString databasePath = DatabaseManager::instance()->database().databaseName();
+    const QString settingsPath = currentEffectiveSettingsPath();
     const int dayStartHour = AppSettings::instance()->dayStartHour();
-    runAsync([this, start, end, dirPath, databasePath, dayStartHour]() {
+    runAsync([this, start, end, dirPath, databasePath, settingsPath, dayStartHour]() {
         return exportAllToDirectory(
-            start, end, dirPath, databasePath, dayStartHour);
+            start, end, dirPath, databasePath, databasePath, settingsPath, dayStartHour);
     });
 }

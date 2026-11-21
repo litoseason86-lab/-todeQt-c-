@@ -4,10 +4,12 @@
 #include <QScreen>
 #include <QSettings>
 #include <QUrl>
+#include <QVariant>
 
 #include "app/SharedApp.h"
 #include "entry/ios/UiRouter.h"
 #include "qmlfacade/QmlFacade.h"
+#include "services/BackupService.h"
 #include "services/DatabaseManager.h"
 #include "services/TaskInteractionCoordinator.h"
 #include "services/PendingDeletion.h"
@@ -79,6 +81,9 @@ int main(int argc, char *argv[])
     syncPlatform.engine.mayCreateFolder = false;
     syncPlatform.engine.runInBackground = false;
     sharedApp.setUpSync(std::move(syncPlatform));
+    BackupService::instance()->setBackgroundTaskStarter([] {
+        return beginIosBackgroundTask(QStringLiteral("番茄Todo恢复保护"));
+    });
 
     app.setQuitOnLastWindowClosed(false);
 
@@ -108,14 +113,17 @@ int main(int argc, char *argv[])
     const bool nativeRoot = (route == UiRoute::Native);
 
     // 草稿先同步保存，再结束计时、写同步、关库。原生路径没有 QML 根对象，调用它登记的保存钩子。
-    sharedApp.lifecycle().setFlushDraftsHook([nativeRoot, &engine] {
-        if (nativeRoot) {
-            flushNativeEdits();
-            return;
+    sharedApp.lifecycle().setFlushDraftsHook([route, &engine] {
+        if (route == UiRoute::Native) {
+            return flushNativeEdits();
         }
-        if (!engine.rootObjects().isEmpty()) {
-            QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits", Qt::DirectConnection);
+        if (route == UiRoute::QmlCompanion || engine.rootObjects().isEmpty()) {
+            return true;
         }
+        QVariant saved;
+        return QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits",
+                                         Qt::DirectConnection, Q_RETURN_ARG(QVariant, saved))
+            && saved.toBool();
     });
 
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &sharedApp, [&sharedApp] {
@@ -165,6 +173,7 @@ int main(int argc, char *argv[])
     sharedApp.startBackgroundWork();
     const int exitCode = app.exec();
 
+    BackupService::instance()->setBackgroundTaskStarter({});
     sharedApp.cleanup();
     return exitCode;
 }

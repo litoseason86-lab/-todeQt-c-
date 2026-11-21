@@ -25,6 +25,7 @@ class McpServiceTests : public QObject
     std::unique_ptr<TaskInteractionCoordinator> interactions;
     std::unique_ptr<McpToolDispatcher> dispatcher;
     QString session;
+    int activeFocusTaskId = -1;
     QJsonObject run(Tool tool, QJsonObject arguments = {}) { return dispatcher->dispatch(tool, arguments); }
     QJsonObject output(const QJsonObject& result) { return result.value("structuredContent").toObject(); }
     QJsonObject body(const QJsonObject& result) {
@@ -51,10 +52,11 @@ private slots:
         data = std::make_unique<QTemporaryDir>();
         QVERIFY(DatabaseManager::instance()->initialize(data->filePath("test.sqlite")));
         session = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        activeFocusTaskId = -1;
         interactions = std::make_unique<TaskInteractionCoordinator>(TaskManager::instance());
         dispatcher = std::make_unique<McpToolDispatcher>(TaskManager::instance(), CategoryManager::instance(), StatisticsService::instance(),
             KnowledgeGapService::instance(), interactions.get(), [this] {
-                return McpToolDispatcher::Context{session, QDateTime::fromString("2026-09-18T02:00:00+08:00", Qt::ISODate), 4};
+                return McpToolDispatcher::Context{session, QDateTime::fromString("2026-09-18T02:00:00+08:00", Qt::ISODate), 4, activeFocusTaskId};
             });
     }
     // 产品保证：非法控制字符使整次写入失败，创建与编辑均不留下部分修改。
@@ -534,6 +536,76 @@ private slots:
         QCOMPARE(days[2].toObject().value("day_state"), QJsonValue("future"));
         QCOMPARE(StatisticsService::instance()->getDayStats(QDate(2026, 9, 17)).value("totalDuration").toInt(), 662);
         QCOMPARE(StatisticsService::instance()->getCategoryStats(QDate(2026,9,17),QDate(2026,9,17)).value("totalDuration").toInt(), 662);
+    }
+    void writeToolDatabaseFailuresDoNotBroadcastUiOperationFailed()
+    {
+        // 产品保证：外部 AI 写入任务失败只通过工具 JSON 错误返回给调用方，不向主界面广播 TaskManager::operationFailed。
+        const int id = task();
+        QVERIFY(id > 0);
+        auto updateArgs = editArgs(id);
+        updateArgs.insert("title", QStringLiteral("被触发器拦截的修改"));
+        auto completeArgs = editArgs(id);
+        completeArgs.insert("completed", true);
+        auto rescheduleArgs = editArgs(id);
+        rescheduleArgs.insert("date", QStringLiteral("2026-09-25"));
+
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec("CREATE TRIGGER reject_mcp_insert BEFORE INSERT ON tasks "
+                           "BEGIN SELECT RAISE(ABORT, 'mcp insert blocked'); END"));
+        QVERIFY(query.exec("CREATE TRIGGER reject_mcp_update BEFORE UPDATE ON tasks "
+                           "BEGIN SELECT RAISE(ABORT, 'mcp update blocked'); END"));
+
+        QSignalSpy uiFailureSpy(TaskManager::instance(), &TaskManager::operationFailed);
+
+        const auto createRes = run(Tool::CreateTask, createArgs());
+        QCOMPARE(code(createRes), QStringLiteral("DATABASE_ERROR"));
+
+        const auto updateRes = run(Tool::UpdateTask, updateArgs);
+        QCOMPARE(code(updateRes), QStringLiteral("DATABASE_ERROR"));
+
+        const auto rescheduleRes = run(Tool::RescheduleTask, rescheduleArgs);
+        QCOMPARE(code(rescheduleRes), QStringLiteral("DATABASE_ERROR"));
+
+        const auto completeRes = run(Tool::SetTaskCompleted, completeArgs);
+        QCOMPARE(code(completeRes), QStringLiteral("DATABASE_ERROR"));
+
+        QCOMPARE(uiFailureSpy.count(), 0);
+    }
+    void activeFocusTaskRejectsSetCompletedWithAppBusy()
+    {
+        // 产品保证：正在专注计时中的任务拒绝外部 AI 将其标记完成（返回 APP_BUSY / active_focus），
+        // 但不阻断编辑该任务备注（且不改动原 display_order）或完成其他未在专注中的任务。
+        const int focusedId = task(QStringLiteral("专注中任务"));
+        const int otherId = task(QStringLiteral("普通任务"));
+        QVERIFY(focusedId > 0 && otherId > 0);
+        const int originalOrder = TaskManager::instance()->readTask(focusedId).value.value("displayOrder").toInt();
+        activeFocusTaskId = focusedId;
+
+        auto completeFocused = editArgs(focusedId);
+        completeFocused.insert("completed", true);
+        const auto blockedRes = run(Tool::SetTaskCompleted, completeFocused);
+        QVERIFY(blockedRes.value("isError").toBool());
+        QCOMPARE(code(blockedRes), QStringLiteral("APP_BUSY"));
+        const QJsonArray blocks = body(blockedRes).value("details").toObject().value("blocks").toArray();
+        QCOMPARE(blocks.size(), 1);
+        QCOMPARE(blocks.first().toObject().value("reason").toString(), QStringLiteral("active_focus"));
+        QCOMPARE(blocks.first().toObject().value("scope").toString(), QStringLiteral("task"));
+        QCOMPARE(blocks.first().toObject().value("task_id").toInt(), focusedId);
+        QCOMPARE(TaskManager::instance()->readTask(focusedId).value.value("completed").toBool(), false);
+
+        // 编辑正在专注任务的备注允许通过，且 UpdateTask 走 preserveDate=true 保持原 display_order。
+        auto updateFocused = editArgs(focusedId);
+        updateFocused.insert("notes", QStringLiteral("补充笔记"));
+        const auto updateRes = run(Tool::UpdateTask, updateFocused);
+        QVERIFY(!updateRes.value("isError").toBool());
+        QCOMPARE(TaskManager::instance()->readTask(focusedId).value.value("displayOrder").toInt(), originalOrder);
+
+        // 完成其他非专注任务正常放行。
+        auto completeOther = editArgs(otherId);
+        completeOther.insert("completed", true);
+        const auto otherRes = run(Tool::SetTaskCompleted, completeOther);
+        QVERIFY(!otherRes.value("isError").toBool());
+        QCOMPARE(TaskManager::instance()->readTask(otherId).value.value("completed").toBool(), true);
     }
 };
 QTEST_GUILESS_MAIN(McpServiceTests)

@@ -12,6 +12,7 @@
 #include "../src/services/FocusSessionController.h"
 #include "../src/services/FocusTimer.h"
 #include "../src/services/FocusHistoryService.h"
+#include "../src/services/LogicalDay.h"
 #include "../src/services/MonotonicClock.h"
 #include "../src/services/PendingDeletion.h"
 #include "../src/services/TaskManager.h"
@@ -123,6 +124,7 @@ private slots:
     void autoStartCandidateIsEmptyWhenEverythingIsCompleted();
     void autoStartCandidateFollowsDisplayOrderNotInsertionOrder();
     void autoStartCandidateSkipsTheTaskInTheUndoWindow();
+    void autoStartCandidateSkipsPendingSelectedTaskAndUsesCurrentDbTitle();
     void autoStartCandidateOnlyLooksAtTheLogicalToday();
     void createTodayTaskLandsOnLogicalTodayAndIdentifiesTheNewRow();
     void createTodayTaskRejectsBlankTitleWithoutWriting();
@@ -1266,6 +1268,29 @@ void FocusSessionControllerTests::automaticCompletionFailureReportsOnceWithReaso
     QVERIFY(timer()->hasActiveSession());
     QVERIFY(setup.exec("DROP TRIGGER t33_finish")); timer()->finishExpiredPhase(false);
     QVERIFY(!timer()->hasActiveSession()); QCOMPARE(failed.count(), 1);
+}
+
+// 产品保证：autoStartCandidate 跳过撤销删除窗口中的选中任务，并在有效命中时返回库中最新标题而非过期入参标题。
+void FocusSessionControllerTests::autoStartCandidateSkipsPendingSelectedTaskAndUsesCurrentDbTitle()
+{
+    const QString todayIso = LogicalDay::today(m_settings->dayStartHour()).toString(Qt::ISODate);
+    const int taskA = insertTaskOn(QStringLiteral("库中最新标题A"), todayIso, false, 1);
+    const int taskB = insertTaskOn(QStringLiteral("备选任务B"), todayIso, false, 2);
+    QVERIFY(taskA > 0 && taskB > 0);
+
+    // 传入过期标题，应返回数据库当前最新标题。
+    const QVariantMap fresh = m_controller->autoStartCandidate(taskA, QStringLiteral("过期旧标题A"));
+    QCOMPARE(fresh.value(QStringLiteral("id")).toInt(), taskA);
+    QCOMPARE(fresh.value(QStringLiteral("title")).toString(), QStringLiteral("库中最新标题A"));
+    QCOMPARE(fresh.value(QStringLiteral("selectionStale")).toBool(), false);
+
+    // 将选中任务 A 放进撤销删除槽后，应标记 selectionStale 并回落到今日未完成任务 B。
+    QVERIFY(m_pending->requestTask(taskA, QStringLiteral("库中最新标题A")));
+    const QVariantMap fallback = m_controller->autoStartCandidate(taskA, QStringLiteral("库中最新标题A"));
+    QCOMPARE(fallback.value(QStringLiteral("id")).toInt(), taskB);
+    QCOMPARE(fallback.value(QStringLiteral("title")).toString(), QStringLiteral("备选任务B"));
+    QCOMPARE(fallback.value(QStringLiteral("selectionStale")).toBool(), true);
+    m_pending->cancel();
 }
 
 QTEST_GUILESS_MAIN(FocusSessionControllerTests)

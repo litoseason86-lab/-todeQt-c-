@@ -329,37 +329,41 @@ int TaskManager::createTask(const QString& title, const QVariant& dateValue,
 }
 
 int TaskManager::createTaskWithOutcome(const QString& title, const QVariant& dateValue,
-                                      int categoryId, int estimatedMinutes, const QString& notes, bool* committed)
+                                      int categoryId, int estimatedMinutes, const QString& notes,
+                                      bool* committed, bool broadcastError)
 {
+    const auto fail = [this, broadcastError](const QString& message) {
+        if (broadcastError) reportFailure(message);
+    };
     if (committed) *committed = false;
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning() << "Failed to add task: title is empty after trimming";
-        reportFailure(QStringLiteral("新建任务失败：标题不能为空"));
+        fail(QStringLiteral("新建任务失败：标题不能为空"));
         return -1;
     }
     if (normalizedTitle.size() > kMaxTitleLength) {
         qWarning() << "Failed to add task: title exceeds" << kMaxTitleLength << "characters";
-        reportFailure(QStringLiteral("新建任务失败：标题超长（最多 %1 字）").arg(kMaxTitleLength));
+        fail(QStringLiteral("新建任务失败：标题超长（最多 %1 字）").arg(kMaxTitleLength));
         return -1;
     }
     if (notes.size() > kMaxNotesLength) {
         qWarning() << "Failed to add task: notes exceed" << kMaxNotesLength << "characters";
-        reportFailure(QStringLiteral("新建任务失败：备注超长（最多 %1 字）").arg(kMaxNotesLength));
+        fail(QStringLiteral("新建任务失败：备注超长（最多 %1 字）").arg(kMaxNotesLength));
         return -1;
     }
 
     const QDate date = normalizeDate(dateValue);
     if (!date.isValid()) {
         qWarning() << "Failed to add task: invalid date";
-        reportFailure(QStringLiteral("新建任务失败：日期无效"));
+        fail(QStringLiteral("新建任务失败：日期无效"));
         return -1;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to add task: database is not open";
-        reportFailure(QStringLiteral("新建任务失败：数据库未打开"));
+        fail(QStringLiteral("新建任务失败：数据库未打开"));
         return -1;
     }
 
@@ -369,7 +373,7 @@ int TaskManager::createTaskWithOutcome(const QString& title, const QVariant& dat
         QSqlQuery categoryQuery(db);
         QString failure;
         if (!bindCategoryTextFromId(categoryQuery, categoryId, &categoryName, &failure)) {
-            reportFailure(QStringLiteral("新建任务失败：%1").arg(failure));
+            fail(QStringLiteral("新建任务失败：%1").arg(failure));
             return -1;
         }
         categoryIdValue = categoryId;
@@ -397,7 +401,7 @@ int TaskManager::createTaskWithOutcome(const QString& title, const QVariant& dat
 
     if (!query.exec() || query.numRowsAffected() != 1) {
         qWarning() << "Failed to add task:" << query.lastError().text();
-        reportFailure(query.lastError().isValid()
+        fail(query.lastError().isValid()
             ? QStringLiteral("新建任务失败：数据库写入失败：%1").arg(query.lastError().text())
             : QStringLiteral("新建任务失败：任务未写入"));
         return -1;
@@ -413,7 +417,7 @@ int TaskManager::createTaskWithOutcome(const QString& title, const QVariant& dat
     emit tasksChanged();
     if (!idOk || insertedId <= 0) {
         qWarning() << "Task inserted but the new id is unavailable";
-        reportFailure(QStringLiteral("新建任务失败：任务已保存，但未能取得新编号，请重新读取确认"));
+        fail(QStringLiteral("新建任务失败：任务已保存，但未能取得新编号，请重新读取确认"));
         return -1;
     }
     return insertedId;
@@ -426,18 +430,31 @@ bool TaskManager::completeTask(int taskId)
 
 bool TaskManager::setTaskCompleted(int taskId, bool completed)
 {
+    return setTaskCompletedImpl(taskId, completed, true);
+}
+
+bool TaskManager::setTaskCompletedWithoutBroadcast(int taskId, bool completed)
+{
+    return setTaskCompletedImpl(taskId, completed, false);
+}
+
+bool TaskManager::setTaskCompletedImpl(int taskId, bool completed, bool broadcastError)
+{
+    const auto fail = [this, broadcastError](const QString& message) {
+        if (broadcastError) reportFailure(message);
+    };
     // iPad 从 operationFailed 收集本次调用的原因；只记日志会让桥接返回的错误退化成通用文案。
     const QString action = completed ? QStringLiteral("完成") : QStringLiteral("取消完成");
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task completion: invalid task id" << taskId;
-        reportFailure(QStringLiteral("%1失败：任务编号无效").arg(action));
+        fail(QStringLiteral("%1失败：任务编号无效").arg(action));
         return false;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to update task completion: database is not open";
-        reportFailure(QStringLiteral("%1失败：数据库未打开").arg(action));
+        fail(QStringLiteral("%1失败：数据库未打开").arg(action));
         return false;
     }
 
@@ -451,13 +468,13 @@ bool TaskManager::setTaskCompleted(int taskId, bool completed)
 
     if (!query.exec()) {
         qWarning() << "Failed to update task completion:" << query.lastError().text();
-        reportFailure(QStringLiteral("%1失败：数据库写入失败：%2").arg(action, query.lastError().text()));
+        fail(QStringLiteral("%1失败：数据库写入失败：%2").arg(action, query.lastError().text()));
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to update task completion: task not found" << taskId;
-        reportFailure(QStringLiteral("%1失败：任务不存在").arg(action));
+        fail(QStringLiteral("%1失败：任务不存在").arg(action));
         return false;
     }
 
@@ -684,11 +701,15 @@ bool TaskManager::updateTaskChanges(int taskId, const QVariantMap& changes)
 bool TaskManager::updateTaskFields(int taskId, const QString& title, int categoryId,
                                     const QVariant& dateValue, int estimatedMinutes,
                                     const QString& notes, bool preserveCategory, bool preserveTitle,
-                                    const std::optional<QString>& completionNote, bool preserveDate)
+                                    const std::optional<QString>& completionNote, bool preserveDate,
+                                    bool broadcastError)
 {
+    const auto fail = [this, broadcastError](const QString& message) {
+        if (broadcastError) reportFailure(message);
+    };
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task: invalid task id" << taskId;
-        reportFailure(QStringLiteral("修改任务失败：任务编号无效"));
+        fail(QStringLiteral("修改任务失败：任务编号无效"));
         return false;
     }
 
@@ -696,12 +717,12 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
     const QString normalizedTitle = title.trimmed();
     if (!preserveTitle && normalizedTitle.isEmpty()) {
         qWarning() << "Failed to update task: title is empty after trimming";
-        reportFailure(QStringLiteral("修改任务失败：标题不能为空"));
+        fail(QStringLiteral("修改任务失败：标题不能为空"));
         return false;
     }
     if (!preserveTitle && normalizedTitle.size() > kMaxTitleLength) {
         qWarning() << "Failed to update task: title exceeds" << kMaxTitleLength << "characters";
-        reportFailure(QStringLiteral("修改任务失败：标题超长（最多 %1 字）").arg(kMaxTitleLength));
+        fail(QStringLiteral("修改任务失败：标题超长（最多 %1 字）").arg(kMaxTitleLength));
         return false;
     }
 
@@ -709,14 +730,14 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
     const QDate date = preserveDate ? QDate() : normalizeDate(dateValue);
     if (!preserveDate && !date.isValid()) {
         qWarning() << "Failed to update task: invalid date";
-        reportFailure(QStringLiteral("修改任务失败：日期无效"));
+        fail(QStringLiteral("修改任务失败：日期无效"));
         return false;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to update task: database is not open";
-        reportFailure(QStringLiteral("修改任务失败：数据库未打开"));
+        fail(QStringLiteral("修改任务失败：数据库未打开"));
         return false;
     }
 
@@ -726,7 +747,7 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
         QSqlQuery categoryQuery(db);
         QString failure;
         if (!bindCategoryTextFromId(categoryQuery, categoryId, &categoryName, &failure)) {
-            reportFailure(QStringLiteral("修改任务失败：%1").arg(failure));
+            fail(QStringLiteral("修改任务失败：%1").arg(failure));
             return false;
         }
         categoryIdValue = categoryId;
@@ -740,14 +761,14 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
     const bool updateNotes = !notes.isNull();
     if (updateNotes && notes.size() > kMaxNotesLength) {
         qWarning() << "Failed to update task: notes exceed" << kMaxNotesLength << "characters";
-        reportFailure(QStringLiteral("修改任务失败：备注超长（最多 %1 字）").arg(kMaxNotesLength));
+        fail(QStringLiteral("修改任务失败：备注超长（最多 %1 字）").arg(kMaxNotesLength));
         return false;
     }
     // 完成记录与备注共用同一上限，超长同样整次拒绝，其它字段也不落库。
     if (completionNote && completionNote->size() > kMaxNotesLength) {
         qWarning() << "Failed to update task: completion note exceeds" << kMaxNotesLength
                    << "characters";
-        reportFailure(QStringLiteral("修改任务失败：完成记录超长（最多 %1 字）").arg(kMaxNotesLength));
+        fail(QStringLiteral("修改任务失败：完成记录超长（最多 %1 字）").arg(kMaxNotesLength));
         return false;
     }
 
@@ -778,7 +799,7 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
                 : !DatabaseManager::instance()->database().isOpen() ? QStringLiteral("数据库未打开")
                 : result.error == ServiceReadError::NotFound ? QStringLiteral("任务不存在")
                 : QStringLiteral("数据库读取失败");
-            reportFailure(QStringLiteral("修改任务失败：%1").arg(reason));
+            fail(QStringLiteral("修改任务失败：%1").arg(reason));
         }
         return result.ok();
     }
@@ -812,13 +833,13 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
 
     if (!query.exec()) {
         qWarning() << "Failed to update task:" << query.lastError().text();
-        reportFailure(QStringLiteral("修改任务失败：数据库写入失败：%1").arg(query.lastError().text()));
+        fail(QStringLiteral("修改任务失败：数据库写入失败：%1").arg(query.lastError().text()));
         return false;
     }
 
     if (query.numRowsAffected() != 1) {
         qWarning() << "Failed to update task: task not found" << taskId;
-        reportFailure(QStringLiteral("修改任务失败：任务不存在或未更新"));
+        fail(QStringLiteral("修改任务失败：任务不存在或未更新"));
         return false;
     }
 
@@ -933,10 +954,12 @@ bool TaskManager::setTasksCompleted(const QVariantList& taskIds, bool completed)
         query.bindValue(QStringLiteral(":completed"), completed ? 1 : 0);
         query.bindValue(QStringLiteral(":id"), id);
         if (!query.exec() || query.numRowsAffected() != 1) {
+            query.finish();
             db.rollback();
             reportFailure(QStringLiteral("%1失败：任务已变化，请刷新重试").arg(action));
             return false;
         }
+        query.finish();
     }
     if (!db.commit()) {
         db.rollback();
@@ -1141,10 +1164,12 @@ bool TaskManager::moveTasksToDate(const QVariantList& taskIds, const QVariant& d
         query.bindValue(QStringLiteral(":date"), iso);
         query.bindValue(QStringLiteral(":id"), id);
         if (!query.exec() || query.numRowsAffected() != 1) {
+            query.finish();
             db.rollback();
             reportFailure(QStringLiteral("改期失败：任务已变化，请刷新重试"));
             return false;
         }
+        query.finish();
     }
     if (!db.commit()) {
         db.rollback();
@@ -1300,8 +1325,9 @@ bool TaskManager::reorderTasks(const QVariant& dateValue, const QVariantList& or
     actualQuery.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
     if (!actualQuery.exec()) {
         qWarning() << "Failed to inspect tasks before reorder:" << actualQuery.lastError().text();
-        reportFailure(QStringLiteral("任务排序失败：无法校验当前任务集合"));
+        actualQuery.finish();
         db.rollback();
+        reportFailure(QStringLiteral("任务排序失败：无法校验当前任务集合"));
         return false;
     }
     QSet<int> actualIds;
@@ -1327,11 +1353,13 @@ bool TaskManager::reorderTasks(const QVariant& dateValue, const QVariantList& or
         query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
         if (!query.exec() || query.numRowsAffected() != 1) {
             qWarning() << "Failed to reorder tasks:" << query.lastError().text();
-            reportFailure(QStringLiteral("任务排序失败：写入顺序失败"));
+            query.finish();
             db.rollback();
+            reportFailure(QStringLiteral("任务排序失败：写入顺序失败"));
             return false;
         }
     }
+    query.finish();
 
     if (!db.commit()) {
         qWarning() << "Failed to commit reorder:" << db.lastError().text();
@@ -1379,8 +1407,9 @@ bool TaskManager::moveTaskBefore(int taskId, int beforeTaskId)
     dayQuery.bindValue(QStringLiteral(":id"), taskId);
     if (!dayQuery.exec()) {
         qWarning() << "Failed to read tasks before move-before:" << dayQuery.lastError().text();
-        reportFailure(QStringLiteral("任务排序失败：无法读取当天任务"));
+        dayQuery.finish();
         db.rollback();
+        reportFailure(QStringLiteral("任务排序失败：无法读取当天任务"));
         return false;
     }
     QList<int> current;
@@ -1421,11 +1450,13 @@ bool TaskManager::moveTaskBefore(int taskId, int beforeTaskId)
         if (!update.exec() || update.numRowsAffected() != 1) {
             qWarning() << "Failed to move task before another: write failed for task" << reordered.at(i)
                        << "rows affected" << update.numRowsAffected() << update.lastError().text();
-            reportFailure(QStringLiteral("任务排序失败：写入顺序失败"));
+            update.finish();
             db.rollback();
+            reportFailure(QStringLiteral("任务排序失败：写入顺序失败"));
             return false;
         }
     }
+    update.finish();
 
     if (!db.commit()) {
         qWarning() << "Failed to commit move-before:" << db.lastError().text();

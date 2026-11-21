@@ -69,6 +69,11 @@ QJsonObject McpToolDispatcher::writeTask(Tool tool, const QJsonObject& args, con
         if (block.reason != BusyReason::PendingDelete || (contract(tool).targetsExistingTask && block.taskId == args.value("task_id").toInt()))
             blocked.append(block);
     }
+    // 正在专注计时中的任务不能由外部 AI 静默标记完成（界面手动完成会联动结束专注并可能触发超长专注确认）。
+    if (tool == Tool::SetTaskCompleted && args.value("completed").toBool()
+        && context.activeFocusTaskId > 0 && context.activeFocusTaskId == args.value("task_id").toInt()) {
+        blocked.append({BusyReason::ActiveFocus, QStringLiteral("focus.active_timer"), context.activeFocusTaskId});
+    }
     if (!blocked.isEmpty()) return makeToolErrorResult(makeBusyError(blocked));
     QString requestedCategoryName;
     if (args.contains("category_id") && args.value("category_id").toInt() > 0) {
@@ -93,7 +98,8 @@ QJsonObject McpToolDispatcher::writeTask(Tool tool, const QJsonObject& args, con
             return makeToolErrorResult(makeError(ErrorCode::WriteCapacityReached, QStringLiteral("无法预留创建登记")));
         bool committed = false;
         const int id = m_tasks->createTaskWithOutcome(args.value("title").toString(), args.value("date").toString(),
-            args.value("category_id").toInt(), args.value("estimated_minutes").toInt(), args.value("notes").toString(), &committed);
+            args.value("category_id").toInt(), args.value("estimated_minutes").toInt(), args.value("notes").toString(),
+            &committed, false);
         if (id <= 0) {
             if (!committed) m_created.remove(key);
             return committed ? makeToolErrorResult(makeError(ErrorCode::OutcomeUnknown, QStringLiteral("任务已提交但无法取得编号，请先查询核实")))
@@ -134,12 +140,13 @@ QJsonObject McpToolDispatcher::writeTask(Tool tool, const QJsonObject& args, con
         // 只写被要求修改的字段：缺省预计和备注传服务层“不改”哨兵，避免把旧版 2475 分钟夹成 1440；
         // 没要求改标题时连标题也不碰——2026-07-19 之前的旧标题可能超过 100 字，重写会整次失败，
         // 也会顺手把它的首尾空白规整掉，悄悄改动用户数据。
+        // UpdateTask 不允许改日期，传 preserveDate = true 避免无谓重写 date 列与重算 display_order。
         ok = m_tasks->updateTaskFields(id, target.value("title").toString(), target.value("category_id").toInt(), target.value("date").toString(),
             args.contains("estimated_minutes") ? args.value("estimated_minutes").toInt() : -1,
             args.contains("notes") ? args.value("notes").toString(QStringLiteral("")) : QString(), !args.contains("category_id"),
-            !args.contains("title"));
+            !args.contains("title"), std::nullopt, true, false);
     } else if (tool == Tool::RescheduleTask) ok = m_tasks->moveTaskToDateWithoutBroadcast(id, args.value("date").toString());
-    else ok = m_tasks->setTaskCompleted(id, args.value("completed").toBool());
+    else ok = m_tasks->setTaskCompletedWithoutBroadcast(id, args.value("completed").toBool());
     // 服务层的单条 UPDATE 失败时整条不生效，可以明确告诉模型任务没被改动。
     if (!ok) return makeToolErrorResult(makeError(ErrorCode::DatabaseError, QStringLiteral("保存失败，任务 #%1 未被修改").arg(id),
                                                   {{"task_id", id}}));

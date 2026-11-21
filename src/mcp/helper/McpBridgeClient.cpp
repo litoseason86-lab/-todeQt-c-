@@ -84,9 +84,18 @@ void McpBridgeClient::sendPending()
     });
     for (const QString& id : ids) {
         auto it = m_pending.find(id);
-        if (it == m_pending.end() || it->sent || it->deadline.hasExpired() || !m_ready) continue;
+        if (it == m_pending.end() || it->sent || !m_ready) continue;
+        const qint64 rawRemaining = it->deadline.remainingTime();
+        if (rawRemaining <= 0) {
+            const Pending pending = *it;
+            cancel(id);
+            emit completed(id, unavailable(pending.tool, UnavailableReason::RequestTimeout, false));
+            continue;
+        }
+        // 协议要求 remaining_ms 落在 [1, kToolTimeoutMs]；截断到 0 或超上限会触发服务端 abort 整条复用连接。
+        const int remainingMs = static_cast<int>(std::clamp<qint64>(rawRemaining, 1, kToolTimeoutMs));
         const QJsonObject message {{"kind", "call"}, {"id", id}, {"tool", toolName(it->tool)},
-                                  {"arguments", it->arguments}, {"remaining_ms", int(it->deadline.remainingTime())}};
+                                  {"arguments", it->arguments}, {"remaining_ms", remainingMs}};
         // 在写入 socket 前标记为已发送：底层失败可能同步回调，不能把不确定的写入当成未执行。
         it->sent = true;
         m_stream->send(message);

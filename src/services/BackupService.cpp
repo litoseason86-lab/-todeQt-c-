@@ -4,6 +4,7 @@
 #include "BackupExecutor.h"
 #include "BackupOperations.h"
 #include "DatabaseManager.h"
+#include "ExportService.h"
 #include "FocusTimer.h"
 #include "SnapshotRetention.h"
 
@@ -72,6 +73,27 @@ struct RestoreInstallResult
     BackupOperations::OperationResult operation;
     bool snapshotCreated = false;
 };
+
+// 替换主库文件前清除可能残留的回滚日志与 WAL/SHM 附属文件；若旧热回滚日志存在却删除失败，
+// 绝不能继续把新库覆盖到旁边，否则下次打开时 SQLite 会把旧日志回滚进新恢复的数据库。
+BackupOperations::OperationResult removeDatabaseSidecars(const QString& dbPath)
+{
+    for (const QString& suffix : {QStringLiteral("-journal"),
+                                  QStringLiteral("-wal"),
+                                  QStringLiteral("-shm")}) {
+        const QString sidecarPath = dbPath + suffix;
+        if (!QFileInfo::exists(sidecarPath)) {
+            continue;
+        }
+        QFile sidecar(sidecarPath);
+        if (!sidecar.remove() && QFileInfo::exists(sidecarPath)) {
+            return {false,
+                    QStringLiteral("无法清理残留数据库日志文件（%1）：%2")
+                        .arg(QFileInfo(sidecarPath).fileName(), sidecar.errorString())};
+        }
+    }
+    return {true, QString()};
+}
 
 } // namespace
 
@@ -163,6 +185,26 @@ void BackupService::setRestorePreparationCallback(RestorePreparationCallback cal
     m_restorePreparationCallback = std::move(callback);
 }
 
+void BackupService::setBackgroundTaskStarter(BackgroundTaskStarter starter)
+{
+    m_backgroundTaskStarter = std::move(starter);
+}
+
+void BackupService::beginCriticalBackgroundTask()
+{
+    endCriticalBackgroundTask();
+    if (m_backgroundTaskStarter) {
+        m_activeBackgroundTaskEnd = m_backgroundTaskStarter();
+    }
+}
+
+void BackupService::endCriticalBackgroundTask()
+{
+    if (auto end = std::exchange(m_activeBackgroundTaskEnd, {})) {
+        end();
+    }
+}
+
 bool BackupService::busy() const
 {
     return m_busy;
@@ -191,7 +233,11 @@ void BackupService::setBusy(bool busy,
     m_busy = busy;
     m_operationText = operationText;
     m_operationBlocksUi = nextBlocksUi;
-    if (!busy && m_activeWorkers.isEmpty()) m_operation.reset();
+    if (!busy && m_activeWorkers.isEmpty()) {
+        m_operation.reset();
+        m_rollingBackRestore = false;
+        endCriticalBackgroundTask();
+    }
     if (busyDidChange) emit busyChanged();
     if (textDidChange) emit operationTextChanged();
     if (blocksUiDidChange) emit operationBlocksUiChanged();
@@ -228,6 +274,11 @@ BackupOperation BackupService::beginOperation()
 
 void BackupService::cancelCurrentOperation()
 {
+    // 恢复失败后的安全回滚只响应应用退出（Shutdown）和超时预算（TimedOut），
+    // 不因切后台等普通取消而掐断回滚，避免把数据锁死在恢复不确定态。
+    if (m_rollingBackRestore) {
+        return;
+    }
     if (m_operation) m_operation->requestStop();
 }
 
@@ -237,6 +288,7 @@ void BackupService::prepareForShutdown()
         return;
     }
     m_shutdownPrepared = true;
+    m_rollingBackRestore = false;
     // 隔离执行器按停止/回收期限返回；进程内恢复任务仍需真实收尾，不能提前销毁其依赖。
     if (m_operation && !m_activeWorkers.isEmpty()) {
         m_operation->requestStop(BackupOperationControl::StopReason::Shutdown);
@@ -459,9 +511,16 @@ bool BackupService::cleanBackupTables() const
         return false;
     }
 
+    // 移除备份专用的元数据表，并强制清零外部备份可能携带的同步运行标记与测试时钟。
     QSqlQuery drop(database);
     if (!drop.exec(QStringLiteral("DROP TABLE IF EXISTS backup_meta"))
         || !drop.exec(QStringLiteral("DROP TABLE IF EXISTS backup_settings"))
+        || !drop.exec(QStringLiteral("DELETE FROM sync_runtime WHERE singleton_id <> 1"))
+        || !drop.exec(QStringLiteral(
+               "INSERT INTO sync_runtime (singleton_id, applying, delete_kind, test_now_ms) "
+               "VALUES (1, 0, NULL, NULL) "
+               "ON CONFLICT(singleton_id) DO UPDATE SET "
+               "applying = 0, delete_kind = NULL, test_now_ms = NULL"))
         || !database.commit()) {
         database.rollback();
         return false;
@@ -474,9 +533,14 @@ bool BackupService::restoreFromPreRestoreSnapshot(const QString& preRestorePath,
                                                   const QVariantMap& originalSettings,
                                                   QString* error)
 {
+    // 若失败发生在目标库计时态已载入内存之后，回滚前必须先清空内存中的目标库会话，
+    // 否则回滚后重开原库时 restoreInterruptedSession(false) 会被 hasActiveTimer() 拒绝。
+    FocusTimer::instance()->discardInMemoryStateForReload();
     DatabaseManager::instance()->close();
-    const BackupOperations::OperationResult copy =
-        BackupOperations::atomicCopy(preRestorePath, dbPath);
+    BackupOperations::OperationResult copy = removeDatabaseSidecars(dbPath);
+    if (copy.success) {
+        copy = BackupOperations::atomicCopy(preRestorePath, dbPath);
+    }
     if (!copy.success) {
         // 与异步回滚同理：拷贝失败不代表原库损坏，必须把连接重新打开，
         // 否则调用方拿到 false 之后整个应用没有数据库可用。
@@ -510,7 +574,7 @@ bool BackupService::restoreFromPreRestoreSnapshot(const QString& preRestorePath,
     if (m_settingsFilePath.isEmpty()) {
         AppSettings::instance()->reload();
     }
-    if (!FocusTimer::instance()->restoreInterruptedSession()) {
+    if (!FocusTimer::instance()->restoreInterruptedSession(false)) {
         if (error) {
             *error = QStringLiteral("数据库已回滚，但计时运行态重新加载失败");
         }
@@ -533,6 +597,11 @@ bool BackupService::restoreBackup(const QString& srcPath)
     setLastError(QString());
     if (m_busy) {
         setLastError(QStringLiteral("已有备份或恢复任务正在执行"));
+        emit restoreCompleted(false, m_lastError);
+        return false;
+    }
+    if (ExportService::instance()->busy()) {
+        setLastError(QStringLiteral("正在导出数据，请等待导出完成后再恢复备份"));
         emit restoreCompleted(false, m_lastError);
         return false;
     }
@@ -641,8 +710,10 @@ bool BackupService::restoreSynchronously(const QString& srcPath, const BackupOpe
     pruneBeforeRestoreBackups(preRestorePath);
 
     DatabaseManager::instance()->close();
-    const BackupOperations::OperationResult install =
-        BackupOperations::atomicCopy(stagedSourcePath, dbPath, -1, operation);
+    BackupOperations::OperationResult install = removeDatabaseSidecars(dbPath);
+    if (install.success) {
+        install = BackupOperations::atomicCopy(stagedSourcePath, dbPath, -1, operation);
+    }
     bool ok = install.success
         && DatabaseManager::instance()->initialize(dbPath)
         && verifyRestoredDatabase()
@@ -657,7 +728,7 @@ bool BackupService::restoreSynchronously(const QString& srcPath, const BackupOpe
         AppSettings::instance()->reload();
     }
     if (ok) {
-        ok = FocusTimer::instance()->restoreInterruptedSession();
+        ok = FocusTimer::instance()->restoreInterruptedSession(false);
     }
 
     ok = ok && operation->checkpoint("restore-before-finish");
@@ -688,16 +759,20 @@ void BackupService::startBackupJob(const QString& destinationPath,
         return;
     }
     if (m_busy) {
+        const QString message = QStringLiteral("已有备份或恢复任务正在执行");
+        setLastError(message);
         if (!automatic) {
-            emit backupCompleted(false, QStringLiteral("已有备份或恢复任务正在执行"));
+            emit backupCompleted(false, message);
         }
         return;
     }
 
     const QString sourcePath = databasePath();
     if (sourcePath.isEmpty() || !DatabaseManager::instance()->isOpen()) {
+        const QString message = QStringLiteral("数据库未打开，无法备份");
+        setLastError(message);
         if (!automatic) {
-            emit backupCompleted(false, QStringLiteral("数据库未打开，无法备份"));
+            emit backupCompleted(false, message);
         }
         return;
     }
@@ -814,31 +889,41 @@ void BackupService::requestRestore(const QString& srcPath)
         return;
     }
     if (m_busy) {
-        emit restoreCompleted(false, QStringLiteral("已有备份或恢复任务正在执行"));
+        setLastError(QStringLiteral("已有备份或恢复任务正在执行"));
+        emit restoreCompleted(false, m_lastError);
+        return;
+    }
+    if (ExportService::instance()->busy()) {
+        setLastError(QStringLiteral("正在导出数据，请等待导出完成后再恢复备份"));
+        emit restoreCompleted(false, m_lastError);
         return;
     }
     if (FocusTimer::instance()->hasActiveSession()
         || FocusTimer::instance()->phase() != FocusTimer::NoPhase
         || FocusTimer::instance()->isRunning()) {
-        emit restoreCompleted(false, QStringLiteral("请先结束当前专注或休息，再恢复备份"));
+        setLastError(QStringLiteral("请先结束当前专注或休息，再恢复备份"));
+        emit restoreCompleted(false, m_lastError);
         return;
     }
 
     const QString dbPath = databasePath();
     if (dbPath.isEmpty() || !DatabaseManager::instance()->isOpen()) {
-        emit restoreCompleted(false, QStringLiteral("数据库未打开，无法恢复"));
+        setLastError(QStringLiteral("数据库未打开，无法恢复"));
+        emit restoreCompleted(false, m_lastError);
         return;
     }
 
     bool settingsOk = false;
     const QVariantMap originalSettings = currentSettingsSnapshot(&settingsOk);
     if (!settingsOk) {
-        emit restoreCompleted(false, QStringLiteral("读取当前设置失败，已中止恢复"));
+        setLastError(QStringLiteral("读取当前设置失败，已中止恢复"));
+        emit restoreCompleted(false, m_lastError);
         return;
     }
 
     if (!QDir().mkpath(autoBackupsDir())) {
-        emit restoreCompleted(false, QStringLiteral("无法创建备份目录"));
+        setLastError(QStringLiteral("无法创建备份目录"));
+        emit restoreCompleted(false, m_lastError);
         return;
     }
 
@@ -931,6 +1016,44 @@ void BackupService::installPreparedRestore(
         emit restoreCompleted(false, message);
         return;
     }
+    // 异步 preflight 窗口期若通过非遮罩入口启动了导出或计时，关库前必须复检并安全中止。
+    if (ExportService::instance()->busy()) {
+        const QString message = QStringLiteral("正在导出数据，请等待导出完成后再恢复备份");
+        setLastError(message);
+        emit restoreSyncCompleted(false, true);
+        setBusy(false);
+        emit restoreCompleted(false, message);
+        return;
+    }
+    if (FocusTimer::instance()->hasActiveSession()
+        || FocusTimer::instance()->phase() != FocusTimer::NoPhase
+        || FocusTimer::instance()->isRunning()) {
+        const QString message = QStringLiteral("请先结束当前专注或休息，再恢复备份");
+        setLastError(message);
+        emit restoreSyncCompleted(false, true);
+        setBusy(false);
+        emit restoreCompleted(false, message);
+        return;
+    }
+    // 偏好属于主线程：在派发后台安装前捕获字节快照，避免工作线程直接访问 QSettings。
+    const auto captured = BackupOperations::captureOwnedSettings(m_settingsFilePath, operation);
+    if (!captured.success) {
+        const QString message = QStringLiteral("恢复失败，原数据未改动：") + captured.error;
+        setLastError(message);
+        emit restoreSyncCompleted(false, true);
+        setBusy(false);
+        emit restoreCompleted(false, message);
+        return;
+    }
+    const BackupOperations::SnapshotRequest snapshotRequest{
+        context->databasePath,
+        context->preRestorePath,
+        autoBackupsDir(),
+        captured.effectiveSettingsPath,
+        QStringLiteral("before-restore"),
+        DatabaseManager::kCurrentSchemaVersion,
+        captured.values};
+    beginCriticalBackgroundTask();
     // 从此刻起关闭主连接，后台线程才能得到一个精确且不会再被业务层修改的恢复前快照。
     DatabaseManager::instance()->close();
     setBusy(true, QStringLiteral("正在备份当前数据并恢复"), true);
@@ -981,7 +1104,7 @@ void BackupService::installPreparedRestore(
             AppSettings::instance()->reload();
         }
         if (ok) {
-            ok = FocusTimer::instance()->restoreInterruptedSession();
+            ok = FocusTimer::instance()->restoreInterruptedSession(false);
         }
 
         ok = ok && operation->checkpoint("restore-before-finish");
@@ -998,15 +1121,10 @@ void BackupService::installPreparedRestore(
     });
 
     watcher->setFuture(QtConcurrent::run(
-        [context, settingsPath = m_settingsFilePath, operation]() {
+        [context, snapshotRequest, operation]() {
             RestoreInstallResult result;
             const BackupOperations::OperationResult snapshot =
-                BackupOperations::createSnapshot(
-                    context->databasePath,
-                    settingsPath,
-                    context->preRestorePath,
-                    QStringLiteral("before-restore"),
-                    DatabaseManager::kCurrentSchemaVersion, operation);
+                BackupOperations::createSnapshot(snapshotRequest, operation);
             if (!snapshot.success) {
                 result.snapshotCreated = snapshot.committed;
                 result.operation = snapshot;
@@ -1015,6 +1133,12 @@ void BackupService::installPreparedRestore(
                 return result;
             }
             result.snapshotCreated = true;
+            const BackupOperations::OperationResult cleaned =
+                removeDatabaseSidecars(context->databasePath);
+            if (!cleaned.success) {
+                result.operation = cleaned;
+                return result;
+            }
             result.operation = BackupOperations::atomicCopy(
                 context->stagedSourcePath, context->databasePath, -1, operation);
             return result;
@@ -1028,8 +1152,13 @@ void BackupService::rollbackAsyncRestore(
     if (m_shutdownPrepared) {
         return;
     }
+    // 立即清空内存中可能已从失败目标库载入的计时态：防止回滚后台拷贝期间退出把目标库会话写进原库，
+    // 也避免回滚完成后重载原库计时态被 hasActiveTimer() 拒绝。
+    FocusTimer::instance()->discardInMemoryStateForReload();
+    beginCriticalBackgroundTask();
     DatabaseManager::instance()->close();
     const auto operation = beginOperation();
+    m_rollingBackRestore = true;
     setBusy(true, QStringLiteral("恢复失败，正在安全回滚"), true);
 
     auto* watcher = new QFutureWatcher<BackupOperations::OperationResult>(this);
@@ -1041,6 +1170,7 @@ void BackupService::rollbackAsyncRestore(
         if (m_shutdownPrepared || m_operation != operation) {
             return;
         }
+        m_rollingBackRestore = false;
 
         // 无论回滚拷贝成败，都必须先把数据库重新打开：拷贝失败时原库文件通常仍完好，
         // 只是连接被关掉了。若把 initialize 挂在 && 链后半段，拷贝一失败就会短路，
@@ -1057,7 +1187,7 @@ void BackupService::rollbackAsyncRestore(
             AppSettings::instance()->reload();
         }
         if (rolledBack) {
-            rolledBack = FocusTimer::instance()->restoreInterruptedSession();
+            rolledBack = FocusTimer::instance()->restoreInterruptedSession(false);
         }
 
         QString message;
@@ -1086,6 +1216,11 @@ void BackupService::rollbackAsyncRestore(
             forced.success = false;
             forced.error = QStringLiteral("测试注入的回滚拷贝失败");
             return forced;
+        }
+        const BackupOperations::OperationResult cleaned =
+            removeDatabaseSidecars(context->databasePath);
+        if (!cleaned.success) {
+            return cleaned;
         }
         return BackupOperations::atomicCopy(
             context->preRestorePath, context->databasePath, -1, operation);

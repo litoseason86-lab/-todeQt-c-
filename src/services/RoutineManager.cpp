@@ -413,18 +413,22 @@ bool RoutineManager::updateRoutine(int id, const QString& title, int categoryId)
     query.bindValue(QStringLiteral(":id"), id);
 
     if (!query.exec()) {
-        qWarning() << "Failed to update routine:" << query.lastError().text();
-        reportFailure(QStringLiteral("修改例行失败：数据库写入失败：%1").arg(query.lastError().text()));
+        const QString errorText = query.lastError().text();
+        qWarning() << "Failed to update routine:" << errorText;
+        query.finish();
         db.rollback();
+        reportFailure(QStringLiteral("修改例行失败：数据库写入失败：%1").arg(errorText));
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to update routine: routine not found" << id;
-        reportFailure(QStringLiteral("修改例行失败：例行不存在或未修改"));
+        query.finish();
         db.rollback();
+        reportFailure(QStringLiteral("修改例行失败：例行不存在或未修改"));
         return false;
     }
+    query.finish();
 
     // 改规则的同时把今天已经生成的实例一并改掉：不改的话用户改完名字，
     // 今日任务列表里仍然是旧标题、旧科目，要等到明天生成新任务才对得上。
@@ -491,12 +495,14 @@ bool RoutineManager::deleteRoutine(int id)
         "UPDATE tasks SET routine_id = NULL, routine_generated = 0 WHERE routine_id = :id"));
     detachTasks.bindValue(QStringLiteral(":id"), id);
     if (!detachTasks.exec()) {
-        qWarning() << "Failed to detach tasks before deleting routine:"
-                   << detachTasks.lastError().text();
-        reportFailure(QStringLiteral("删除例行失败：解除任务关联失败：%1").arg(detachTasks.lastError().text()));
+        const QString errorText = detachTasks.lastError().text();
+        qWarning() << "Failed to detach tasks before deleting routine:" << errorText;
+        detachTasks.finish();
         db.rollback();
+        reportFailure(QStringLiteral("删除例行失败：解除任务关联失败：%1").arg(errorText));
         return false;
     }
+    detachTasks.finish();
 
     // 先写废纸篓再删除。放在收回之后：收回过当日实例时，生成戳要存成空，恢复后当天才会补生成。
     // 不能更晚：DELETE 之后这一行就读不到了。写入失败整体回滚。
@@ -519,18 +525,22 @@ bool RoutineManager::deleteRoutine(int id)
     query.bindValue(QStringLiteral(":id"), id);
 
     if (!query.exec()) {
-        qWarning() << "Failed to delete routine:" << query.lastError().text();
-        reportFailure(QStringLiteral("删除例行失败：数据库写入失败：%1").arg(query.lastError().text()));
+        const QString errorText = query.lastError().text();
+        qWarning() << "Failed to delete routine:" << errorText;
+        query.finish();
         db.rollback();
+        reportFailure(QStringLiteral("删除例行失败：数据库写入失败：%1").arg(errorText));
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to delete routine: routine not found" << id;
-        reportFailure(QStringLiteral("删除例行失败：例行不存在或未修改"));
+        query.finish();
         db.rollback();
+        reportFailure(QStringLiteral("删除例行失败：例行不存在或未修改"));
         return false;
     }
+    query.finish();
 
     if (!db.commit()) {
         qWarning() << "Failed to commit routine deletion:" << db.lastError().text();
@@ -574,18 +584,22 @@ bool RoutineManager::setRoutineActive(int id, bool active)
     query.bindValue(QStringLiteral(":id"), id);
 
     if (!query.exec()) {
-        qWarning() << "Failed to set routine active:" << query.lastError().text();
-        reportFailure(action + QStringLiteral("失败：数据库写入失败：%1").arg(query.lastError().text()));
+        const QString errorText = query.lastError().text();
+        qWarning() << "Failed to set routine active:" << errorText;
+        query.finish();
         db.rollback();
+        reportFailure(action + QStringLiteral("失败：数据库写入失败：%1").arg(errorText));
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to set routine active: routine not found" << id;
-        reportFailure(action + QStringLiteral("失败：例行不存在或未修改"));
+        query.finish();
         db.rollback();
+        reportFailure(action + QStringLiteral("失败：例行不存在或未修改"));
         return false;
     }
+    query.finish();
 
     // 停用表示「这件事先不做了」，今天那条还没动过的实例要跟着收回，
     // 否则开关关掉了，今日任务列表里还挂着它，用户只能再手动删一次。
@@ -650,18 +664,22 @@ bool RoutineManager::setRoutineWeekdays(int id, int weekdays)
     query.bindValue(QStringLiteral(":id"), id);
 
     if (!query.exec()) {
-        qWarning() << "Failed to set routine weekdays:" << query.lastError().text();
-        reportFailure(QStringLiteral("修改例行重复日失败：数据库写入失败：%1").arg(query.lastError().text()));
+        const QString errorText = query.lastError().text();
+        qWarning() << "Failed to set routine weekdays:" << errorText;
+        query.finish();
         db.rollback();
+        reportFailure(QStringLiteral("修改例行重复日失败：数据库写入失败：%1").arg(errorText));
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to set routine weekdays: routine not found" << id;
-        reportFailure(QStringLiteral("修改例行重复日失败：例行不存在或未修改"));
+        query.finish();
         db.rollback();
+        reportFailure(QStringLiteral("修改例行重复日失败：例行不存在或未修改"));
         return false;
     }
+    query.finish();
 
     // 新的重复日里已经没有今天，就把今天那条还没动过的实例收回。
     // 反方向（今天刚被勾上）不在这里补发：只要戳不是今天，下一次 materializeToday 自然会生成；
@@ -806,12 +824,16 @@ int RoutineManager::materializeToday()
         // 先用条件 UPDATE 抢占本次生成权。即使多个实例同时读到同一个 due routine，
         // 也只有真正把 last_generated_date 改到今天的实例才能继续插入任务。
         if (!claimRoutine.exec()) {
-            qWarning() << "Failed to claim routine generation:" << claimRoutine.lastError().text();
-            reportFailure(QStringLiteral("每日例行生成失败: %1").arg(claimRoutine.lastError().text()));
+            const QString errorText = claimRoutine.lastError().text();
+            qWarning() << "Failed to claim routine generation:" << errorText;
+            claimRoutine.finish();
             db.rollback();
+            reportFailure(QStringLiteral("每日例行生成失败: %1").arg(errorText));
             return 0;
         }
-        if (claimRoutine.numRowsAffected() == 0) {
+        const int claimedRows = claimRoutine.numRowsAffected();
+        claimRoutine.finish();
+        if (claimedRows == 0) {
             continue;
         }
 
@@ -823,9 +845,11 @@ int RoutineManager::materializeToday()
         identity.prepare(QStringLiteral("SELECT sync_id FROM routines WHERE id = :id"));
         identity.bindValue(QStringLiteral(":id"), routine.id);
         if (!identity.exec() || !identity.next()) {
-            qWarning() << "Failed to read routine sync id:" << identity.lastError().text();
-            reportFailure(QStringLiteral("每日例行生成失败: %1").arg(identity.lastError().text()));
+            const QString errorText = identity.lastError().text();
+            qWarning() << "Failed to read routine sync id:" << errorText;
+            identity.finish();
             db.rollback();
+            reportFailure(QStringLiteral("每日例行生成失败: %1").arg(errorText));
             return 0;
         }
         const QString routineSyncId = identity.value(0).toString();
@@ -841,12 +865,16 @@ int RoutineManager::materializeToday()
             existing.bindValue(QStringLiteral(":id"), instanceId);
             existing.bindValue(QStringLiteral(":id2"), instanceId);
             if (!existing.exec() || !existing.next()) {
-                qWarning() << "Failed to check routine instance:" << existing.lastError().text();
-                reportFailure(QStringLiteral("每日例行生成失败: %1").arg(existing.lastError().text()));
+                const QString errorText = existing.lastError().text();
+                qWarning() << "Failed to check routine instance:" << errorText;
+                existing.finish();
                 db.rollback();
+                reportFailure(QStringLiteral("每日例行生成失败: %1").arg(errorText));
                 return 0;
             }
-            if (existing.value(0).toInt() == 1) {
+            const bool alreadyExists = existing.value(0).toInt() == 1;
+            existing.finish();
+            if (alreadyExists) {
                 continue;
             }
         }
@@ -870,11 +898,14 @@ int RoutineManager::materializeToday()
         // TaskManager 会发 tasksChanged，应用启动时生成例行任务再触发刷新，容易形成递归刷新链。
         // 事务把“抢占生成权”和“插入任务”绑定成一个原子动作，避免只完成一半后下次重复生成。
         if (!insertTask.exec() || insertTask.numRowsAffected() != 1) {
-            qWarning() << "Failed to materialize routine task:" << insertTask.lastError().text();
-            reportFailure(QStringLiteral("每日例行生成失败: %1").arg(insertTask.lastError().text()));
+            const QString errorText = insertTask.lastError().text();
+            qWarning() << "Failed to materialize routine task:" << errorText;
+            insertTask.finish();
             db.rollback();
+            reportFailure(QStringLiteral("每日例行生成失败: %1").arg(errorText));
             return 0;
         }
+        insertTask.finish();
 
         ++generatedCount;
     }

@@ -2,6 +2,7 @@
 
 #include "services/BackupService.h"
 #include "services/DatabaseManager.h"
+#include "services/ExportService.h"
 #include "services/FocusTimer.h"
 #include "services/PendingDeletion.h"
 #include "services/SyncController.h"
@@ -18,9 +19,14 @@ void AppLifecycle::setPreShutdownHook(std::function<void()> hook)
     m_preShutdownHook = std::move(hook);
 }
 
-void AppLifecycle::setFlushDraftsHook(std::function<void()> hook)
+void AppLifecycle::setFlushDraftsHook(std::function<bool()> hook)
 {
     m_flushDraftsHook = std::move(hook);
+}
+
+bool AppLifecycle::flushDrafts()
+{
+    return !m_flushDraftsHook || m_flushDraftsHook();
 }
 
 void AppLifecycle::setPendingDeletion(PendingDeletion* pendingDeletion)
@@ -55,6 +61,9 @@ std::vector<AppLifecycle::ShutdownStep> AppLifecycle::shutdownSteps() const
     steps.push_back({QStringLiteral("backup"), [] {
         BackupService::instance()->prepareForShutdown();
     }});
+    steps.push_back({QStringLiteral("export"), [] {
+        ExportService::instance()->prepareForShutdown();
+    }});
     steps.push_back({QStringLiteral("sync"), [this] {
         if (m_syncController) {
             m_syncController->shutdown(3000);
@@ -87,9 +96,7 @@ void AppLifecycle::handleApplicationStateChanged(Qt::ApplicationState state)
     // 非活动状态（切后台、失焦锁屏、下拉控制中心）时先保存草稿，
     // 确保随后同步线程从数据库或服务队列中读到最新输入。
     if (state != Qt::ApplicationActive) {
-        if (m_flushDraftsHook) {
-            m_flushDraftsHook();
-        }
+        flushDrafts();
     }
 
     // 真正进入后台时请求备份协作停止；失焦仍可能在分屏中可见，不能据此取消。

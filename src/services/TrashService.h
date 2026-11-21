@@ -5,6 +5,8 @@
 #include <QObject>
 #include <QVariantMap>
 
+#include <functional>
+
 // 废纸篓（计划 054）：近 30 天被用户删除的内容，列出、恢复、彻底删除、清空、过期清理。
 // 写入端在 TrashStore（各服务在自己的删除事务里调用）；这里是读取与处置端。
 class TrashService : public QObject
@@ -26,7 +28,11 @@ public:
     // （更新版本新增的类型或更高的内容格式），判定与 restoreItem 共用；能恢复时为空串。
     Q_INVOKABLE QVariantMap readItems() const;
     // 删除到期的全部项，一个事务。返回删除条数，失败返回 -1；删了才发 trashChanged。
+    // 恢复不确定或恢复临界区阻断时静默返回 0，不写库也不发信号。
     Q_INVOKABLE int purgeExpired();
+    // 注入自动清理阻断判定（由 SharedApp 装配，销毁时清空）；外部视图直调 purgeExpired() 同样受控。
+    void setAutoPurgeBlockedProvider(std::function<bool()> provider);
+    Q_INVOKABLE bool autoPurgeBlocked() const;
     // 彻底删除一项，连同 origin_sync_id 相同的全部项（身份退回随机时同一原记录会有多行）。
     // { ok, error, code }；这一项已不在废纸篓里（另一台刚恢复或删掉）时 code 为 "gone"，其余失败不给 code。
     Q_INVOKABLE QVariantMap deleteItem(int trashId);
@@ -54,6 +60,7 @@ private:
     QDateTime now() const;
 
     QDateTime m_nowForTesting;
+    std::function<bool()> m_autoPurgeBlockedProvider;
 };
 
 #endif // TRASHSERVICE_H

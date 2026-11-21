@@ -37,6 +37,7 @@ private slots:
     void runRequestValidatesBeforeTouchingFiles();
     void stageAndInspectReturnOperationResults();
     void stopMessagesUseKnownReasons();
+    void partialAndCoalescedFramesAreRejected();
 };
 
 void BackupExecutorProtocolTests::requestsAndResultsRoundTrip()
@@ -217,6 +218,25 @@ void BackupExecutorProtocolTests::stopMessagesUseKnownReasons()
     }
     QVERIFY(!BackupExecutorProtocol::decodeStop("{\"stop\":\"unknown\"}"));
     QVERIFY(!BackupExecutorProtocol::decodeStop("{\"stop\":\"cancelled\",\"extra\":1}"));
+}
+
+// 保证截断的半行 JSON 与合并在一起的两行粘包帧在协议解码层一律被拒绝，不会只解一半或吞掉第二帧。
+void BackupExecutorProtocolTests::partialAndCoalescedFramesAreRejected()
+{
+    const auto reqBytes = BackupExecutorProtocol::encodeRequest(snapshotRequest());
+    const auto resBytes = BackupExecutorProtocol::encodeResult({{true, {}, false}, {}});
+    QString error;
+
+    // 截断帧（半包无结尾花括号）
+    QVERIFY(!BackupExecutorProtocol::decodeRequest(reqBytes.left(reqBytes.size() / 2), &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!BackupExecutorProtocol::decodeResult(resBytes.left(resBytes.size() / 2), &error));
+    QVERIFY(!error.isEmpty());
+
+    // 粘包帧（两条 JSON 行紧连或带换行拼在同一帧中）
+    QVERIFY(!BackupExecutorProtocol::decodeRequest(reqBytes + reqBytes, &error));
+    QVERIFY(!BackupExecutorProtocol::decodeResult(resBytes + resBytes, &error));
+    QVERIFY(!BackupExecutorProtocol::decodeStop("{\"stop\":\"cancelled\"}\n{\"stop\":\"shutdown\"}\n"));
 }
 
 

@@ -163,14 +163,19 @@ public:
     // 不能因为没要求修改的旧标题（上限出现之前可能超过 100 字）而整次失败。
     // completionNote 为 nullopt 时不碰完成记录；外部 AI 接入走的正是这条默认路径。
     // preserveDate 为真时不改日期（dateValue 被忽略），当天的排序也不动。
+    // broadcastError 为假时外部调用自行消费失败结果，不向界面广播 operationFailed。
     bool updateTaskFields(int taskId, const QString& title, int categoryId, const QVariant& dateValue,
                           int estimatedMinutes, const QString& notes, bool preserveCategory,
                           bool preserveTitle = false,
                           const std::optional<QString>& completionNote = std::nullopt,
-                          bool preserveDate = false);
+                          bool preserveDate = false,
+                          bool broadcastError = true);
     // 返回提交事实，让后台调用区分“未创建”和“已提交但无法取得编号”。
     int createTaskWithOutcome(const QString& title, const QVariant& dateValue, int categoryId,
-                              int estimatedMinutes, const QString& notes, bool* committed);
+                              int estimatedMinutes, const QString& notes, bool* committed,
+                              bool broadcastError = true);
+    // 外部 AI 等后台调用写完成状态时抑制页面共享的 operationFailed 广播，成功仍发 tasksChanged。
+    bool setTaskCompletedWithoutBroadcast(int taskId, bool completed);
 
 signals:
     void tasksChanged();
@@ -186,6 +191,7 @@ signals:
 private:
     explicit TaskManager(QObject* parent = nullptr);
     void reportFailure(const QString& message) const;
+    bool setTaskCompletedImpl(int taskId, bool completed, bool broadcastError);
     bool moveTaskToDateImpl(int taskId, const QVariant& dateValue, bool broadcastFailure, QString* error);
 };
 

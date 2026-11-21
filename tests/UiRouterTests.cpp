@@ -227,5 +227,5 @@ void UiRouterTests::truthTableCombinations()
     }
 }
 
-QTEST_MAIN(UiRouterTests)
+QTEST_GUILESS_MAIN(UiRouterTests)
 #include "UiRouterTests.moc"

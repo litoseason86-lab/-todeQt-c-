@@ -8,6 +8,7 @@
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QUuid>
 #include <QtConcurrent>
 
 #include <atomic>
@@ -42,6 +43,8 @@ private slots:
     void databaseChangeInvalidatesRoutinesOnlyOnce();
     void largeDatasetQueriesStayFast();
     void writeSucceedsWhileAnotherConnectionHoldsTheLock();
+    void initializeFailureClosesDatabaseConnection();
+    void selfHealOnCurrentSchemaNeverDowngradesDiskUserVersion();
 
 private:
     QTemporaryDir* m_tempDir = nullptr;
@@ -384,6 +387,88 @@ void RobustnessTests::writeSucceedsWhileAnotherConnectionHoldsTheLock()
     QCOMPARE(tasks.size(), 1);
     QCOMPARE(tasks.first().toMap().value(QStringLiteral("title")).toString(),
              QStringLiteral("撞锁期间写入"));
+}
+
+void RobustnessTests::initializeFailureClosesDatabaseConnection()
+{
+    // 保证 DatabaseManager::initialize 在打开文件后因版本不兼容或建表失败返回 false 时，立即关闭并移除底层数据库连接，不遗留半开连接。
+    DatabaseManager::instance()->close();
+    QVERIFY(!DatabaseManager::instance()->isOpen());
+
+    const QString futureDbPath = m_tempDir->filePath(QStringLiteral("future-v999.sqlite"));
+    const QString setupConn = QStringLiteral("SetupFutureDb_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), setupConn);
+        db.setDatabaseName(futureDbPath);
+        QVERIFY(db.open());
+        QSqlQuery q(db);
+        QVERIFY(q.exec(QStringLiteral("CREATE TABLE future_table (id INTEGER PRIMARY KEY)")));
+        QVERIFY(q.exec(QStringLiteral("PRAGMA user_version = 999")));
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(setupConn);
+
+    QVERIFY(!DatabaseManager::instance()->initialize(futureDbPath));
+    QVERIFY(!DatabaseManager::instance()->isOpen());
+    QVERIFY(!DatabaseManager::instance()->database().isOpen());
+}
+
+void RobustnessTests::selfHealOnCurrentSchemaNeverDowngradesDiskUserVersion()
+{
+    // 保证当前最新 schema 版本的数据库触发局部排序或结构自愈时，绝不会把磁盘上的 PRAGMA user_version 降级写回旧版本号。
+    const QString brokenPath = m_tempDir->filePath(QStringLiteral("robustness.sqlite"));
+    {
+        QSqlQuery q(DatabaseManager::instance()->database());
+        QVERIFY(q.exec(QStringLiteral("PRAGMA user_version")) && q.next());
+        QCOMPARE(q.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+        q.finish();
+
+        // 制造同日重复 display_order = 1 触发 v12 排序自愈，同时制造残缺 schedule_entries 使后续结构检查中止。
+        QVERIFY(q.exec(QStringLiteral(
+            "INSERT INTO tasks (title, date, completed, display_order) "
+            "VALUES ('重复甲', '2026-11-18', 0, 1), ('重复乙', '2026-11-18', 0, 1)")));
+        QVERIFY(q.exec(QStringLiteral("DROP TABLE schedule_entries")));
+        QVERIFY(q.exec(QStringLiteral(
+            "CREATE TABLE schedule_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)")));
+    }
+    DatabaseManager::instance()->close();
+
+    QVERIFY(!DatabaseManager::instance()->initialize(brokenPath));
+
+    const QString inspectConn = QStringLiteral("InspectDiskVersion_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), inspectConn);
+        db.setDatabaseName(brokenPath);
+        QVERIFY(db.open());
+        QSqlQuery q(db);
+        QVERIFY(q.exec(QStringLiteral("PRAGMA user_version")) && q.next());
+        QCOMPARE(q.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(inspectConn);
+    QVERIFY(!DatabaseManager::instance()->isOpen());
+
+    // 验证正常最新 schema 库命中排序自愈后，版本号保持最新且重复排序号已修复。
+    const QString normalPath = m_tempDir->filePath(QStringLiteral("selfheal-normal.sqlite"));
+    QVERIFY(DatabaseManager::instance()->initialize(normalPath));
+    {
+        QSqlQuery q(DatabaseManager::instance()->database());
+        QVERIFY(q.exec(QStringLiteral(
+            "INSERT INTO tasks (title, date, completed, display_order) "
+            "VALUES ('正常甲', '2026-11-18', 0, 1), ('正常乙', '2026-11-18', 0, 1)")));
+    }
+    DatabaseManager::instance()->close();
+
+    QVERIFY(DatabaseManager::instance()->initialize(normalPath));
+    {
+        QSqlQuery q(DatabaseManager::instance()->database());
+        QVERIFY(q.exec(QStringLiteral("PRAGMA user_version")) && q.next());
+        QCOMPARE(q.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+        q.finish();
+        QVERIFY(q.exec(QStringLiteral(
+            "SELECT COUNT(DISTINCT display_order) FROM tasks WHERE date = '2026-11-18'")) && q.next());
+        QCOMPARE(q.value(0).toInt(), 2);
+    }
 }
 
 QTEST_GUILESS_MAIN(RobustnessTests)

@@ -2,6 +2,8 @@
 #define EXPORTSERVICE_H
 
 #include <QDate>
+#include <QFutureWatcher>
+#include <QList>
 #include <QObject>
 #include <QSaveFile>
 #include <QString>
@@ -19,8 +21,11 @@ class ExportService : public QObject
 
 public:
     static ExportService* instance();
+    ~ExportService() override;
 
     bool busy() const { return m_busy; }
+    // 注入运行期阻塞判定（如备份/恢复临界区禁止导出）；由 SharedApp 装配，销毁时清空。
+    void setOperationBlockedProvider(std::function<bool()> provider);
 
     // —— 异步导出 ——
     // 同步版会把 GUI 线程一直占住：实测 2 万行专注记录约 190ms，掉十来帧，
@@ -51,6 +56,9 @@ public:
                                          const QVariant& startDateValue,
                                          const QVariant& endDateValue) const;
 
+    // 退出关库前等待所有在途异步导出收尾，并拒绝新的异步导出请求，防止主库关闭后工作线程仍在读库。
+    void prepareForShutdown();
+
 signals:
     // 进度和完成信号让导出弹窗不用轮询文件写入状态。
     void exportProgress(int current, int total);
@@ -60,6 +68,12 @@ signals:
 private:
     friend class ServiceTests;
 
+    struct ExportOutcome
+    {
+        bool success = false;
+        QString message;
+    };
+
     explicit ExportService(QObject* parent = nullptr);
 
     // 工作线程要用自己的连接：QSqlDatabase 只能在创建它的线程上使用。
@@ -68,10 +82,15 @@ private:
                                  QString* ownedConnectionName) const;
     static void releaseDatabase(const QString& ownedConnectionName);
     void setBusy(bool busy);
-    // 三种导出共用的异步外壳：占住 busy、丢到线程池、回到 GUI 线程报结果。
-    void runAsync(const std::function<bool()>& work);
+    bool isOperationBlocked() const;
+    QString currentEffectiveSettingsPath() const;
+    // 三种导出共用的异步外壳：占住 busy、丢到线程池、回到 GUI 线程先清 busy 再发结果信号。
+    void runAsync(const std::function<ExportOutcome()>& work);
 
     bool m_busy = false;
+    bool m_shuttingDown = false;
+    std::function<bool()> m_operationBlockedProvider;
+    QList<QFutureWatcher<ExportOutcome>*> m_activeWatchers;
     // 只供 ServiceTests 在两份 CSV 之间制造确定性并发写入；
     // 生产默认为空，调用前会先清空，避免跨测试或重入污染。
     std::function<void()> m_betweenExportFilesHookForTest;
@@ -85,42 +104,45 @@ private:
     int countRows(const QSqlDatabase& database,
                   const QString& fromAndWhereSql,
                   const QDate& startDate,
-                  const QDate& endDate) const;
-    bool exportTasksToFile(const QDate& startDate,
-                           const QDate& endDate,
-                           const QString& filePath,
-                           bool emitSuccess,
-                           const QString& workerDatabasePath);
-    bool exportTasksUsingDatabase(const QSqlDatabase& database,
-                                  const QDate& startDate,
-                                  const QDate& endDate,
-                                  const QString& filePath,
-                                  bool emitSuccess);
-    bool exportFocusSessionsToFile(const QDate& startDate,
-                                   const QDate& endDate,
-                                   const QString& filePath,
-                                   bool emitSuccess,
-                                   const QString& workerDatabasePath,
-                                   int dayStartHour);
-    bool exportFocusSessionsUsingDatabase(const QSqlDatabase& database,
-                                          const QDate& startDate,
-                                          const QDate& endDate,
-                                          const QString& filePath,
-                                          bool emitSuccess,
-                                          int dayStartHour);
-    bool exportAllToDirectory(const QDate& startDate,
-                              const QDate& endDate,
-                              const QString& dirPath,
-                              const QString& workerDatabasePath,
-                              int dayStartHour);
-    bool finishCsvFile(QSaveFile& file,
-                       QTextStream& stream,
-                       const QString& successMessage,
-                       bool emitSuccess);
-    bool commitExportPair(const QString& stagedTasksPath,
-                          const QString& tasksPath,
-                          const QString& stagedSessionsPath,
-                          const QString& sessionsPath);
+                  const QDate& endDate,
+                  bool* ok = nullptr,
+                  QString* error = nullptr) const;
+    ExportOutcome exportTasksToFile(const QDate& startDate,
+                                    const QDate& endDate,
+                                    const QString& filePath,
+                                    const QString& workerDatabasePath,
+                                    const QString& sourceDatabasePath,
+                                    const QString& effectiveSettingsPath);
+    ExportOutcome exportTasksUsingDatabase(const QSqlDatabase& database,
+                                           const QDate& startDate,
+                                           const QDate& endDate,
+                                           const QString& filePath);
+    ExportOutcome exportFocusSessionsToFile(const QDate& startDate,
+                                            const QDate& endDate,
+                                            const QString& filePath,
+                                            const QString& workerDatabasePath,
+                                            const QString& sourceDatabasePath,
+                                            const QString& effectiveSettingsPath,
+                                            int dayStartHour);
+    ExportOutcome exportFocusSessionsUsingDatabase(const QSqlDatabase& database,
+                                                   const QDate& startDate,
+                                                   const QDate& endDate,
+                                                   const QString& filePath,
+                                                   int dayStartHour);
+    ExportOutcome exportAllToDirectory(const QDate& startDate,
+                                       const QDate& endDate,
+                                       const QString& dirPath,
+                                       const QString& workerDatabasePath,
+                                       const QString& sourceDatabasePath,
+                                       const QString& effectiveSettingsPath,
+                                       int dayStartHour);
+    ExportOutcome finishCsvFile(QSaveFile& file,
+                                QTextStream& stream,
+                                const QString& successMessage);
+    ExportOutcome commitExportPair(const QString& stagedTasksPath,
+                                   const QString& tasksPath,
+                                   const QString& stagedSessionsPath,
+                                   const QString& sessionsPath);
 };
 
 #endif // EXPORTSERVICE_H

@@ -17,7 +17,7 @@ class McpToolDispatcher : public QObject
 {
     Q_OBJECT
 public:
-    struct Context { QString sessionId; QDateTime now; int dayStartHour; };
+    struct Context { QString sessionId; QDateTime now; int dayStartHour; int activeFocusTaskId = -1; };
     using ContextProvider = std::function<Context()>;
     McpToolDispatcher(TaskManager* tasks, CategoryManager* categories, StatisticsService* statistics,
                       KnowledgeGapService* gaps, TaskInteractionCoordinator* interactions,

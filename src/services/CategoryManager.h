@@ -29,6 +29,8 @@ public:
     // 预设科目允许改名和换色，但不能删除；自定义科目允许完整增删改。
     Q_INVOKABLE int addCategory(const QString& name, const QString& color);
     Q_INVOKABLE bool updateCategory(int id, const QString& name, const QString& color);
+    // 字段级局部更新（仅允许 name / color 且值为文本）：只写实际变化的列，避免只改色时覆盖远端改名。
+    Q_INVOKABLE bool updateCategoryChanges(int id, const QVariantMap& changes);
     Q_INVOKABLE bool deleteCategory(int id);
 
     // canDeleteCategory 只表示 UI 是否显示删除入口；真正删除时仍会再次校验。

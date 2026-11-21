@@ -38,6 +38,8 @@ public:
     QString lastError() const { return m_error; }
     void beginRestore();
     void setRestoreBlocked(bool blocked);
+    Q_INVOKABLE void setSyncRestoreUncertain(bool uncertain);
+    Q_INVOKABLE void rotateSession();
     void shutdown();
     QJsonObject dispatch(McpContracts::Tool tool, const QJsonObject& arguments);
     // 显式注入业务处理器；测试宿主不安装时明确返回未开放。
@@ -54,7 +56,7 @@ private:
     QJsonObject dispatchImpl(McpContracts::Tool tool, const QJsonObject& arguments);
     bool savePolicy(const QString& key, bool value, bool previousValue);
     void stop();
-    void rotateSession();
+    bool restoreBlocked() const;
     QJsonObject busyError() const;
     McpPaths::Resolution m_endpoint;
     QSettings& m_settings;
@@ -67,6 +69,7 @@ private:
     bool m_enabled = false;
     bool m_writeEnabled = false;
     bool m_restoreBlocked = false;
+    bool m_syncRestoreUncertain = false;
     bool m_shuttingDown = false;
     int m_handshakeTimeoutMs = McpContracts::kHandshakeTimeoutMs;
 };

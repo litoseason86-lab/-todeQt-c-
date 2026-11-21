@@ -53,12 +53,14 @@ bool dropSyncTriggers(const QSqlDatabase& db)
     }
     QStringList names;
     while (query.next()) {
-        if (SyncSchema::isSyncTriggerName(query.value(0).toString())) {
-            names.append(query.value(0).toString());
+        const QString name = query.value(0).toString();
+        if (SyncSchema::hasSyncTriggerPrefix(name)) {
+            names.append(name);
         }
     }
     query.finish();
-    for (const QString& name : names) {
+    for (QString name : names) {
+        name.replace(QLatin1Char('"'), QStringLiteral("\"\""));
         if (!query.exec(QStringLiteral("DROP TRIGGER \"%1\"").arg(name))) {
             return false;
         }
@@ -1082,6 +1084,12 @@ private slots:
     void weeklyReviewContentFlags();
     void taskSummaryUsesLogicalWeekAndServiceFocusCaliber();
     void taskSummaryRejectsQueryFailure();
+    void exportEscapesFormulaAndDelimiterColumnsInTasksAndSessions();
+    void dstFallBackFocusSessionRemainsEditableInFocusHistory();
+    void categoryUpdateChangesWritesOnlyChangedColumns();
+    void exportRejectsProtectedRuntimePathsAndSetsBusyFalseBeforeSignal();
+    void appSettingsWriteAndRemoveFailureRollsBackSharedCache();
+    void dayStatsIncludesGoalProgressConsistentWithWeeklyReview();
 
 private:
     // 需要访问 FocusTimer 私有时钟状态，必须挂在 friend 类下而不是自由函数里。
@@ -7330,8 +7338,10 @@ void ServiceTests::completionSaveFailureNotifiesOnceAndKeepsRetrying()
     DatabaseManager::instance()->close();
 
     QTRY_COMPARE_WITH_TIMEOUT(failureSpy.count(), 1, 5000);
-    // 再等两个 tick，确认重试不会把提示刷成第二条。
-    QTest::qWait(2200);
+    // 按真实计时器 tick 推进至少两个重试周期，确认重复重试不会把失败提示刷成第二条。
+    QSignalSpy tickSpy(timer, &FocusTimer::tick);
+    QVERIFY(tickSpy.isValid());
+    QTRY_VERIFY_WITH_TIMEOUT(tickSpy.count() >= 2, 5000);
     QCOMPARE(failureSpy.count(), 1);
     QCOMPARE(timer->isRunning(), true);
 }
@@ -8251,7 +8261,7 @@ void ServiceTests::weeklyReviewContentFlags()
     QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), false);
 }
 
-QTEST_MAIN(ServiceTests)
+QTEST_GUILESS_MAIN(ServiceTests)
 #include "ServiceTests.moc"
 
 void ServiceTests::manualSessionCountsTowardMinutesButNotPomodoros()
@@ -9598,9 +9608,11 @@ void ServiceTests::everySettingTheAppWritesPassesTheOwnershipFilter()
 
 void ServiceTests::ownershipFilterRejectsForeignKeysAndKeepsShortcutOverrides()
 {
-    // 陌生键一律不认。
+    // 陌生键与本机 MCP 权限配置一律不认：接入开关绝不能随备份/同步写进其它机器或恢复时翻盘。
     QVERIFY(!AppSettings::isOwnedSettingKey(QStringLiteral("evil/payload")));
     QVERIFY(!AppSettings::isOwnedSettingKey(QStringLiteral("NSGlobalDomain")));
+    QVERIFY(!AppSettings::isOwnedSettingKey(QStringLiteral("mcp/enabled")));
+    QVERIFY(!AppSettings::isOwnedSettingKey(QStringLiteral("mcp/writeEnabled")));
     QVERIFY(!AppSettings::isOwnedSettingKey(QString()));
     // 没有分组的裸键同样不认——本应用所有键都带分组。
     QVERIFY(!AppSettings::isOwnedSettingKey(QStringLiteral("nickname")));
@@ -10107,4 +10119,274 @@ void ServiceTests::taskSummaryRejectsQueryFailure()
     QVERIFY(!recoveredSummary.isEmpty());
     QCOMPARE(recoveredSummary.value(QStringLiteral("todayPendingCount")).toInt(), 1);
     QCOMPARE(recoveredSummary.value(QStringLiteral("todayFocusedSeconds")).toInt(), 600);
+}
+
+void ServiceTests::exportEscapesFormulaAndDelimiterColumnsInTasksAndSessions()
+{
+    // 产品保证：任务与专注记录 CSV 导出的所有文本/时间/外键列遇到前导公式符号或逗号时均经 escapeCsvField 转义，防止表格公式注入与断列错位。
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    QSqlQuery pragmaOff(db);
+    QVERIFY(pragmaOff.exec(QStringLiteral("PRAGMA foreign_keys = OFF")));
+    const auto restoreFk = qScopeGuard([db]() {
+        QSqlQuery on(db);
+        on.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
+    });
+
+    // t.date 落在 2026-06-01 .. 2026-06-30 字符串比较区间内但带逗号，t.created_at 带公式前缀与逗号
+    QSqlQuery insertTask(db);
+    QVERIFY(insertTask.exec(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, created_at) "
+        "VALUES ('注入测试任务', '2026-06-10,SPLIT_DATE', 0, '=1+1,SPLIT_CREATED')")));
+    const int taskId = insertTask.lastInsertId().toInt();
+    QVERIFY(taskId > 0);
+
+    const QString tasksCsvPath = m_tempDir->filePath(QStringLiteral("escaped-tasks.csv"));
+    QVERIFY(ExportService::instance()->exportTasks(QDate(2026, 6, 1), QDate(2026, 6, 30), tasksCsvPath));
+    const QString tasksCsv = readUtf8File(tasksCsvPath);
+    QVERIFY2(tasksCsv.contains(QStringLiteral("\"2026-06-10,SPLIT_DATE\"")), qPrintable(tasksCsv));
+    QVERIFY2(tasksCsv.contains(QStringLiteral("\"'=1+1,SPLIT_CREATED\"")), qPrintable(tasksCsv));
+
+    // f.task_id 存动态类型公式字符串，f.start_time 带尾随换行（SQLite date() 放行但未转义会断行注入），f.end_time 为公式串
+    QSqlQuery insertSession(db);
+    QVERIFY(insertSession.exec(QStringLiteral(
+        "INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode, pomodoro_completed) "
+        "VALUES ('=2+2,SPLIT_TASK', '2026-06-10 09:00:00\n', '=3+3,SPLIT_END', 1500, 1, 1)")));
+    const int sessionId = insertSession.lastInsertId().toInt();
+    QVERIFY(sessionId > 0);
+
+    const QString sessionsCsvPath = m_tempDir->filePath(QStringLiteral("escaped-sessions.csv"));
+    QVERIFY(ExportService::instance()->exportFocusSessions(QDate(2026, 6, 1), QDate(2026, 6, 30), sessionsCsvPath));
+    const QString sessionsCsv = readUtf8File(sessionsCsvPath);
+    QVERIFY2(sessionsCsv.contains(QStringLiteral("\"'=2+2,SPLIT_TASK\"")), qPrintable(sessionsCsv));
+    QVERIFY2(sessionsCsv.contains(QStringLiteral("\"2026-06-10 09:00:00\n\"")), qPrintable(sessionsCsv));
+    QVERIFY2(sessionsCsv.contains(QStringLiteral("\"'=3+3,SPLIT_END\"")), qPrintable(sessionsCsv));
+}
+
+void ServiceTests::dstFallBackFocusSessionRemainsEditableInFocusHistory()
+{
+    // 产品保证：跨秋季夏令时回拨结算的专注记录在 FocusHistoryService 中修改关联任务时不被误判为「开始或结束时间无效」。
+    const QByteArray oldTz = qgetenv("TZ");
+    const auto restoreTz = qScopeGuard([oldTz] {
+        if (oldTz.isNull()) {
+            qunsetenv("TZ");
+        } else {
+            qputenv("TZ", oldTz);
+        }
+        tzset();
+    });
+    qputenv("TZ", "America/New_York");
+    tzset();
+
+    const QTimeZone ny("America/New_York");
+    QVERIFY(ny.isValid());
+    const QDateTime utcStart(QDate(2026, 11, 1), QTime(5, 30, 0), QTimeZone::UTC);
+    const QDateTime localStart = utcStart.toTimeZone(ny).toLocalTime();
+
+    const int firstTask = insertTaskRow(QStringLiteral("原任务"), QDate(2026, 11, 1));
+    const int secondTask = insertTaskRow(QStringLiteral("改挂目标任务"), QDate(2026, 11, 1));
+    QVERIFY(firstTask > 0 && secondTask > 0);
+
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(firstTask, QStringLiteral("原任务")));
+    const int sessionId = timer->m_sessionId;
+    QSqlQuery fixStart(DatabaseManager::instance()->database());
+    fixStart.prepare(QStringLiteral("UPDATE focus_sessions SET start_time = :s WHERE id = :id"));
+    fixStart.bindValue(QStringLiteral(":s"), localStart.toString(Qt::ISODate));
+    fixStart.bindValue(QStringLiteral(":id"), sessionId);
+    QVERIFY(fixStart.exec());
+    timer->m_startTime = localStart;
+    setFocusElapsedSeconds(timer, 45 * 60);
+    QVERIFY(timer->stopFreeFocusWithDuration(45 * 60));
+
+    QSignalSpy failedSpy(FocusHistoryService::instance(), &FocusHistoryService::operationFailed);
+    QVERIFY(FocusHistoryService::instance()->updateSessionFields(
+        sessionId, {{QStringLiteral("taskId"), secondTask}}));
+    QCOMPARE(failedSpy.count(), 0);
+}
+
+void ServiceTests::categoryUpdateChangesWritesOnlyChangedColumns()
+{
+    // 产品保证：科目字段级局部更新仅写入实际变化的列（只改色不触碰 name 列），无实际变更不写库不发信号，拒绝未知键与非法类型。
+    auto* categories = CategoryManager::instance();
+    const int id = categories->addCategory(QStringLiteral("原始科目名"), QStringLiteral("#112233"));
+    QVERIFY(id > 0);
+
+    // 1. 未知键与非文本值被拒绝。
+    QVERIFY(!categories->updateCategoryChanges(id, {{QStringLiteral("unknown"), QStringLiteral("x")}}));
+    QVERIFY(!categories->updateCategoryChanges(id, {{QStringLiteral("name"), 123}}));
+    QVERIFY(!categories->updateCategoryChanges(id, {{QStringLiteral("color"), 456}}));
+
+    // 2. 空变更或传入与现值完全相同的值：不写库（SQLite total_changes 不变）、不发 categoriesChanged。
+    QSqlQuery changesQuery(DatabaseManager::instance()->database());
+    auto readTotalChanges = [&changesQuery]() -> qlonglong {
+        if (!changesQuery.exec(QStringLiteral("SELECT total_changes()")) || !changesQuery.next()) return -1;
+        const qlonglong n = changesQuery.value(0).toLongLong();
+        changesQuery.finish();
+        return n;
+    };
+    QSignalSpy changedSpy(categories, &CategoryManager::categoriesChanged);
+    const qlonglong beforeNoop = readTotalChanges();
+    QVERIFY(categories->updateCategoryChanges(id, {}));
+    QVERIFY(categories->updateCategoryChanges(
+        id, {{QStringLiteral("name"), QStringLiteral("原始科目名")}, {QStringLiteral("color"), QStringLiteral("#112233")}}));
+    QCOMPARE(changedSpy.count(), 0);
+    QCOMPARE(readTotalChanges(), beforeNoop);
+
+    // 3. 模拟远端同步刚改了名称，本机只提交 color 变更：仅更新 color，不回写旧名也不触发 name 重名校验。
+    QSqlQuery remoteRename(DatabaseManager::instance()->database());
+    QVERIFY(remoteRename.exec(QStringLiteral("UPDATE categories SET name = '远端最新名' WHERE id = %1").arg(id)));
+    remoteRename.finish();
+    QVERIFY(categories->updateCategoryChanges(id, {{QStringLiteral("color"), QStringLiteral("#445566")}}));
+    QCOMPARE(changedSpy.count(), 1);
+    const QVariantMap afterColor = categories->getCategoryById(id);
+    QCOMPARE(afterColor.value(QStringLiteral("name")).toString(), QStringLiteral("远端最新名"));
+    QCOMPARE(afterColor.value(QStringLiteral("color")).toString(), QStringLiteral("#445566"));
+
+    // 4. 仅提交 name 变更：保留新颜色。
+    QVERIFY(categories->updateCategoryChanges(id, {{QStringLiteral("name"), QStringLiteral("本机新名称")}}));
+    const QVariantMap afterName = categories->getCategoryById(id);
+    QCOMPARE(afterName.value(QStringLiteral("name")).toString(), QStringLiteral("本机新名称"));
+    QCOMPARE(afterName.value(QStringLiteral("color")).toString(), QStringLiteral("#445566"));
+}
+
+void ServiceTests::exportRejectsProtectedRuntimePathsAndSetsBusyFalseBeforeSignal()
+{
+    // 产品保证：CSV 导出拒绝覆盖主库与同步恢复日志等受保护路径；异步完成时先复位 busy 再发 exportCompleted；运行期阻塞回调拦截同步与异步导出。
+    auto* exporter = ExportService::instance();
+    const auto resetProvider = qScopeGuard([exporter] {
+        exporter->setOperationBlockedProvider({});
+    });
+    const QDate day(2026, 6, 10);
+    QVERIFY(insertTaskRow(QStringLiteral("受保护路径测试任务"), day) > 0);
+
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString restoreJournal = dbPath + QStringLiteral(".sync-restore.json");
+    const QByteArray originalJournal("{\"phase\":\"prepared\"}");
+    {
+        QFile f(restoreJournal);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        QCOMPARE(f.write(originalJournal), qint64(originalJournal.size()));
+    }
+    const auto removeJournal = qScopeGuard([restoreJournal] { QFile::remove(restoreJournal); });
+
+    QVERIFY(!exporter->exportTasks(day, day, dbPath));
+    QVERIFY(!exporter->exportTasks(day, day, restoreJournal));
+    QVERIFY(!exporter->exportFocusSessions(day, day, restoreJournal));
+    {
+        QFile f(restoreJournal);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), originalJournal);
+    }
+
+    // 注入运行期阻塞时同步与异步导出均被拒绝。
+    exporter->setOperationBlockedProvider([] { return true; });
+    QSignalSpy blockedSpy(exporter, &ExportService::exportCompleted);
+    const QString blockedPath = m_tempDir->filePath(QStringLiteral("blocked.csv"));
+    QVERIFY(!exporter->exportTasks(day, day, blockedPath));
+    exporter->requestExportTasks(day, day, blockedPath);
+    QCOMPARE(blockedSpy.count(), 2);
+    QVERIFY(!blockedSpy.at(0).at(0).toBool());
+    QVERIFY(!blockedSpy.at(1).at(0).toBool());
+    QVERIFY(!QFileInfo::exists(blockedPath));
+    exporter->setOperationBlockedProvider({});
+
+    // 异步完成回调到达瞬间 busy 必须已为 false，允许立刻发起下一次导出。
+    const QString firstCsv = m_tempDir->filePath(QStringLiteral("async-first.csv"));
+    const QString secondCsv = m_tempDir->filePath(QStringLiteral("async-second.csv"));
+    bool busyInsideCallback = true;
+    int completions = 0;
+    const auto conn = connect(exporter, &ExportService::exportCompleted, this,
+                              [&](bool ok, const QString&) {
+        QVERIFY(ok);
+        ++completions;
+        if (completions == 1) {
+            busyInsideCallback = exporter->busy();
+            exporter->requestExportTasks(day, day, secondCsv);
+        }
+    });
+    const auto disconnectConn = qScopeGuard([&] {
+        QObject::disconnect(conn);
+        while (exporter->busy()) {
+            QCoreApplication::processEvents();
+        }
+    });
+    exporter->requestExportTasks(day, day, firstCsv);
+    QTRY_COMPARE(completions, 2);
+    QVERIFY(!busyInsideCallback);
+    QVERIFY(!exporter->busy());
+    QVERIFY(QFileInfo::exists(firstCsv));
+    QVERIFY(QFileInfo::exists(secondCsv));
+}
+
+void ServiceTests::appSettingsWriteAndRemoveFailureRollsBackSharedCache()
+{
+    // 产品保证：writeValue 与 removeValue 写盘失败时必须回滚同进程 QSettings 共享缓存，恢复写权限后重试同值可正常落盘。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    AppSettings settings(path);
+    settings.setDayStartHour(4);
+    QCOMPARE(settings.dayStartHour(), 4);
+    QVERIFY(settings.setShortcutOverride(QStringLiteral("focus.toggle"), QStringLiteral("Ctrl+Shift+T")));
+    QVERIFY(settings.hasShortcutOverride(QStringLiteral("focus.toggle")));
+
+    QFileDevice::Permissions filePermissions;
+    QFileDevice::Permissions dirPermissions;
+    QVERIFY(lockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    const auto unlockGuard = qScopeGuard([&] {
+        unlockSettingsForTest(path, dir.path(), filePermissions, dirPermissions);
+    });
+    if (settingsStillWritable(path)) {
+        QSKIP("当前账户可绕过文件权限，无法验证只读设置写盘失败回滚");
+    }
+
+    QSignalSpy writeFailSpy(&settings, &AppSettings::settingsWriteFailed);
+    settings.setDayStartHour(6);
+    QCOMPARE(writeFailSpy.count(), 1);
+    QCOMPARE(settings.dayStartHour(), 4);
+
+    QVERIFY(!settings.clearAllShortcutOverrides());
+    QCOMPARE(writeFailSpy.count(), 2);
+    QVERIFY(settings.hasShortcutOverride(QStringLiteral("focus.toggle")));
+    QCOMPARE(settings.shortcutOverride(QStringLiteral("focus.toggle")), QStringLiteral("Ctrl+Shift+T"));
+
+    QVERIFY(unlockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    // 缓存已正确回滚，恢复写权限后再次写入 6 不会被同值早退吞掉。
+    settings.setDayStartHour(6);
+    QCOMPARE(settings.dayStartHour(), 6);
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.dayStartHour(), 6);
+}
+
+void ServiceTests::dayStatsIncludesGoalProgressConsistentWithWeeklyReview()
+{
+    // 产品保证：getDayStats 零额外 SQL 返回 goalMinutes 与 goalProgressPercent，与 getWeeklyReview 的 todayGoal 口径严格一致。
+    auto* stats = StatisticsService::instance();
+    const QDate monday(2026, 7, 13);
+    const QDate day(2026, 7, 15);
+    const QString dayIso = day.toString(Qt::ISODate);
+    QVERIFY(insertFocusSessionRowWithMode(-1, day, 2700, 1)); // 45 分钟
+
+    // 未设置目标时 goalMinutes = 0、goalProgressPercent = 0。
+    const QVariantMap noGoal = stats->getDayStats(day);
+    QCOMPARE(noGoal.value(QStringLiteral("totalDuration")).toInt(), 2700);
+    QCOMPARE(noGoal.value(QStringLiteral("goalMinutes")).toInt(), 0);
+    QCOMPARE(noGoal.value(QStringLiteral("goalProgressPercent")).toDouble(), 0.0);
+
+    // 设置 90 分钟目标（完成 50%），核对与周复盘 todayGoal 一致。
+    QVERIFY(AppSettings::instance()->setDailyFocusGoal(dayIso, 90));
+    const QVariantMap halfGoal = stats->getDayStats(day);
+    const QVariantMap review = stats->getWeeklyReview(monday, dayIso);
+    const QVariantMap todayGoal = review.value(QStringLiteral("todayGoal")).toMap();
+    QCOMPARE(halfGoal.value(QStringLiteral("goalMinutes")).toInt(), 90);
+    QVERIFY(qAbs(halfGoal.value(QStringLiteral("goalProgressPercent")).toDouble() - 50.0) < 1e-6);
+    QVERIFY(qAbs(halfGoal.value(QStringLiteral("goalProgressPercent")).toDouble()
+                 - todayGoal.value(QStringLiteral("progressPercent")).toDouble()) < 1e-6);
+
+    // 超额目标（设置 30 分钟目标，完成 150%）。
+    QVERIFY(AppSettings::instance()->setDailyFocusGoal(dayIso, 30));
+    const QVariantMap overGoal = stats->getDayStats(day);
+    QCOMPARE(overGoal.value(QStringLiteral("goalMinutes")).toInt(), 30);
+    QVERIFY(qAbs(overGoal.value(QStringLiteral("goalProgressPercent")).toDouble() - 150.0) < 1e-6);
 }

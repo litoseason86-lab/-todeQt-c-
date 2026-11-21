@@ -4,6 +4,8 @@
 #include <QObject>
 #include <QString>
 
+#include <functional>
+
 class FocusTimer;
 
 // 菜单栏展示状态的完整快照。平台视图只消费这个结构，不自行读取计时器，
@@ -48,6 +50,8 @@ public:
 
     // 视图不转移所有权；设置后立即推送一次当前状态，避免菜单栏首次显示为空。
     void setView(TrayView* view);
+    // 备份或恢复处于临界区时阻塞菜单栏对专注会话的写操作，避免在换库窗口改写计时状态。
+    void setOperationBlockedProvider(std::function<bool()> provider);
     TrayDisplay display() const;
 
     // 菜单动作：既被平台视图点击回调，也可被 QML/测试直接调用。
@@ -70,9 +74,11 @@ private slots:
 
 private:
     static QString formatClock(int seconds);
+    bool isOperationBlocked() const;
 
     FocusTimer* m_timer;
     TrayView* m_view = nullptr;
+    std::function<bool()> m_operationBlockedProvider;
     TrayDisplay m_display;
 };
 

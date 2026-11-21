@@ -244,9 +244,13 @@ bool CountdownService::deleteGoal(int id)
     QString trashError;
     if (!TrashStore::captureCountdownGoal(db, id, &trashError)) {
         db.rollback();
-        emit operationFailed(trashError == TrashStore::kMissingRecord
-                                 ? QStringLiteral("目标不存在")
-                                 : QStringLiteral("删除目标失败: ") + trashError);
+        if (trashError == TrashStore::kMissingRecord) {
+            // 外部同步或恢复已先行删掉该行时立即重载列表与主目标，清掉界面残留的幽灵条目。
+            loadGoals();
+            emit operationFailed(QStringLiteral("目标不存在"));
+        } else {
+            emit operationFailed(QStringLiteral("删除目标失败: ") + trashError);
+        }
         return false;
     }
     QSqlQuery query(db);
@@ -263,6 +267,7 @@ bool CountdownService::deleteGoal(int id)
     if (query.numRowsAffected() == 0) {
         query.finish();
         db.rollback();
+        loadGoals();
         emit operationFailed(QStringLiteral("目标不存在"));
         return false;
     }
@@ -320,6 +325,7 @@ bool CountdownService::reorder(int fromIndex, int toIndex)
         query.bindValue(QStringLiteral(":id"), goal.id());
         if (!query.exec()) {
             const QString errorText = query.lastError().text();
+            query.finish();
             db.rollback();
             emit operationFailed(QStringLiteral("排序失败: ") + errorText);
             m_model->setGoals(originalGoals);
@@ -327,6 +333,7 @@ bool CountdownService::reorder(int fromIndex, int toIndex)
             return false;
         }
         if (query.numRowsAffected() != 1) {
+            query.finish();
             db.rollback();
             emit operationFailed(QStringLiteral("排序失败: 目标数据已变化，请刷新后重试"));
             m_model->setGoals(originalGoals);
@@ -334,6 +341,7 @@ bool CountdownService::reorder(int fromIndex, int toIndex)
             return false;
         }
     }
+    query.finish();
 
     if (!db.commit()) {
         const QString errorText = db.lastError().text();

@@ -10,6 +10,7 @@
 #include <QStandardPaths>
 #include <QTimeZone>
 #include <QUrl>
+#include <QVariant>
 
 #include <memory>
 
@@ -19,6 +20,7 @@
 #include "services/AppSettings.h"
 #include "services/BackupService.h"
 #include "services/CategoryManager.h"
+#include "services/FocusTimer.h"
 #include "services/KnowledgeGapService.h"
 #include "services/LogicalDay.h"
 #include "services/ShortcutRegistry.h"
@@ -153,8 +155,10 @@ int main(int argc, char *argv[])
     McpToolDispatcher mcpDispatcher(TaskManager::instance(), CategoryManager::instance(),
         StatisticsService::instance(), KnowledgeGapService::instance(),
         sharedApp.services().taskInteractionCoordinator(), [&mcpAccess] {
+            const int activeFocusTaskId = FocusTimer::instance()->hasActiveSession()
+                ? FocusTimer::instance()->currentTaskId() : -1;
             return McpToolDispatcher::Context{mcpAccess.sessionId(), QDateTime::currentDateTime(),
-                                              AppSettings::instance()->dayStartHour()};
+                                              AppSettings::instance()->dayStartHour(), activeFocusTaskId};
         });
     QObject::connect(&mcpAccess, &McpAccessController::sessionChanged,
                      &mcpDispatcher, &McpToolDispatcher::resetCreationSession);
@@ -167,7 +171,6 @@ int main(int argc, char *argv[])
     QObject::connect(&mcpAccess, &McpAccessController::copyRequested, &app, [](const QString& text) {
         QGuiApplication::clipboard()->setText(text);
     });
-    mcpAccess.start();
 
     // 设备间同步（050）：Mac 与 iPad 的差别在这里注入，SyncController 与同步核心不做平台判断。
     // Mac 直接读写 iCloud 云盘里固定位置的「番茄Todo同步」，可以新建，常驻菜单栏所以后台照常同步。
@@ -190,6 +193,15 @@ int main(int argc, char *argv[])
     syncPlatform.engine.mayCreateFolder = true;
     syncPlatform.engine.runInBackground = true;
     sharedApp.setUpSync(std::move(syncPlatform));
+    if (auto* syncController = sharedApp.services().syncController()) {
+        // 恢复日志处于未决或损坏状态期间，外部 AI 也必须按备份恢复忙态一起阻断；远端快照替换后轮换写入会话。
+        mcpAccess.setSyncRestoreUncertain(syncController->isRestoreStateUncertain());
+        QObject::connect(syncController, &SyncController::statusChanged, &mcpAccess, [&mcpAccess, syncController] {
+            mcpAccess.setSyncRestoreUncertain(syncController->isRestoreStateUncertain());
+        });
+        QObject::connect(syncController, &SyncController::snapshotReplaced,
+                         &mcpAccess, &McpAccessController::rotateSession);
+    }
 
     // 关闭主窗口时隐藏到菜单栏而不退出：菜单栏计时器让应用在无可见窗口时仍需存活。
     app.setQuitOnLastWindowClosed(false);
@@ -214,15 +226,24 @@ int main(int argc, char *argv[])
 
     sharedApp.startDay();
     sharedApp.createInteractionServices();
+    if (auto* syncController = sharedApp.services().syncController()) {
+        mcpAccess.setSyncRestoreUncertain(syncController->isRestoreStateUncertain());
+    }
+    // 等同步控制器完成启动核对与每日初始化后再启动 MCP 本地监听，避免恢复未决态前的装配顺序脆弱性。
+    mcpAccess.start();
 
     QQmlApplicationEngine engine;
     sharedApp.connectClipboard();
 
     // 草稿先同步保存，再结束计时、写同步、关库。
     sharedApp.lifecycle().setFlushDraftsHook([&engine] {
-        if (!engine.rootObjects().isEmpty()) {
-            QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits", Qt::DirectConnection);
+        if (engine.rootObjects().isEmpty()) {
+            return true;
         }
+        QVariant saved;
+        return QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits",
+                                         Qt::DirectConnection, Q_RETURN_ARG(QVariant, saved))
+            && saved.toBool();
     });
 
     // Mac 退出总期限从 shutdown 前开始，覆盖所有有序步骤及事件循环返回后的显式收尾。

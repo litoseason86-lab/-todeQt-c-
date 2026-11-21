@@ -307,20 +307,32 @@ void CoreLogicTests::futureSchemaIsRejectedBeforeAnyMutation()
     QSqlDatabase::removeDatabase(QStringLiteral("CoreLogicFutureSchema"));
 
     QVERIFY(!DatabaseManager::instance()->initialize(futurePath));
+    QVERIFY(!DatabaseManager::instance()->isOpen());
 
-    // 旧程序遇到未来 schema 时只能拒绝打开，不能先创建自己的表再报不兼容。
-    QSqlQuery tableQuery(DatabaseManager::instance()->database());
-    tableQuery.prepare(QStringLiteral(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = :name"));
-    tableQuery.bindValue(QStringLiteral(":name"), QStringLiteral("active_focus_state"));
-    QVERIFY(tableQuery.exec());
-    QVERIFY(tableQuery.next());
-    QCOMPARE(tableQuery.value(0).toInt(), 0);
+    // 旧程序遇到未来 schema 时只能拒绝打开并关闭连接，不能先创建自己的表再报不兼容。
+    {
+        const QString inspectConnection = QStringLiteral("CoreLogicFutureSchemaInspect");
+        QSqlDatabase database =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), inspectConnection);
+        database.setDatabaseName(futurePath);
+        database.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
+        QVERIFY(database.open());
 
-    QSqlQuery versionQuery(DatabaseManager::instance()->database());
-    QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
-    QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion + 1);
+        QSqlQuery tableQuery(database);
+        tableQuery.prepare(QStringLiteral(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = :name"));
+        tableQuery.bindValue(QStringLiteral(":name"), QStringLiteral("active_focus_state"));
+        QVERIFY(tableQuery.exec());
+        QVERIFY(tableQuery.next());
+        QCOMPARE(tableQuery.value(0).toInt(), 0);
+
+        QSqlQuery versionQuery(database);
+        QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
+        QVERIFY(versionQuery.next());
+        QCOMPARE(versionQuery.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion + 1);
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("CoreLogicFutureSchemaInspect"));
 }
 
 void CoreLogicTests::migrationBackupsArePrunedToThree()

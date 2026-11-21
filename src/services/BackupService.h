@@ -66,6 +66,9 @@ public:
     // 在 emit restoreStarted、关库或派发任务前调用；返回 false 时中止恢复。
     using RestorePreparationCallback = std::function<bool(QString* error)>;
     void setRestorePreparationCallback(RestorePreparationCallback callback);
+    // 平台无关后台续命回调（iOS 入口注入 beginIosBackgroundTask，返回结束句柄），用于恢复安装与回滚临界区。
+    using BackgroundTaskStarter = std::function<std::function<void()>()>;
+    void setBackgroundTaskStarter(BackgroundTaskStarter starter);
 
     // QML 使用异步入口，避免完整性检查、VACUUM、复制和恢复阻塞 GUI 事件循环。
     Q_INVOKABLE void requestBackup(const QString& destPath);
@@ -156,12 +159,15 @@ private:
     void trackWorker(QFutureWatcherBase* watcher);
     void retireWorker(QFutureWatcherBase* watcher);
     bool admitFileOperation() const;
+    void beginCriticalBackgroundTask();
+    void endCriticalBackgroundTask();
 
     QString m_settingsFilePath;   // 空 = 默认 QSettings（生产）
     QString m_backupsDir;         // 空 = AppDataLocation/backups
     mutable QString m_lastError;
     bool m_busy = false;
     bool m_operationBlocksUi = false;
+    bool m_rollingBackRestore = false;
     QString m_operationText;
     // QtConcurrent 任务不归 QObject 生命周期管理；必须持有 watcher，才能在事件循环停止前等待。
     QList<QFutureWatcherBase*> m_activeWorkers;
@@ -174,6 +180,8 @@ private:
     // 仅供测试在“校验完成、安装尚未开始”的窗口替换外部源路径，锁定恢复必须使用受控副本。
     std::function<void()> m_afterRestoreValidationHookForTest;
     RestorePreparationCallback m_restorePreparationCallback;
+    BackgroundTaskStarter m_backgroundTaskStarter;
+    std::function<void()> m_activeBackgroundTaskEnd;
     std::shared_ptr<BackupExecutor> m_executor;
     mutable bool m_staleFilesCleaned = false;
 };

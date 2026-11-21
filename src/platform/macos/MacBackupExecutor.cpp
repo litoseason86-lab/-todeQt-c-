@@ -37,8 +37,20 @@ struct Pipe
     void closeWrite() { if (ends[1] >= 0) { ::close(ends[1]); ends[1] = -1; } }
     bool open()
     {
-        return ::pipe(ends) == 0 && ::fcntl(ends[0], F_SETFD, FD_CLOEXEC) == 0
-            && ::fcntl(ends[1], F_SETFD, FD_CLOEXEC) == 0;
+        if (::pipe(ends) != 0) return false;
+        for (int& descriptor : ends) {
+            if (descriptor <= STDERR_FILENO) {
+                // 宿主关闭标准流时 pipe() 会复用 0–2；提前搬移到 >2 的高号段，
+                // 避免 dup2(src, 0/1/2) 互相覆盖或因 macOS 同号 dup2 在 POSIX_SPAWN_CLOEXEC_DEFAULT 下关闭。
+                const int moved = ::fcntl(descriptor, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+                if (moved < 0) return false;
+                ::close(descriptor);
+                descriptor = moved;
+            } else if (::fcntl(descriptor, F_SETFD, FD_CLOEXEC) != 0) {
+                return false;
+            }
+        }
+        return true;
     }
 };
 
@@ -179,17 +191,11 @@ BackupExecutorProtocol::Result MacBackupExecutor::execute(BackupExecutorProtocol
     const auto destroyAttributes = qScopeGuard([&] { ::posix_spawnattr_destroy(&attributes); });
     const auto addAction = [&](int error) { if (spawnError == 0) spawnError = error; };
     addAction(::posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT));
-    // macOS 27.0.1 实测：stdin 管道恰为 0 时，同号 dup2 仍可能在 exec 时因 FD_CLOEXEC 关闭。
-    // 显式继承该编号，保证标准流已关闭的宿主也能把请求管道传给执行器。
-    if (standardInput.ends[0] == STDIN_FILENO) {
-        addAction(::posix_spawn_file_actions_addinherit_np(&actions, STDIN_FILENO));
-    } else {
-        addAction(::posix_spawn_file_actions_adddup2(&actions, standardInput.ends[0], STDIN_FILENO));
-    }
+    // Pipe::open() 已将所有管道端搬移到 >2 的号段，dup2 到 0/1/2 不会同号冲突或互相覆写。
+    addAction(::posix_spawn_file_actions_adddup2(&actions, standardInput.ends[0], STDIN_FILENO));
     addAction(::posix_spawn_file_actions_adddup2(&actions, standardOutput.ends[1], STDOUT_FILENO));
     addAction(::posix_spawn_file_actions_adddup2(&actions, standardError.ends[1], STDERR_FILENO));
     for (const auto* pipe : {&standardInput, &standardOutput, &standardError}) {
-        // 宿主标准流关闭时 pipe() 会复用 0–2；dup2 后这些编号已经是子进程标准流，不能再关闭。
         for (const int descriptor : pipe->ends) {
             if (descriptor > STDERR_FILENO) addAction(::posix_spawn_file_actions_addclose(&actions, descriptor));
         }

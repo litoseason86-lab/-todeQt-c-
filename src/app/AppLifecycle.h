@@ -26,7 +26,8 @@ public:
     void setPreShutdownHook(std::function<void()> hook);
 
     // 设置界面草稿持久化钩子（QML 根对象的 flushMemoEdits 或 iPad 原生的 flushNativeEdits）
-    void setFlushDraftsHook(std::function<void()> hook);
+    void setFlushDraftsHook(std::function<bool()> hook);
+    bool flushDrafts();
 
     // 装配层设置由 SharedApp 持有的业务对象指针（弱引用，不接管生命周期）
     void setPendingDeletion(PendingDeletion* pendingDeletion);
@@ -49,7 +50,7 @@ private:
     std::vector<ShutdownStep> shutdownSteps() const;
 
     std::function<void()> m_preShutdownHook;
-    std::function<void()> m_flushDraftsHook;
+    std::function<bool()> m_flushDraftsHook;
     PendingDeletion* m_pendingDeletion = nullptr;
     SyncController* m_syncController = nullptr;
 };

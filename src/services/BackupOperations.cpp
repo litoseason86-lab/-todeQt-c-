@@ -463,6 +463,10 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
                 idIsPrimaryKey = true;
             }
         }
+        if (columns.lastError().isValid()) {
+            *reason = QStringLiteral("读取备份表结构失败：%1").arg(contract.name);
+            return false;
+        }
 
         for (const QString& requiredColumn : contract.columns) {
             if (!names.contains(requiredColumn)) {
@@ -512,6 +516,10 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
                 categoryForeignKeyFound = true;
                 break;
             }
+        }
+        if (foreignKey.lastError().isValid()) {
+            *reason = QStringLiteral("读取课表外键失败");
+            return false;
         }
         if (!categoryForeignKeyFound) {
             *reason = QStringLiteral("备份课表外键不完整");
@@ -741,6 +749,23 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
                 ok = false;
             }
 
+            if (ok) {
+                // 源库若异常残留旧备份表行，VACUUM INTO 会原样复制；先清空再写入本次元数据与偏好。
+                ok = exec(QStringLiteral("DELETE FROM backup_meta"),
+                          QStringLiteral("清空旧备份元数据失败"))
+                    && exec(QStringLiteral("DELETE FROM backup_settings"),
+                            QStringLiteral("清空旧偏好备份失败"));
+            }
+            if (ok && tableExists(database, QStringLiteral("sync_runtime"))) {
+                // 快照文件不携带运行期同步压制标记或测试时钟，避免备份把瞬态标记固化到归档中。
+                ok = exec(QStringLiteral("DELETE FROM sync_runtime WHERE singleton_id <> 1"),
+                          QStringLiteral("清理备份同步运行标记失败"))
+                    && exec(QStringLiteral(
+                                "UPDATE sync_runtime SET applying = 0, delete_kind = NULL, test_now_ms = NULL "
+                                "WHERE singleton_id = 1"),
+                            QStringLiteral("复位备份同步运行标记失败"));
+            }
+
             auto putMeta = [&database, &result](const QString& key, const QString& value) {
                 QSqlQuery insert(database);
                 insert.prepare(QStringLiteral(
@@ -918,6 +943,52 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
                            captured.values}, control);
 }
 
+bool checkProtectedOutputPath(const QString& destinationPath,
+                              const QString& sourceDatabasePath,
+                              const QString& effectiveSettingsPath,
+                              const QString& targetLabel,
+                              QString* reason)
+{
+    const auto reject = [reason](const QString& message) {
+        if (reason) {
+            *reason = message;
+        }
+        return false;
+    };
+    if (destinationPath.trimmed().isEmpty()) {
+        return reject(targetLabel + QStringLiteral("路径为空"));
+    }
+    if (!sourceDatabasePath.isEmpty() && pathsMatch(destinationPath, sourceDatabasePath)) {
+        return reject(targetLabel + QStringLiteral("不能覆盖正在使用的数据库"));
+    }
+
+    // SQLite 的 WAL/SHM/journal、同步独立状态与 QSettings 锁文件都可能在运行时被写入；
+    // 即使目标文件还不存在，也必须按规范化路径拒绝，避免原子替换破坏当前进程的数据或偏好。
+    QStringList protectedRuntimeFiles;
+    if (!sourceDatabasePath.isEmpty()) {
+        protectedRuntimeFiles = {
+            sourceDatabasePath + QStringLiteral("-wal"),
+            sourceDatabasePath + QStringLiteral("-shm"),
+            sourceDatabasePath + QStringLiteral("-journal"),
+            // 与 SyncController 的独立关闭记录及恢复意图日志同源；不能被备份或导出覆盖。
+            sourceDatabasePath + QStringLiteral(".sync-disabled"),
+            sourceDatabasePath + QStringLiteral(".sync-restore.json")
+        };
+    }
+    if (!effectiveSettingsPath.isEmpty()) {
+        protectedRuntimeFiles.append(effectiveSettingsPath);
+        protectedRuntimeFiles.append(effectiveSettingsPath + QStringLiteral(".lock"));
+    }
+    for (const QString& protectedPath : protectedRuntimeFiles) {
+        if (pathsMatch(destinationPath, protectedPath)) {
+            return reject(protectedPath == effectiveSettingsPath
+                              ? targetLabel + QStringLiteral("不能覆盖当前设置文件")
+                              : targetLabel + QStringLiteral("不能覆盖运行时受保护文件"));
+        }
+    }
+    return true;
+}
+
 OperationResult createSnapshot(const SnapshotRequest& request, const BackupOperation& operation)
 {
     const auto& sourceDatabasePath = request.sourceDatabasePath;
@@ -934,36 +1005,9 @@ OperationResult createSnapshot(const SnapshotRequest& request, const BackupOpera
         result.error = QStringLiteral("数据库路径无效");
         return result;
     }
-    if (destinationPath.trimmed().isEmpty()) {
-        result.error = QStringLiteral("备份目标路径为空");
+    if (!checkProtectedOutputPath(destinationPath, sourceDatabasePath, effectiveSettingsPath,
+                                  QStringLiteral("备份目标"), &result.error)) {
         return result;
-    }
-
-    if (pathsMatch(destinationPath, sourceDatabasePath)) {
-        result.error = QStringLiteral("备份目标不能覆盖正在使用的数据库");
-        return result;
-    }
-
-    // SQLite 的 WAL/SHM/journal 和 QSettings 锁文件都可能在运行时被写入；即使目标文件
-    // 还不存在，也必须按规范化路径拒绝，避免快照的原子替换破坏当前进程的数据或偏好。
-    QStringList protectedRuntimeFiles = {
-        sourceDatabasePath + QStringLiteral("-wal"),
-        sourceDatabasePath + QStringLiteral("-shm"),
-        sourceDatabasePath + QStringLiteral("-journal"),
-        // 与SyncController的独立关闭记录同源；它不能被手动备份覆盖成SQLite文件。
-        sourceDatabasePath + QStringLiteral(".sync-disabled")
-    };
-    if (!effectiveSettingsPath.isEmpty()) {
-        protectedRuntimeFiles.append(effectiveSettingsPath);
-        protectedRuntimeFiles.append(effectiveSettingsPath + QStringLiteral(".lock"));
-    }
-    for (const QString& protectedPath : protectedRuntimeFiles) {
-        if (pathsMatch(destinationPath, protectedPath)) {
-            result.error = protectedPath == effectiveSettingsPath
-                ? QStringLiteral("备份目标不能覆盖当前设置文件")
-                : QStringLiteral("备份目标不能覆盖运行时受保护文件");
-            return result;
-        }
     }
 
     const QFileInfo destinationInfo(destinationPath);
@@ -1033,17 +1077,14 @@ OperationResult createSnapshot(const SnapshotRequest& request, const BackupOpera
         return result;
     }
 
-    // 发布与恢复采用同一可恢复性门禁；否则超限的本地数据会产生“成功但无法恢复”的备份。
+    // 发布与恢复采用同一可恢复性门禁（inspectBackup 内部已包含 readEmbeddedSettings 解码校验），
+    // 既杜绝“成功但无法恢复”的备份，也避免重复打开临时库二次解析偏好表。
     const QVariantMap inspection = inspectBackup(temporaryPath, currentSchemaVersion, control);
     if (!inspection.value(QStringLiteral("valid")).toBool()) {
         result.success = false;
         result.error = inspection.value(QStringLiteral("reason")).toString();
         return result;
     }
-
-    // 显式保留发布前的偏好读取门禁，直接传入序列化字节的执行器也不能发布不可恢复文件。
-    const auto embedded = readEmbeddedSettings(temporaryPath, control);
-    if (!embedded.success) return {false, embedded.error};
 
     // 不发布本版本会拒绝恢复的超限文件；失败保留原目标，临时快照在下面统一移除。
     result = atomicCopy(temporaryPath, destinationPath, kMaxBackupFileBytes, control);
@@ -1110,6 +1151,9 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion, c
                 } else {
                     while (meta.next()) {
                         metadata.insert(meta.value(0).toString(), meta.value(1).toString());
+                    }
+                    if (meta.lastError().isValid()) {
+                        reason = QStringLiteral("读取备份格式信息失败");
                     }
                 }
             }
@@ -1196,6 +1240,9 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion, c
                                                     "出于安全考虑拒绝恢复")
                                          .arg(type, name);
                         }
+                    }
+                    if (reason.isEmpty() && objects.lastError().isValid()) {
+                        reason = QStringLiteral("读取备份结构失败");
                     }
                 }
             }

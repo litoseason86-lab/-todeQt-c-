@@ -195,6 +195,108 @@ bool CategoryManager::updateCategory(int id, const QString& name, const QString&
     return true;
 }
 
+bool CategoryManager::updateCategoryChanges(int id, const QVariantMap& changes)
+{
+    const QString nameKey = QStringLiteral("name");
+    const QString colorKey = QStringLiteral("color");
+    for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
+        if (it.key() != nameKey && it.key() != colorKey) {
+            qWarning() << "Failed to update category: unknown field" << it.key();
+            reportFailure(QStringLiteral("修改科目失败：未知字段 %1").arg(it.key()));
+            return false;
+        }
+    }
+    if (changes.contains(nameKey) && changes.value(nameKey).typeId() != QMetaType::QString) {
+        qWarning() << "Failed to update category: name must be text";
+        reportFailure(QStringLiteral("修改科目失败：名称必须是文本"));
+        return false;
+    }
+    if (changes.contains(colorKey) && changes.value(colorKey).typeId() != QMetaType::QString) {
+        qWarning() << "Failed to update category: color must be text";
+        reportFailure(QStringLiteral("修改科目失败：颜色必须是文本"));
+        return false;
+    }
+
+    const QVariantMap existing = categoryForAction(id, QStringLiteral("修改科目"));
+    if (existing.isEmpty()) {
+        qWarning() << "Failed to update category: category not found" << id;
+        return false;
+    }
+    if (changes.isEmpty()) {
+        return true;
+    }
+
+    const QString currentName = existing.value(QStringLiteral("name")).toString();
+    const QString currentColor = existing.value(QStringLiteral("color")).toString();
+
+    QStringList setClauses;
+    QString normalizedName;
+    bool updateName = false;
+    if (changes.contains(nameKey)) {
+        normalizedName = changes.value(nameKey).toString().trimmed();
+        if (normalizedName.isEmpty()) {
+            qWarning() << "Failed to update category: name is empty";
+            reportFailure(QStringLiteral("修改科目失败：名称不能为空"));
+            return false;
+        }
+        // 仅当变更实际修改了名称时才做重名校验并拼入 SQL，避免仅改色或提交原名时触碰 name 列。
+        if (normalizedName != currentName) {
+            if (categoryNameExists(normalizedName, id)) {
+                qWarning() << "Failed to update category: name already exists" << normalizedName;
+                reportFailure(QStringLiteral("修改科目失败：名称已存在"));
+                return false;
+            }
+            updateName = true;
+            setClauses.append(QStringLiteral("name = :name"));
+        }
+    }
+
+    QString normalizedColor;
+    bool updateColor = false;
+    if (changes.contains(colorKey)) {
+        normalizedColor = changes.value(colorKey).toString().trimmed();
+        if (!isValidColor(normalizedColor)) {
+            qWarning() << "Failed to update category: invalid color" << normalizedColor;
+            reportFailure(QStringLiteral("修改科目失败：颜色无效"));
+            return false;
+        }
+        if (normalizedColor != currentColor) {
+            updateColor = true;
+            setClauses.append(QStringLiteral("color = :color"));
+        }
+    }
+
+    // 传入字段与库内现值无实际差异：不写库、不触发列级同步触发器、不发无意义刷新信号。
+    if (setClauses.isEmpty()) {
+        return true;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("UPDATE categories SET %1 WHERE id = :id").arg(setClauses.join(QStringLiteral(", "))));
+    if (updateName) {
+        query.bindValue(QStringLiteral(":name"), normalizedName);
+    }
+    if (updateColor) {
+        query.bindValue(QStringLiteral(":color"), normalizedColor);
+    }
+    query.bindValue(QStringLiteral(":id"), id);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to update category:" << query.lastError().text();
+        reportFailure(QStringLiteral("修改科目失败：数据库写入失败：%1").arg(query.lastError().text()));
+        return false;
+    }
+    if (query.numRowsAffected() == 0) {
+        qWarning() << "Failed to update category: no rows changed" << id;
+        reportFailure(QStringLiteral("修改科目失败：科目不存在或未修改"));
+        return false;
+    }
+
+    emit categoriesChanged();
+    return true;
+}
+
 bool CategoryManager::deleteCategory(int id)
 {
     const QVariantMap existing = categoryForAction(id, QStringLiteral("删除科目"));
@@ -233,29 +335,36 @@ bool CategoryManager::deleteCategory(int id)
     detachTasks.bindValue(QStringLiteral(":name"), existing.value(QStringLiteral("name")).toString());
 
     if (!detachTasks.exec()) {
-        qWarning() << "Failed to detach tasks before deleting category:" << detachTasks.lastError().text();
-        reportFailure(QStringLiteral("删除科目失败：解除任务关联失败：%1").arg(detachTasks.lastError().text()));
+        const QString errorText = detachTasks.lastError().text();
+        qWarning() << "Failed to detach tasks before deleting category:" << errorText;
+        detachTasks.finish();
         db.rollback();
+        reportFailure(QStringLiteral("删除科目失败：解除任务关联失败：%1").arg(errorText));
         return false;
     }
+    detachTasks.finish();
 
     QSqlQuery deleteQuery(db);
     deleteQuery.prepare(QStringLiteral("DELETE FROM categories WHERE id = :id AND is_preset = 0"));
     deleteQuery.bindValue(QStringLiteral(":id"), id);
 
     if (!deleteQuery.exec()) {
-        qWarning() << "Failed to delete category:" << deleteQuery.lastError().text();
-        reportFailure(QStringLiteral("删除科目失败：数据库写入失败：%1").arg(deleteQuery.lastError().text()));
+        const QString errorText = deleteQuery.lastError().text();
+        qWarning() << "Failed to delete category:" << errorText;
+        deleteQuery.finish();
         db.rollback();
+        reportFailure(QStringLiteral("删除科目失败：数据库写入失败：%1").arg(errorText));
         return false;
     }
 
     if (deleteQuery.numRowsAffected() == 0) {
         qWarning() << "Failed to delete category: no rows changed" << id;
-        reportFailure(QStringLiteral("删除科目失败：科目不存在或未修改"));
+        deleteQuery.finish();
         db.rollback();
+        reportFailure(QStringLiteral("删除科目失败：科目不存在或未修改"));
         return false;
     }
+    deleteQuery.finish();
 
     if (!db.commit()) {
         qWarning() << "Failed to commit delete category transaction:" << db.lastError().text();

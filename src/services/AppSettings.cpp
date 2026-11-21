@@ -1160,8 +1160,12 @@ bool AppSettings::writeValue(const QString& key, const QVariant& value)
         recreateSettingsBackend();
     }
 
-    // changed 信号只能表示“已持久化”。先同步并检查状态，失败时重建后端并丢弃缓存，
-    // 避免界面显示伪成功，也避免错误状态污染后续重试。
+    // QSettings 的文件缓存由同进程多个实例共享：sync 失败后仅重建后端不会撤销未落盘写入，
+    // 必须先把原值或不存在状态还原到缓存，避免界面读到伪成功值或后续重试被同值早退吞掉。
+    const bool hadKey = m_settings->contains(key);
+    const QVariant previousValue = hadKey ? m_settings->value(key) : QVariant();
+
+    // changed 信号只能表示“已持久化”。先同步并检查状态，失败时回滚共享缓存再重建后端。
     m_settings->setValue(key, value);
     m_settings->sync();
     if (m_settings->status() == QSettings::NoError) {
@@ -1170,6 +1174,11 @@ bool AppSettings::writeValue(const QString& key, const QVariant& value)
     }
 
     const QString message = settingsErrorMessage(m_settings->status());
+    if (hadKey) {
+        m_settings->setValue(key, previousValue);
+    } else {
+        m_settings->remove(key);
+    }
     recreateSettingsBackend();
     emit settingsWriteFailed(key, message);
     return false;
@@ -1178,9 +1187,21 @@ bool AppSettings::writeValue(const QString& key, const QVariant& value)
 bool AppSettings::removeValue(const QString& key)
 {
     // 与 writeValue 同一套错误处理：QSettings::status 是粘滞的，先重建再删，
-    // 删完必须 sync 并检查状态，不能把“没写成盘”当成删除成功。
+    // 删完必须 sync 并检查状态，失败时还原被删的单键及整组子键缓存。
     if (m_settings->status() != QSettings::NoError) {
         recreateSettingsBackend();
+    }
+
+    QList<QPair<QString, QVariant>> previousEntries;
+    if (m_settings->contains(key)) {
+        previousEntries.append({key, m_settings->value(key)});
+    }
+    const QString groupPrefix = key + QLatin1Char('/');
+    const QStringList allKeys = m_settings->allKeys();
+    for (const QString& existingKey : allKeys) {
+        if (existingKey.startsWith(groupPrefix)) {
+            previousEntries.append({existingKey, m_settings->value(existingKey)});
+        }
     }
 
     m_settings->remove(key);
@@ -1191,6 +1212,9 @@ bool AppSettings::removeValue(const QString& key)
     }
 
     const QString message = settingsErrorMessage(m_settings->status());
+    for (const auto& entry : previousEntries) {
+        m_settings->setValue(entry.first, entry.second);
+    }
     recreateSettingsBackend();
     emit settingsWriteFailed(key, message);
     return false;

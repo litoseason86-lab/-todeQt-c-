@@ -2,6 +2,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -60,6 +61,12 @@ private slots:
     void unknownKindOrFuturePayloadCannotBeRestored();
     void alreadyGoneItemIsReported();
     void corruptPayloadIsReportedAsCorruptedAndNotAsNeedingUpdate();
+    void emptyObjectOrInvalidVersionPayloadIsReportedAsCorrupted();
+    void restoreRejectsInvalidDomainValuesAcrossKinds();
+    void restoreTaskPreservesLegacyCategoryNameOnlyWithoutCategorySyncId();
+    void restoreMemoSupportsMaxUnicodeCodePointEmojiAndRejectsNullChar();
+    void readItemsDisplaysLegacyCategoryNameAndCachesCategoryResolution();
+    void purgeExpiredRespectsAutoPurgeBlockedProvider();
     void restoreFailsAsAWholeWhenReferenceLookupFails();
     void restoreEmitsRefreshSignalsForWhatChanged();
     void restoringATaskReattachesTheTimerOnlyToItsOwnRunningSession();
@@ -1542,6 +1549,203 @@ void TrashServiceTests::purgeFailureCarriesReasonAndRollsBack()
     QVERIFY2(message.contains(reason), qPrintable(message)); QCOMPARE(changed.count(), 0);
     if (fault != "closed") QCOMPARE(count(fault == "read" ? "SELECT COUNT(*) FROM t33_saved_trash" : "SELECT COUNT(*) FROM trash_items"), 2);
     if (fault == "transaction") QVERIFY(db().rollback());
+}
+
+void TrashServiceTests::emptyObjectOrInvalidVersionPayloadIsReportedAsCorrupted()
+{
+    // 产品保证：已知类型的废纸篓载荷若缺失 v、v 不是严格正整数（如 {}、0、小数、文本），列表与恢复都必须判定为「内容已损坏」而非「需要更新应用」。
+    const QString now = utcText(QDateTime::currentDateTime());
+    const QStringList brokenPayloads = {
+        QStringLiteral("{}"),
+        QStringLiteral("{\"v\":0,\"title\":\"零版本\",\"date\":\"2026-10-03\"}"),
+        QStringLiteral("{\"v\":1.5,\"title\":\"小数版本\",\"date\":\"2026-10-03\"}"),
+        QStringLiteral("{\"v\":\"1\",\"title\":\"文本版本\",\"date\":\"2026-10-03\"}"),
+    };
+    QList<int> ids;
+    for (const QString& payload : brokenPayloads) {
+        const int id = insertTrashRow(QStringLiteral("task"), QString(), QStringLiteral("坏版本项"), payload, now);
+        QVERIFY(id > 0);
+        ids.append(id);
+    }
+    const QVariantMap listed = TrashService::instance()->readItems();
+    QVERIFY(listed.value(QStringLiteral("ok")).toBool());
+    const QVariantList items = listed.value(QStringLiteral("items")).toList();
+    QCOMPARE(items.size(), ids.size());
+    for (const QVariant& itemVar : items) {
+        const QVariantMap item = itemVar.toMap();
+        QVERIFY(!item.value(QStringLiteral("restorable")).toBool());
+        QCOMPARE(item.value(QStringLiteral("blockedReason")).toString(), QStringLiteral("corrupted"));
+    }
+    for (const int id : ids) {
+        const QVariantMap result = TrashService::instance()->restoreItem(id);
+        QVERIFY(!result.value(QStringLiteral("ok")).toBool());
+        QCOMPARE(result.value(QStringLiteral("error")).toString(), QStringLiteral("这一项的内容已损坏，无法恢复"));
+    }
+}
+
+void TrashServiceTests::restoreRejectsInvalidDomainValuesAcrossKinds()
+{
+    // 产品保证：废纸篓恢复必须在落库前拦截违反业务域契约的字段（非法目标日期、紧凑无连字符日期、越界布尔/掩码与小数），绝不写入会阻断备份的坏行。
+    const QString now = utcText(QDateTime::currentDateTime());
+    struct Case {
+        QString kind;
+        QString payload;
+        QString table;
+    };
+    const QList<Case> cases = {
+        {QStringLiteral("countdown_goal"), QStringLiteral("{\"v\":1,\"name\":\"考研\",\"target_date\":\"\"}"), QStringLiteral("countdown_goals")},
+        {QStringLiteral("countdown_goal"), QStringLiteral("{\"v\":1,\"name\":\"考研\",\"target_date\":\"20260203\"}"), QStringLiteral("countdown_goals")},
+        {QStringLiteral("countdown_goal"), QStringLiteral("{\"v\":1,\"name\":\"   \",\"target_date\":\"2026-12-20\"}"), QStringLiteral("countdown_goals")},
+        {QStringLiteral("task"), QStringLiteral("{\"v\":1,\"title\":\"紧凑日期\",\"date\":\"20260203\",\"completed\":0}"), QStringLiteral("tasks")},
+        {QStringLiteral("task"), QStringLiteral("{\"v\":1,\"title\":\"越界完成\",\"date\":\"2026-10-03\",\"completed\":2}"), QStringLiteral("tasks")},
+        {QStringLiteral("routine"), QStringLiteral("{\"v\":1,\"title\":\"小数重复日\",\"active\":1,\"weekdays\":5.5}"), QStringLiteral("routines")},
+        {QStringLiteral("routine"), QStringLiteral("{\"v\":1,\"title\":\"坏生成戳\",\"active\":1,\"weekdays\":127,\"last_generated_date\":\"2026-02-30\"}"), QStringLiteral("routines")},
+        {QStringLiteral("knowledge_gap"), QStringLiteral("{\"v\":1,\"title\":\"坏计划日\",\"due_date\":\"0000-01-01\"}"), QStringLiteral("knowledge_gaps")},
+        {QStringLiteral("focus_session"), QStringLiteral("{\"v\":1,\"start_time\":\"2026-10-03T08:00:00.000\",\"end_time\":\"2026-10-03T08:30:00.000\",\"duration\":-10,\"mode\":1}"), QStringLiteral("focus_sessions")},
+    };
+    for (const Case& c : cases) {
+        const int before = count(QStringLiteral("SELECT COUNT(*) FROM %1").arg(c.table));
+        const int id = insertTrashRow(c.kind, QString(), QStringLiteral("坏载荷"), c.payload, now);
+        QVERIFY(id > 0);
+        const QVariantMap result = TrashService::instance()->restoreItem(id);
+        QVERIFY2(!result.value(QStringLiteral("ok")).toBool(), qPrintable(c.payload));
+        QCOMPARE(result.value(QStringLiteral("error")).toString(), QStringLiteral("这一项的内容已损坏，无法恢复"));
+        QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM %1").arg(c.table)), before);
+        QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE id = %1").arg(id)), 1);
+    }
+}
+
+void TrashServiceTests::restoreTaskPreservesLegacyCategoryNameOnlyWithoutCategorySyncId()
+{
+    // 产品保证：旧版无 category_sync_id 的纯文本科目任务删除再恢复后保留原科目名文本；原本挂有 category_sync_id 但该科目后来被删的任务恢复后归未分类并清空科目名。
+    const int legacyTask = insert(QStringLiteral(
+        "INSERT INTO tasks (title, category, category_id, date, completed, display_order) "
+        "VALUES ('旧纯文本任务', '旧版线性代数', NULL, '2026-10-03', 0, 1)"));
+    QVERIFY(legacyTask > 0);
+    QCOMPARE(value(QStringLiteral("SELECT category FROM tasks WHERE id = %1").arg(legacyTask)).toString(),
+             QStringLiteral("旧版线性代数"));
+    QVERIFY(value(QStringLiteral("SELECT category_id FROM tasks WHERE id = %1").arg(legacyTask)).isNull());
+    QVERIFY(TaskManager::instance()->deleteTask(legacyTask));
+    const int legacyTrashId = lastTrashId();
+    const QJsonObject captured = payloadOfLast();
+    QVERIFY(captured.value(QStringLiteral("category_sync_id")).toString().isEmpty());
+    QCOMPARE(captured.value(QStringLiteral("category_name")).toString(), QStringLiteral("旧版线性代数"));
+
+    const QVariantMap restoredLegacy = TrashService::instance()->restoreItem(legacyTrashId);
+    QVERIFY2(restoredLegacy.value(QStringLiteral("ok")).toBool(),
+             qPrintable(restoredLegacy.value(QStringLiteral("error")).toString()));
+    QVERIFY(value(QStringLiteral("SELECT category_id FROM tasks WHERE title = '旧纯文本任务'")).isNull());
+    QCOMPARE(value(QStringLiteral("SELECT category FROM tasks WHERE title = '旧纯文本任务'")).toString(),
+             QStringLiteral("旧版线性代数"));
+
+    // 对照：原本有 category_sync_id 但科目已被删的任务，恢复时两者都置空。
+    const int doomedCat = insertCategory(QStringLiteral("临时科目"), QStringLiteral("#445566"));
+    const int linkedTask = insertTask(QStringLiteral("已删科目任务"), QStringLiteral("2026-10-03"), 2, doomedCat);
+    QVERIFY(TaskManager::instance()->deleteTask(linkedTask));
+    const int linkedTrashId = lastTrashId();
+    QVERIFY(CategoryManager::instance()->deleteCategory(doomedCat));
+    const QVariantMap restoredLinked = TrashService::instance()->restoreItem(linkedTrashId);
+    QVERIFY2(restoredLinked.value(QStringLiteral("ok")).toBool(),
+             qPrintable(restoredLinked.value(QStringLiteral("error")).toString()));
+    QVERIFY(value(QStringLiteral("SELECT category_id FROM tasks WHERE title = '已删科目任务'")).isNull());
+    QVERIFY(value(QStringLiteral("SELECT category FROM tasks WHERE title = '已删科目任务'")).isNull());
+}
+
+void TrashServiceTests::restoreMemoSupportsMaxUnicodeCodePointEmojiAndRejectsNullChar()
+{
+    // 产品保证：按 Unicode 码点恰好 60 个 Emoji 的合法备忘录删除进废纸篓后仍可完整恢复；含 NUL 字符的损坏载荷必须拒绝。
+    const QString emojiTitle = QString::fromUtf8("🍅").repeated(MemoService::kMaxTitleLength);
+    QCOMPARE(emojiTitle.toUcs4().size(), MemoService::kMaxTitleLength);
+    QCOMPARE(emojiTitle.size(), MemoService::kMaxTitleLength * 2);
+
+    const int memoId = MemoService::instance()->createMemo(emojiTitle, QStringLiteral("正文内容"), 0);
+    QVERIFY(memoId > 0);
+    QVERIFY(MemoService::instance()->deleteMemo(memoId));
+    const int trashId = lastTrashId();
+    QVERIFY(trashId > 0);
+
+    const QVariantMap restored = TrashService::instance()->restoreItem(trashId);
+    QVERIFY2(restored.value(QStringLiteral("ok")).toBool(),
+             qPrintable(restored.value(QStringLiteral("error")).toString()));
+    // TrashServiceTests::value()/count() 会自动为键名补冒号前缀，这里传不带冒号的键名。
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM memos WHERE title = :t"), {{QStringLiteral("t"), emojiTitle}}), 1);
+
+    // 含 NUL 字符的载荷违反 MemoService 文本规则，恢复时必须按内容损坏拒绝。
+    const QString nullPayload = QStringLiteral("{\"v\":1,\"title\":\"坏\\u0000标题\",\"body\":\"ok\"}");
+    const int badTrashId = insertTrashRow(QStringLiteral("memo"), QString(), QStringLiteral("坏备忘"),
+                                          nullPayload, utcText(QDateTime::currentDateTime()));
+    QVERIFY(badTrashId > 0);
+    const QVariantMap badResult = TrashService::instance()->restoreItem(badTrashId);
+    QVERIFY(!badResult.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(badResult.value(QStringLiteral("error")).toString(), QStringLiteral("这一项的内容已损坏，无法恢复"));
+}
+
+void TrashServiceTests::readItemsDisplaysLegacyCategoryNameAndCachesCategoryResolution()
+{
+    // 产品保证：废纸篓列表对旧版无 category_sync_id 的任务回退展示 category_name，对多条同科目项经缓存解析一致的当前科目名与颜色。
+    const int legacyTask = insert(QStringLiteral(
+        "INSERT INTO tasks (title, category, category_id, date, completed, display_order) "
+        "VALUES ('列表旧文本任务', '旧版物理', NULL, '2026-10-03', 0, 1)"));
+    QVERIFY(legacyTask > 0);
+    QVERIFY(TaskManager::instance()->deleteTask(legacyTask));
+
+    const int sharedCat = insertCategory(QStringLiteral("高等数学"), QStringLiteral("#225588"));
+    QVERIFY(sharedCat > 0);
+    const int t1 = insertTask(QStringLiteral("同科任务A"), QStringLiteral("2026-10-03"), 2, sharedCat);
+    const int t2 = insertTask(QStringLiteral("同科任务B"), QStringLiteral("2026-10-03"), 3, sharedCat);
+    QVERIFY(TaskManager::instance()->deleteTask(t1));
+    QVERIFY(TaskManager::instance()->deleteTask(t2));
+
+    const QVariantMap listed = TrashService::instance()->readItems();
+    QVERIFY(listed.value(QStringLiteral("ok")).toBool());
+    const QVariantList items = listed.value(QStringLiteral("items")).toList();
+    QCOMPARE(items.size(), 3);
+
+    int matchedShared = 0;
+    bool matchedLegacy = false;
+    for (const QVariant& itemVar : items) {
+        const QVariantMap item = itemVar.toMap();
+        const QString title = item.value(QStringLiteral("title")).toString();
+        if (title == QStringLiteral("列表旧文本任务")) {
+            QCOMPARE(item.value(QStringLiteral("categoryName")).toString(), QStringLiteral("旧版物理"));
+            matchedLegacy = true;
+        } else if (title == QStringLiteral("同科任务A") || title == QStringLiteral("同科任务B")) {
+            QCOMPARE(item.value(QStringLiteral("categoryName")).toString(), QStringLiteral("高等数学"));
+            QCOMPARE(item.value(QStringLiteral("categoryColor")).toString(), QStringLiteral("#225588"));
+            ++matchedShared;
+        }
+    }
+    QVERIFY(matchedLegacy);
+    QCOMPARE(matchedShared, 2);
+}
+
+void TrashServiceTests::purgeExpiredRespectsAutoPurgeBlockedProvider()
+{
+    // 产品保证：自动清理阻断谓词为真时，直接调用 purgeExpired 静默返回 0、不删库也不发失败信号；解除后恢复清理。
+    const auto resetProvider = qScopeGuard([] {
+        TrashService::instance()->setAutoPurgeBlockedProvider({});
+    });
+    const int taskId = insertTask(QStringLiteral("受保护到期项"), QStringLiteral("2026-10-03"));
+    QVERIFY(TaskManager::instance()->deleteTask(taskId));
+    QVERIFY(exec(QStringLiteral("UPDATE trash_items SET deleted_at = '2000-01-01T12:00:00.000Z'")));
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 1);
+
+    bool blocked = true;
+    TrashService::instance()->setAutoPurgeBlockedProvider([&blocked] { return blocked; });
+    QVERIFY(TrashService::instance()->autoPurgeBlocked());
+
+    QSignalSpy failedSpy(TrashService::instance(), &TrashService::operationFailed);
+    QSignalSpy changedSpy(TrashService::instance(), &TrashService::trashChanged);
+    QCOMPARE(TrashService::instance()->purgeExpired(), 0);
+    QCOMPARE(failedSpy.count(), 0);
+    QCOMPARE(changedSpy.count(), 0);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 1);
+
+    blocked = false;
+    QVERIFY(!TrashService::instance()->autoPurgeBlocked());
+    QCOMPARE(TrashService::instance()->purgeExpired(), 1);
+    QCOMPARE(changedSpy.count(), 1);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 0);
 }
 
 QTEST_GUILESS_MAIN(TrashServiceTests)

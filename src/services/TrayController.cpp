@@ -104,18 +104,40 @@ void TrayController::refresh()
     emit displayChanged();
 }
 
+void TrayController::setOperationBlockedProvider(std::function<bool()> provider)
+{
+    m_operationBlockedProvider = std::move(provider);
+}
+
+bool TrayController::isOperationBlocked() const
+{
+    return m_operationBlockedProvider && m_operationBlockedProvider();
+}
+
 void TrayController::requestPause()
 {
+    if (isOperationBlocked()) {
+        refresh();
+        return;
+    }
     m_timer->pauseFocus();
 }
 
 void TrayController::requestResume()
 {
+    if (isOperationBlocked()) {
+        refresh();
+        return;
+    }
     m_timer->resumeFocus();
 }
 
 void TrayController::requestStop()
 {
+    if (isOperationBlocked()) {
+        refresh();
+        return;
+    }
     // 结束规则统一由控制器执行；菜单栏只把结构化结果转成宿主可展示的意图。
     FocusSessionController controller(m_timer, nullptr, AppSettings::instance(), nullptr);
     const QVariantMap outcome = controller.endCurrent();

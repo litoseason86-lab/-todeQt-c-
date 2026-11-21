@@ -90,6 +90,9 @@ public:
 private:
     // 数据库打开成功后才创建业务单例，避免启动失败路径提前触发偏好迁移或业务装配。
     void initializeRuntimeServices();
+    void connectBackupRestoreSignals();
+    void connectPendingDeletionAndSync();
+    bool isRestoreMaintenanceBlocked() const;
     void materializeTodayAndNotify();
     void purgeTrashIfReady();
 
@@ -107,8 +110,13 @@ private:
     std::unique_ptr<FocusSessionController> m_focusSessionController;
     bool m_naturalCompletionNoticeRequired = false;
     bool m_runtimeServicesInitialized = false;
-    // 恢复会先换库再恢复设置；完成或安全回滚之前不能按旧日界永久清理新库内容。
+    // 恢复会先换库再恢复设置；完成或安全回滚之前不能按旧日界永久清理或生成新库内容。
     bool m_restoreMaintenanceBlocked = false;
+    bool m_restoreSignalsConnected = false;
+    bool m_dayStarted = false;
+    bool m_pendingInteractionsConnected = false;
+    bool m_pendingSyncConnected = false;
+    bool m_pendingDatabaseConnected = false;
 };
 
 #endif // SHAREDAPP_H
