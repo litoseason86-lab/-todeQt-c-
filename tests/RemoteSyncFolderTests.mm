@@ -110,6 +110,7 @@ private slots:
     void mapsQuotaFailureWithoutLosingFirstFile();
     void cancellationUnblocksFakeAndAppleClients();
     void appleClientAndFolderDoNotFollowRedirects();
+    void removeTreatsFileNotFound404AsSuccess();
 
 private:
     QUrl baseUrl() const;
@@ -626,6 +627,47 @@ void RemoteSyncFolderTests::appleClientAndFolderDoNotFollowRedirects()
     QTRY_VERIFY_WITH_TIMEOUT(openDone.load(), 5000);
     QCOMPARE(openError.kind, SyncFolder::ErrorKind::Unavailable);
     QVERIFY(openError.message.contains(QStringLiteral("跳转")));
+}
+
+namespace {
+
+class FileNotFoundDeleteHttpClient final : public SyncHttpClient
+{
+public:
+    Response send(const Request& request) override
+    {
+        Response r;
+        if (request.method == QByteArrayLiteral("DELETE")) {
+            r.status = 404;
+            r.body = QByteArrayLiteral("{\"error\":\"file_not_found\"}");
+            return r;
+        }
+        r.status = 200;
+        r.body = QByteArrayLiteral("{\"rev\":0,\"entries\":[]}");
+        return r;
+    }
+
+    void cancelAll() override {}
+};
+
+} // namespace
+
+void RemoteSyncFolderTests::removeTreatsFileNotFound404AsSuccess()
+{
+    // 产品保证：当服务端对 DELETE 返回 404 file_not_found 时，RemoteSyncFolder::remove 将其视作幂等删除成功，
+    // 无论调用方是否传入 error 输出指针均返回 true 且不残留错误。
+    RemoteSyncFolder folder(
+        {QUrl(QStringLiteral("https://example.com")),
+         QStringLiteral("space-1234567890ab10"), secret('K')},
+        std::make_shared<FileNotFoundDeleteHttpClient>(),
+        std::make_shared<AppleSyncBlockCipher>());
+    SyncFolder::Error err;
+    QVERIFY(folder.open(&err));
+    const QString path = QStringLiteral(
+        "devices/0123456789abcdef0123456789abcdef/changes/0000-00000001.json");
+    QVERIFY(folder.remove(path, &err));
+    QVERIFY(err.ok());
+    QVERIFY(folder.remove(path, nullptr));
 }
 
 QTEST_GUILESS_MAIN(RemoteSyncFolderTests)

@@ -6,7 +6,9 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QUrl>
 #include <QVariantList>
@@ -153,6 +155,8 @@ public:
     Q_INVOKABLE void rebuildFolder();
     Q_INVOKABLE void createServerSpace(const QString& url, const QString& enrollKey);
     Q_INVOKABLE void clearTransportProblem();
+    // 主动取消进行中的传输切换（建服务器空间、配对码加入或切回 iCloud）：打断在途网络/等待并按原状态恢复旧引擎。
+    Q_INVOKABLE void cancelTransportSwitch();
     Q_INVOKABLE void joinWithPairingCode(const QString& code);
     Q_INVOKABLE QString pairingCode() const;
     Q_INVOKABLE void copyPairingCode();
@@ -184,6 +188,8 @@ signals:
     void copyRequested(const QString& text);
     // 要用提示条告诉你的事：已经加入、另一台设备恢复了备份、选错了文件夹……
     void notice(const QString& message);
+    // 远端整库快照替换了本机数据：外部写入会话、未提交的页面草稿与旧库待删槽必须跟随失效。
+    void snapshotReplaced();
 
 private:
     void ensureEngine();
@@ -220,8 +226,10 @@ private:
     void finishSwitchToICloud();
     // 本机改了跟着同步的设置：逐项和库里记下的比，变了的记一个新版本、等着发出。
     void recordSettings();
+    // 重试之前因瞬时故障未能写入同步库的本机设置键；不影响未被本机改动的夹紧远端设置。
+    void flushPendingLocalSettings();
     // 启动时（和恢复备份之后）核对：库里记下的和本机设置不一致的，以库里的为准写回；库里还没有的，记下本机的。
-    bool reconcileSettings();
+    bool reconcileSettings(QString* errorMessage = nullptr);
 
     Platform m_platform;
     std::function<bool(QString*)> m_safetyBackup;
@@ -229,12 +237,18 @@ private:
     std::unique_ptr<SyncServerWatcher> m_watcher;
     bool m_enabled = false;
     bool m_initialized = false;
+    QHash<QString, QString> m_observedLocalSettings;
+    // 记录写库失败、尚待重试补记的本机设置键；远端写回生效或本机补记成功后才移出。
+    QSet<QString> m_unrecordedSettingKeys;
+    // 本机设置读取曾失败时置位，待下次重试时按旧快照 diff 找回漏记键。
+    bool m_localSettingsReadRetryNeeded = false;
     bool m_choosingFolder = false;
     QString m_folderProblem;
     // 每换一次文件夹加一：旧文件夹在工作线程里刷新的书签，回来时已经不是现在用的了，不能存。
     quint64 m_folderGeneration = 0;
     // 每检查一次选中的文件夹加一：超时作废、或者又重新选了之后，晚回来的旧检查结果据此丢掉。
     quint64 m_folderCheckAttempt = 0;
+    std::function<void()> m_cancelActiveFolderCheck;
     // 你刚确认了加入：这一轮做完时告诉你本机数据已经换成同步文件夹里的。
     bool m_joinRequested = false;
     // 上一轮结束时本机的纪元与加入的文件夹：纪元变了、文件夹没换，说明另一台设备恢复了备份、本机跟着换了数据；
@@ -249,8 +263,10 @@ private:
     QString m_serverSpaceId;
     QByteArray m_serverSecret;
     bool m_switchingTransport = false;
+    bool m_resumeEngineOnSwitchAbort = false;
     QString m_transportProblem;
     quint64 m_transportAttempt = 0;
+    std::function<void()> m_cancelActiveTransportOp;
     bool m_foreground = true;
 
     enum class JournalReadResult {
@@ -308,7 +324,8 @@ private:
     std::optional<JournalData> m_previousJournal;
     bool m_journalCorrupted = false;
     QString m_settingsError;
-    bool m_settingsRetryNeeded = false;
+    // 普通启动（无待决恢复日志）对账同步设置遇到存储故障时保留错误，待存储修复后由 syncNow 重试自愈。
+    QString m_reconcileError;
     // 独立关闭记录优先于旧开启偏好；只有明确开启且两步提交成功后解除。
     bool m_disableIntentBlocked = false;
     bool m_changingEnabled = false;

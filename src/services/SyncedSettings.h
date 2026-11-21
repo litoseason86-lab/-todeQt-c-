@@ -12,12 +12,24 @@
 // 课表节次是按节次先后的 [[开始分钟, 结束分钟], …]。两台设备同样的值得到逐字相同的文本，比较才有意义。
 namespace SyncedSettings {
 
+// 设置写回本机的结果：区分「键值不被当前版本识别或超出本版本支持的格式/范围」与「底层偏好文件或数据库写入故障」，
+// 前者保留待写回标记而不阻断同步，后者才暂停同步保护数据。
+enum class ApplyStatus {
+    Applied,
+    Unsupported,
+    StorageFailure,
+};
+
 // 本机现在的全部同步设置（键 → 值）：固定的几项，加上每一天的今日目标。
 QHash<QString, QString> currentValues(bool* ok = nullptr);
 // 是不是出厂默认值。第一次记下时默认值用最小版本，另一台设备改过的会盖过它，而不是反过来。今日目标没有默认值。
 bool isFactoryDefault(const QString& key, const QString& value);
-// 把同步来的值写回本机。不认识的键、不合法的值（外部改坏的、更新版本的取值）不写，返回 false。
+// 把同步来的值写回本机，并区分成功、当前版本不支持与底层存储写入失败。
+ApplyStatus applyWithStatus(const QString& key, const QString& value, QString* errorMessage = nullptr);
+// 把同步来的值写回本机。不认识的键、不合法的值（外部改坏的、更新版本的取值）或写入失败时返回 false。
 bool apply(const QString& key, const QString& value);
+// 整体替换时删除快照里没有的项，并区分成功、不合法键与底层存储写入失败。
+ApplyStatus removeWithStatus(const QString& key, QString* errorMessage = nullptr);
 // 整体替换时快照里没有的项：今日目标从本机删掉（以快照为准）；固定的几项保留本机的值——
 // 只有更早版本写的快照才会缺它们，下次启动时会把本机的值记进去。
 bool remove(const QString& key);

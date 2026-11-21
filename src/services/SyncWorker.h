@@ -67,6 +67,11 @@ public:
     SyncFolder::Error writeCursor(const SyncFiles::CursorFile& cursor);
 
     // ── 首次加入：找起步用的快照 ──
+    struct CorruptedSnapshot {
+        QString device;
+        SyncPosition position;
+        QString error;
+    };
     struct SnapshotFetch {
         SyncFolder::Error error;
         bool found = false;
@@ -75,9 +80,10 @@ public:
         SyncFiles::ParseStatus status = SyncFiles::ParseStatus::Ok;
         QString parseError;
         SyncFiles::SnapshotFile snapshot;
+        QList<CorruptedSnapshot> corruptedCandidates;
     };
     // 纪元最高的快照为准；纪元相同时优先建文件夹的设备（你定了首次加入以 Mac 为准），再按设备标识排，
-    // 所有设备挑出同一份。
+    // 若首选快照损坏则依次回退同纪元其余候选快照，全部损坏时返回候选列表供发起补发请求。
     SnapshotFetch fetchJoinSnapshot(const QString& me, const QString& preferredDevice);
 
     // ── 扫描对方写来的改动 ──
@@ -184,8 +190,6 @@ private:
         qint64 latestEpoch = -1;
     };
     DeviceFiles inspect(const QString& device, SyncFolder::Error* error);
-    // 设备目录下最新的快照（纪元最大、同纪元序号最大）。没有时返回 false。
-    bool latestSnapshot(const QString& device, SyncPosition* position, SyncFolder::Error* error);
     // 读一份快照并解析。
     SyncFiles::ParseStatus readSnapshot(const QString& device, const SyncPosition& position,
                                         SyncFiles::SnapshotFile* snapshot, QString* parseError,

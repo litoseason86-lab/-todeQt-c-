@@ -472,6 +472,19 @@ private slots:
     void writeSnapshotRejectsWhenExceedingBudget();
     void enginePublishSnapshotRejectsWhenSnapshotExceedsBudget();
 
+    // 077 R10：stop() 立即打断在途 I/O 与 needsSnapshot 下退出禁写孤儿增量
+    void stopCancelsPendingWorkerIoImmediately();
+    void flushBeforeExitSkipsOrphanChangesWhenSnapshotNeeded();
+
+    // 074 深度复审：首次加入原子性、>8 MiB 分批收发、新建目录首份快照自愈、失败退避、首次加入坏快照自愈与路径收紧
+    void firstJoinFolderIdWriteFailureRollsBackSnapshotWithoutDoubleReplace();
+    void firstJoinBackupFailureRequiresReconfirmBeforeReplacing();
+    void largeBacklogOver8MiBSplitsAndInterleavesIncomingChangesAndFlushesBeforeExit();
+    void interruptedCreateFolderPublishesInitialSnapshotOnRestart();
+    void failedCycleAfterMorePagesRespectsRetryBackoff();
+    void firstJoinFallsBackPastCorruptSnapshotAndRequestsRewriteWhenAllCorrupt();
+    void classifyPathRejectsTraversalAndArbitraryChangesAndScanStopsOnNewerSnapshot();
+
 private:
     Device openDevice(const QString& name);
     void reopen(Device& device);
@@ -3955,6 +3968,553 @@ void SyncTransportTests::enginePublishSnapshotRejectsWhenSnapshotExceedsBudget()
     QCOMPARE(SyncStore(mac->device.connection).snapshotPosition().seq, snapshotPosBefore.seq);
     QCOMPARE(SyncStore(mac->device.connection).needsSnapshot(), needsSnapshotBefore);
     QVERIFY(!QFile::exists(overSnapshotPath));
+}
+
+namespace {
+
+class CancelObservingFolder : public LocalSyncFolder
+{
+public:
+    CancelObservingFolder(const QString& root, std::atomic<int>* cancels)
+        : LocalSyncFolder(root)
+        , m_cancels(cancels)
+    {
+    }
+
+    bool open(Error* error) override
+    {
+        QMutexLocker lock(&m_mutex);
+        m_entered = true;
+        m_enteredCond.wakeAll();
+        while (!m_cancelled) {
+            m_cancelCond.wait(&m_mutex, 5000);
+            break;
+        }
+        if (m_cancelled) {
+            if (error) {
+                error->kind = ErrorKind::Io;
+                error->message = QStringLiteral("已取消");
+            }
+            return false;
+        }
+        lock.unlock();
+        return LocalSyncFolder::open(error);
+    }
+
+    void cancelPendingIo() override
+    {
+        m_cancels->fetch_add(1);
+        QMutexLocker lock(&m_mutex);
+        m_cancelled = true;
+        m_cancelCond.wakeAll();
+    }
+
+    bool waitEntered(int timeoutMs = 3000)
+    {
+        QMutexLocker lock(&m_mutex);
+        if (!m_entered) {
+            m_enteredCond.wait(&m_mutex, timeoutMs);
+        }
+        return m_entered;
+    }
+
+private:
+    std::atomic<int>* m_cancels = nullptr;
+    QMutex m_mutex;
+    QWaitCondition m_enteredCond;
+    QWaitCondition m_cancelCond;
+    bool m_entered = false;
+    bool m_cancelled = false;
+};
+
+} // namespace
+
+void SyncTransportTests::stopCancelsPendingWorkerIoImmediately()
+{
+    // 产品保证：SyncEngine::stop() 必须立即调用底层 worker 的 cancelPendingIo() 打断阻塞中的远端或云盘请求，不拖慢传输切换、恢复备份或进程退出。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    Device device = openDevice(QStringLiteral("mac"));
+    std::atomic<int> cancelCount{0};
+    auto* rawFolder = new CancelObservingFolder(cloud.replica(device), &cancelCount);
+    SyncEngine::Options options = testOptions();
+    options.mayCreateFolder = true;
+    SyncEngine engine(std::unique_ptr<SyncFolder>(rawFolder), options, device.connection);
+    engine.setChangeNotifier([](const SyncStore::ApplyResult&) {});
+
+    engine.start();
+    QVERIFY(rawFolder->waitEntered());
+    QCOMPARE(cancelCount.load(), 0);
+
+    engine.stop();
+    QVERIFY(cancelCount.load() >= 1);
+    QCOMPARE(engine.status(), SyncEngine::Status::Stopped);
+}
+
+void SyncTransportTests::flushBeforeExitSkipsOrphanChangesWhenSnapshotNeeded()
+{
+    // 产品保证：当数据库处于 snapshot_needed 状态（首份基线快照尚未发布，如刚恢复备份或刚建好同步目录）时，退出冲刷不得单独写出缺基线的孤儿增量文件，改动继续保留在队列中留待下次启动随快照一起发布。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    SyncStore store(mac->device.connection);
+    // 推进到新纪元（设置 snapshot_needed = 1），尚未跑同步周期写出新纪元基线快照
+    QVERIFY(store.beginEpochAfterRestore(store.epoch(), mac->device.id));
+    const qint64 newEpoch = store.epoch();
+    QVERIFY(newEpoch >= 1);
+    QVERIFY(store.needsSnapshot());
+
+    // 用户在首份快照发出前新增了一条任务并立即退出应用
+    QVERIFY(!addTask(mac->device, QStringLiteral("恢复后退出前新增的任务")).isEmpty());
+    QCOMPARE(store.pendingCount(), 1);
+    const QStringList changesBefore = cloud.changeFiles(mac->device, mac->device);
+
+    QVERIFY(mac->engine->flushBeforeExit(5000));
+
+    // 不得在新纪元下产生没有基线快照支撑的孤儿 changes/<newEpoch>-00000001.json，待发队列与 snapshot_needed 原样保留
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device), changesBefore);
+    QVERIFY(store.needsSnapshot());
+    QCOMPARE(store.pendingCount(), 1);
+}
+
+void SyncTransportTests::firstJoinFolderIdWriteFailureRollsBackSnapshotWithoutDoubleReplace()
+{
+    // 产品保证：首次加入时若持久化 folder_id 失败，必须原子回滚整库快照替换且保留本机旧数据；
+    // 失败后这次确认作废，用户在报错后新记的内容不会被自动重试悄悄换掉，必须重新确认才换库；
+    // 成功加入后立即消费确认标记，后续本地新增任务绝不会被二次换库清空。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac = makeNode(QStringLiteral("mac"), true, cloud);
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 初始任务")).isEmpty());
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+
+    std::unique_ptr<Node> ipad = makeNode(QStringLiteral("ipad"), false, cloud);
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 原有任务")).isEmpty());
+    cloud.deliver(mac->device, ipad->device);
+
+    ipad->engine->start();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::NeedsConfirmation);
+
+    // 注入 folder_id 写入失败（模拟磁盘/触发器/提交失败），验证整个换库事务完整回滚
+    QVERIFY(exec(ipad->device, QStringLiteral(
+        "CREATE TEMP TRIGGER block_folder_id_insert BEFORE INSERT ON sync_state "
+        "WHEN NEW.key = 'folder_id' BEGIN SELECT RAISE(ABORT, 'folder_id write blocked'); END")));
+    const auto dropTrigger = qScopeGuard([&] {
+        exec(ipad->device, QStringLiteral("DROP TRIGGER IF EXISTS block_folder_id_insert"));
+    });
+
+    ipad->engine->confirmJoin();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::Error);
+    QVERIFY(SyncStore(ipad->device.connection).folderId().isEmpty());
+    // 核心保证：回滚后本机原有数据毫发无损，并未陷入「库已换完但 folder_id 仍为空」的半提交状态
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("iPad 原有任务")});
+
+    // 故障解除、用户在报错后又记了一条：自动重试只回到「等你确认加入」，不换库、不丢这条。
+    QVERIFY(exec(ipad->device, QStringLiteral("DROP TRIGGER IF EXISTS block_folder_id_insert")));
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 报错后新记")).isEmpty());
+    const qsizetype backupsBeforeRetry = ipad->backups.size();
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::NeedsConfirmation);
+    QVERIFY(SyncStore(ipad->device.connection).folderId().isEmpty());
+    QVERIFY(taskTitles(ipad->device).contains(QStringLiteral("iPad 报错后新记")));
+    QCOMPARE(ipad->backups.size(), backupsBeforeRetry);
+
+    // 重新确认后才在单事务内完成首次换库并落盘 folder_id
+    ipad->engine->confirmJoin();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QVERIFY(!SyncStore(ipad->device.connection).folderId().isEmpty());
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("Mac 初始任务")});
+
+    // 加入后新增本机任务：下一轮同步绝不会再次触发换库覆盖该任务，且正常同步到 Mac
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 加入后新增任务")).isEmpty());
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QVERIFY(taskTitles(ipad->device).contains(QStringLiteral("iPad 加入后新增任务")));
+    cloud.deliver(ipad->device, mac->device);
+    QVERIFY(syncOnce(*mac));
+    QVERIFY(taskTitles(mac->device).contains(QStringLiteral("iPad 加入后新增任务")));
+}
+
+void SyncTransportTests::firstJoinBackupFailureRequiresReconfirmBeforeReplacing()
+{
+    // 产品保证：首次加入前的安全备份失败时不换库，而且这次确认随之作废：
+    // 备份恢复正常后，自动重试也不会在用户没再点确认的情况下拿文件夹数据覆盖本机。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac = makeNode(QStringLiteral("mac"), true, cloud);
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 的任务")).isEmpty());
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+
+    std::unique_ptr<Node> ipad = makeNode(QStringLiteral("ipad"), false, cloud);
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 的任务")).isEmpty());
+    cloud.deliver(mac->device, ipad->device);
+    ipad->engine->start();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::NeedsConfirmation);
+
+    ipad->backupSucceeds = false;
+    ipad->engine->confirmJoin();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::BackupFailed);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("iPad 的任务")});
+
+    // 备份恢复正常、用户在报错后又记了一条：重试只回到待确认，两条本机任务都在。
+    ipad->backupSucceeds = true;
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 报错后新记")).isEmpty());
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::NeedsConfirmation);
+    QVERIFY(SyncStore(ipad->device.connection).folderId().isEmpty());
+    QCOMPARE(taskTitles(ipad->device).size(), 2);
+
+    // 再次确认才换库，且换库前的备份里带着报错后新记的那条。
+    ipad->engine->confirmJoin();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("Mac 的任务")});
+    QVERIFY(!ipad->backups.isEmpty());
+    QVERIFY(ipad->backups.last().contains(QStringLiteral("iPad 报错后新记")));
+}
+
+void SyncTransportTests::largeBacklogOver8MiBSplitsAndInterleavesIncomingChangesAndFlushesBeforeExit()
+{
+    // 产品保证：总积压超过 8 MiB 单改动文件上限时自动按 4 MiB 软上限拆成多个合规文件连续发出且不阻塞拉取对方小改动，
+    // 退出前 flushBeforeExit 同样分批冲刷，单条超 8 MiB 记录仅报错提示且仍允许拉取远端改动。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    // 在单一事务内写入 180 条各 55 KB 备注的任务（总约 9.9 MiB > 8 MiB 硬上限）
+    const QString payload55k(55 * 1024, QLatin1Char('x'));
+    QSqlDatabase macDb = deviceDb(mac->device);
+    QVERIFY(macDb.transaction());
+    {
+        QSqlQuery insert(macDb);
+        insert.prepare(QStringLiteral(
+            "INSERT INTO tasks (title, notes, date, completed, display_order) "
+            "VALUES (:title, :notes, '2026-09-30', 0, :ord)"));
+        for (int i = 1; i <= 180; ++i) {
+            insert.bindValue(QStringLiteral(":title"), QStringLiteral("大积压-%1").arg(i, 3, 10, QLatin1Char('0')));
+            insert.bindValue(QStringLiteral(":notes"), payload55k);
+            insert.bindValue(QStringLiteral(":ord"), i);
+            QVERIFY(insert.exec());
+        }
+    }
+    QVERIFY(macDb.commit());
+
+    // 同时让 iPad 发出一条小任务，验证 Mac 发大积压期间仍能及时收下对方小改动
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 紧急任务")).isEmpty());
+    QVERIFY(syncOnce(*ipad));
+    cloud.deliver(ipad->device, mac->device);
+
+    QVERIFY(syncOnce(*mac, 30000));
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(SyncStore(mac->device.connection).pendingCount(), 0);
+    QVERIFY(taskTitles(mac->device).contains(QStringLiteral("iPad 紧急任务")));
+
+    const QStringList macChanges = cloud.changeFiles(mac->device, mac->device);
+    QVERIFY2(macChanges.size() >= 3,
+             qPrintable(QStringLiteral("9.9 MiB 积压期望至少拆成 3 个文件，实际 %1 个").arg(macChanges.size())));
+    for (const QString& fileName : macChanges) {
+        const QString absPath = cloud.path(
+            mac->device, SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/') + fileName);
+        const qint64 fileSize = QFileInfo(absPath).size();
+        QVERIFY2(fileSize <= SyncFiles::kMaxChangesBytes,
+                 qPrintable(QStringLiteral("拆批文件 %1 大小 %2 超过 8 MiB 上限").arg(fileName).arg(fileSize)));
+    }
+
+    // 交付给 iPad，验证所有 180 条大积压任务完整送达
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad, 30000));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT COUNT(*) FROM tasks")).toInt(), 181);
+
+    // 验证 flushBeforeExit 对 >8 MiB 积压同样分批冲刷完毕
+    const int beforeExitChanges = int(cloud.changeFiles(mac->device, mac->device).size());
+    QVERIFY(macDb.transaction());
+    {
+        QSqlQuery insert(macDb);
+        insert.prepare(QStringLiteral(
+            "INSERT INTO tasks (title, notes, date, completed, display_order) "
+            "VALUES (:title, :notes, '2026-10-01', 0, :ord)"));
+        for (int i = 1; i <= 160; ++i) {
+            insert.bindValue(QStringLiteral(":title"), QStringLiteral("退出冲刷-%1").arg(i, 3, 10, QLatin1Char('0')));
+            insert.bindValue(QStringLiteral(":notes"), payload55k);
+            insert.bindValue(QStringLiteral(":ord"), i);
+            QVERIFY(insert.exec());
+        }
+    }
+    QVERIFY(macDb.commit());
+    QVERIFY(mac->engine->flushBeforeExit(20000));
+    QCOMPARE(SyncStore(mac->device.connection).pendingCount(), 0);
+    QVERIFY(cloud.changeFiles(mac->device, mac->device).size() >= beforeExitChanges + 2);
+
+    // 重启 Mac 引擎，验证单条 >8 MiB 记录仅报错保留队列、不阻断拉取 iPad 新改动
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    const QString hugeTask = addTask(mac->device, QStringLiteral("单条超限任务"));
+    QVERIFY(!hugeTask.isEmpty());
+    {
+        QSqlQuery upd(macDb);
+        upd.prepare(QStringLiteral("UPDATE tasks SET notes = :n WHERE sync_id = :id"));
+        upd.bindValue(QStringLiteral(":n"), QString(8 * 1024 * 1024 + 1024, QLatin1Char('z')));
+        upd.bindValue(QStringLiteral(":id"), hugeTask);
+        QVERIFY(upd.exec());
+    }
+    QVERIFY(!addTask(ipad->device, QStringLiteral("超限期间对端小任务")).isEmpty());
+    QVERIFY(syncOnce(*ipad));
+    cloud.deliver(ipad->device, mac->device);
+
+    QVERIFY(syncOnce(*mac, 20000));
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::Error);
+    QVERIFY(SyncStore(mac->device.connection).pendingCount() >= 1);
+    QVERIFY(taskTitles(mac->device).contains(QStringLiteral("超限期间对端小任务")));
+}
+
+void SyncTransportTests::interruptedCreateFolderPublishesInitialSnapshotOnRestart()
+{
+    // 产品保证：Mac 刚建出标记文件即崩溃（库里尚未记录 folder_id 也未置 snapshot_needed）后重启，
+    // 即使没有任何新增本地改动也必须自动补发首份快照，使 iPad 能够正常加入。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac = makeNode(QStringLiteral("mac"), true, cloud);
+    QVERIFY(!addTask(mac->device, QStringLiteral("建目录前已有任务")).isEmpty());
+
+    // 模拟崩溃现场：标记文件已落盘且 createdBy == mac，但本地库未记 folder_id 与 snapshot_needed
+    SyncFiles::Marker marker;
+    marker.folderId = QStringLiteral("interrupted-folder-001");
+    marker.createdBy = mac->device.id;
+    marker.createdAt = QStringLiteral("2026-11-19T00:00:00");
+    LocalSyncFolder writer(cloud.replica(mac->device));
+    SyncFolder::Error err;
+    QVERIFY(writer.open(&err));
+    QVERIFY(writer.write(SyncFiles::markerFileName(), SyncFiles::encodeMarker(marker), &err));
+
+    SyncStore macStore(mac->device.connection);
+    QVERIFY(macStore.folderId().isEmpty());
+    QVERIFY(!macStore.needsSnapshot());
+    QVERIFY(!macStore.hasSnapshotPosition());
+
+    // 重启引擎（期间无任何本地编辑）
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(macStore.folderId(), marker.folderId);
+    QVERIFY(macStore.hasSnapshotPosition());
+    QCOMPARE(cloud.snapshotFiles(mac->device, mac->device), QStringList{SyncFiles::snapshotFileName({0, 0})});
+
+    // iPad 可立即加入并拿到首份快照里的任务
+    std::unique_ptr<Node> ipad = makeNode(QStringLiteral("ipad"), false, cloud);
+    cloud.deliver(mac->device, ipad->device);
+    ipad->engine->start();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::NeedsConfirmation);
+    ipad->engine->confirmJoin();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("建目录前已有任务")});
+}
+
+namespace {
+
+class FailCursorWriteFolder final : public LocalSyncFolder
+{
+public:
+    using LocalSyncFolder::LocalSyncFolder;
+
+    bool write(const QString& relativePath, const QByteArray& data, Error* error) override
+    {
+        if (relativePath.endsWith(SyncFiles::cursorFileName())) {
+            if (error) {
+                *error = {ErrorKind::Io, QStringLiteral("注入的游标写入失败")};
+            }
+            return false;
+        }
+        return LocalSyncFolder::write(relativePath, data, error);
+    }
+};
+
+} // namespace
+
+void SyncTransportTests::failedCycleAfterMorePagesRespectsRetryBackoff()
+{
+    // 产品保证：扫描命中文件页上限（result.more == true）后若同轮后续步骤（如写游标）失败，
+    // 必须清除内部续跑标记并遵守指数退避等待，绝不能触发 0ms 热自旋死循环。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    SyncEngine::Options ipadOpts = testOptions();
+    ipadOpts.maxFilesPerScan = 1;
+    ipadOpts.retryMinMs = 5000;
+    ipadOpts.retryMaxMs = 10000;
+
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, ipadOpts);
+
+    // Mac 连续写出两批改动，令 iPad 扫描第一批后即命中 maxFilesPerScan=1（result.more == true）
+    QVERIFY(!addTask(mac->device, QStringLiteral("批次1任务")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+    QVERIFY(!addTask(mac->device, QStringLiteral("批次2任务")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+    cloud.deliver(mac->device, ipad->device);
+
+    ipad->engine->setFolder(std::make_unique<FailCursorWriteFolder>(cloud.replica(ipad->device)));
+    QSignalSpy finished(ipad->engine.get(), &SyncEngine::cycleFinished);
+    QTRY_VERIFY_WITH_TIMEOUT(finished.count() >= 1, 5000);
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::Error);
+    const qsizetype countAfterFailure = finished.count();
+
+    // 在 5 秒退避期内处理事件循环 150ms：不得再自动启动新轮次
+    QTest::qWait(150);
+    QCOMPARE(finished.count(), countAfterFailure);
+    QVERIFY(ipad->engine->isIdle());
+}
+
+void SyncTransportTests::firstJoinFallsBackPastCorruptSnapshotAndRequestsRewriteWhenAllCorrupt()
+{
+    // 产品保证：首次加入时若首选建库设备的快照损坏但同纪元其他设备快照完好，必须自动回退采用完好快照；
+    // 若所有候选快照均损坏，则主动写出补快照请求游标，待对端重写快照后无需再次确认即可自动完成加入。
+    // 子场景 1：Mac 快照损坏但设备 C 存在同纪元完好快照 -> 回退采用设备 C 的快照
+    {
+        FakeICloud cloud(m_data->filePath(QStringLiteral("cloud_fallback")));
+        SyncEngine::Options opts = testOptions();
+        opts.maintenanceIntervalMs = 0;
+        std::unique_ptr<Node> mac;
+        std::unique_ptr<Node> peerC;
+        setUpPair(cloud, &mac, &peerC, opts);
+        QVERIFY(!addTask(mac->device, QStringLiteral("共享有效任务")).isEmpty());
+        QVERIFY(syncOnce(*mac));
+        cloud.deliver(mac->device, peerC->device);
+        QVERIFY(syncOnce(*peerC));
+
+        // 令 peerC 也写出一份同纪元完好快照
+        SyncStore cStore(peerC->device.connection);
+        QVERIFY(cStore.requestFullSnapshot());
+        QVERIFY(syncOnce(*peerC));
+        QVERIFY(!cloud.snapshotFiles(peerC->device, peerC->device).isEmpty());
+
+        std::unique_ptr<Node> ipad = makeNode(QStringLiteral("ipad_fb"), false, cloud);
+        cloud.deliver(mac->device, ipad->device);
+        cloud.deliver(peerC->device, ipad->device);
+
+        // 篡改 iPad 副本里 Mac 的全部快照，验证回退到 peerC 的完好快照
+        for (const QString& snapName : cloud.snapshotFiles(ipad->device, mac->device)) {
+            QFile f(cloud.path(ipad->device, SyncFiles::deviceDirectory(mac->device.id) + QLatin1Char('/') + snapName));
+            QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QVERIFY(f.write("{corrupt-mac-snapshot") > 0);
+            f.close();
+        }
+
+        ipad->engine->start();
+        QVERIFY(waitIdle(*ipad->engine));
+        QCOMPARE(ipad->engine->status(), SyncEngine::Status::NeedsConfirmation);
+        ipad->engine->confirmJoin();
+        QVERIFY(waitIdle(*ipad->engine));
+        QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+        QVERIFY(taskTitles(ipad->device).contains(QStringLiteral("共享有效任务")));
+    }
+
+    // 子场景 2：唯一快照（Mac）损坏 -> iPad 写 cursor.json 请求重发，Mac 维护重写后 iPad 自动加入
+    {
+        FakeICloud cloud(m_data->filePath(QStringLiteral("cloud_heal")));
+        SyncEngine::Options macOpts = testOptions();
+        macOpts.maintenanceIntervalMs = 0;
+        std::unique_ptr<Node> mac = makeNode(QStringLiteral("mac_heal"), true, cloud, macOpts);
+        QVERIFY(!addTask(mac->device, QStringLiteral("修复后可见任务")).isEmpty());
+        mac->engine->start();
+        QVERIFY(waitIdle(*mac->engine));
+        QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+
+        std::unique_ptr<Node> ipad = makeNode(QStringLiteral("ipad_heal"), false, cloud);
+        cloud.deliver(mac->device, ipad->device);
+
+        // 破坏 Mac 副本与 iPad 副本的快照，模拟远端文件损坏
+        const QString snapRel = SyncFiles::deviceDirectory(mac->device.id) + QLatin1Char('/')
+            + SyncFiles::snapshotFileName({0, 0});
+        for (const Device* dev : {&mac->device, &ipad->device}) {
+            QFile f(cloud.path(*dev, snapRel));
+            QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QVERIFY(f.write("{broken-snapshot") > 0);
+            f.close();
+        }
+
+        ipad->engine->start();
+        QVERIFY(waitIdle(*ipad->engine));
+        QCOMPARE(ipad->engine->status(), SyncEngine::Status::NeedsConfirmation);
+        ipad->engine->confirmJoin();
+        QVERIFY(waitIdle(*ipad->engine));
+        QCOMPARE(ipad->engine->status(), SyncEngine::Status::WaitingForSnapshot);
+        QVERIFY(SyncStore(ipad->device.connection).folderId().isEmpty());
+
+        // 验证 iPad 已写出带 snapshotRequests 的游标文件
+        const QString ipadCursorRel = SyncFiles::deviceDirectory(ipad->device.id) + QLatin1Char('/')
+            + SyncFiles::cursorFileName();
+        QVERIFY(fileExists(cloud.path(ipad->device, ipadCursorRel)));
+
+        // 把 iPad 游标送给 Mac，Mac 维护响应请求重写完好快照
+        cloud.deliver(ipad->device, mac->device);
+        QVERIFY(syncOnce(*mac));
+        cloud.deliver(mac->device, ipad->device);
+
+        // iPad 无需再次 confirmJoin，下一轮自动完成首次加入
+        QVERIFY(syncOnce(*ipad));
+        QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+        QVERIFY(!SyncStore(ipad->device.connection).folderId().isEmpty());
+        QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("修复后可见任务")});
+    }
+}
+
+void SyncTransportTests::classifyPathRejectsTraversalAndArbitraryChangesAndScanStopsOnNewerSnapshot()
+{
+    // 产品保证：SyncFiles::classifyPath 严格拒绝路径穿越、反斜杠、非固定层级与 /changes/ 下的非改动文件名，
+    // 且 SyncWorker::scan 遇到未来版本快照时立即停止扫描该对端，不再继续读其改动文件或设置缺号等待。
+    for (const QString& badPath : {
+             QStringLiteral("../") + SyncFiles::markerFileName(),
+             QStringLiteral("sub/") + SyncFiles::markerFileName(),
+             QStringLiteral("/") + SyncFiles::markerFileName(),
+             QStringLiteral("devices/0123456789abcdef0123456789abcdef/../other/cursor.json"),
+             QStringLiteral("devices/0123456789abcdef0123456789abcdef/changes/arbitrary.dat"),
+             QStringLiteral("devices\\0123456789abcdef0123456789abcdef\\cursor.json"),
+             QStringLiteral("0001-00000001.json"),
+         }) {
+        QCOMPARE(SyncFiles::classifyPath(badPath), SyncFiles::FileCategory::Unknown);
+        QCOMPARE(SyncFiles::maxBudgetForPath(badPath), qint64(0));
+    }
+
+    // 构造对端有 NewerFormat 追赶快照且后方存在缺号改动（如 seq=2，缺 seq=1）的目录
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString peerId = kDeviceB;
+    const QString selfId = kDeviceA;
+    LocalSyncFolder writer(temp.path());
+    SyncFolder::Error err;
+    QVERIFY(writer.open(&err));
+
+    // 写一份外层格式为 kFormatVersion + 1 的快照 snapshot-0000-00000001.json，以及缺号改动 changes/0000-00000003.json
+    const QByteArray newerSnap = QByteArrayLiteral("{\"format\":999,\"type\":\"snapshot\"}");
+    QVERIFY(writer.write(SyncFiles::deviceDirectory(peerId) + QLatin1Char('/') + SyncFiles::snapshotFileName({0, 1}),
+                         newerSnap, &err));
+    QVERIFY(writer.write(SyncFiles::changesDirectory(peerId) + QLatin1Char('/') + SyncFiles::changeFileName({0, 3}),
+                         QByteArrayLiteral("{}"), &err));
+
+    SyncWorker worker(std::make_unique<LocalSyncFolder>(temp.path()));
+    QVERIFY(worker.open(QString()).error.ok());
+    SyncWorker::ScanRequest req;
+    req.me = selfId;
+    req.epoch = 0;
+    req.cursors.insert(peerId, {0, 0});
+    req.requests.insert(peerId, {0, 1});
+    const SyncWorker::ScanResult scan = worker.scan(req);
+    QVERIFY(scan.error.ok());
+    QCOMPARE(scan.peers.size(), 1);
+    QCOMPARE(scan.peers.first().snapshotStatus, SyncFiles::ParseStatus::NewerFormat);
+    QVERIFY(!scan.peers.first().hasSnapshot);
+    QVERIFY(scan.peers.first().files.isEmpty());
+    QCOMPARE(scan.peers.first().waitingFor, qint64(0));
 }
 
 QTEST_GUILESS_MAIN(SyncTransportTests)

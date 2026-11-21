@@ -543,13 +543,21 @@ QStringList indexStatements()
 
 QStringList seedStatements()
 {
-    // 顺序有讲究：时钟表达式要读 sync_runtime，所以先种运行标记这一行。
+    // 顺序有讲究：先清理非单例异常行并强制复位运行标记，防止外部备份或异常中断遗留
+    // applying = 1 / delete_kind 让同步触发器静默失效。
+    // 此处保留已存在的 test_now_ms，使跨设备测试先固定时钟再通过 initialize 挂载服务层时不被冲掉；
+    // 备份快照与恢复入口会在 BackupOperations / BackupService 边界将 test_now_ms 显式清零，
+    // 且首次补种 hlc 只读真实当前时间，不采信外部残留的 test_now_ms。
     return {
-        QStringLiteral("INSERT OR IGNORE INTO sync_runtime (singleton_id, applying) VALUES (1, 0)"),
+        QStringLiteral("DELETE FROM sync_runtime WHERE singleton_id <> 1"),
+        QStringLiteral("INSERT INTO sync_runtime (singleton_id, applying, delete_kind) "
+                       "VALUES (1, 0, NULL) "
+                       "ON CONFLICT(singleton_id) DO UPDATE SET "
+                       "applying = 0, delete_kind = NULL"),
         QStringLiteral("INSERT OR IGNORE INTO sync_state (key, value) "
                        "VALUES ('device_id', lower(hex(randomblob(16))))"),
-        QStringLiteral("INSERT OR IGNORE INTO sync_state (key, value) VALUES ('hlc', CAST(%1 AS TEXT))")
-            .arg(sqlNowMs()),
+        QStringLiteral("INSERT OR IGNORE INTO sync_state (key, value) "
+                       "VALUES ('hlc', CAST(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) AS TEXT))"),
         QStringLiteral("INSERT OR IGNORE INTO sync_state (key, value) VALUES ('epoch', '0')"),
     };
 }
@@ -575,12 +583,39 @@ QHash<QString, QString> canonicalTriggerSql()
     return cached;
 }
 
-bool isSyncTriggerName(const QString& name)
+bool hasSyncTriggerPrefix(const QString& name)
 {
     for (const Table& table : tables()) {
         if (name.startsWith(table.name + QStringLiteral("_sync_"))) {
             return true;
         }
+    }
+    return false;
+}
+
+bool isSyncTriggerName(const QString& name)
+{
+    for (const Table& table : tables()) {
+        const QString prefix = table.name + QStringLiteral("_sync_");
+        if (!name.startsWith(prefix)) {
+            continue;
+        }
+        // 后缀仅允许非空 ASCII 小写字母、数字或下划线：兼容旧版合法触发器名（如 _obsolete）在启动时被替换，
+        // 同时拒绝引号、连字符注释或空白伪装成本应用同步触发器通过备份检查。
+        const QStringView suffix = QStringView(name).mid(prefix.size());
+        if (suffix.isEmpty()) {
+            return false;
+        }
+        for (const QChar ch : suffix) {
+            const ushort u = ch.unicode();
+            const bool valid = (u >= 'a' && u <= 'z')
+                || (u >= '0' && u <= '9')
+                || u == '_';
+            if (!valid) {
+                return false;
+            }
+        }
+        return true;
     }
     return false;
 }

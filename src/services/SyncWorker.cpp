@@ -196,33 +196,110 @@ SyncWorker::SnapshotFetch SyncWorker::fetchJoinSnapshot(const QString& me, const
     if (!fetch.error.ok()) {
         return fetch;
     }
-    // 先按纪元挑：纪元最高的那份才是所有设备当前共同的状态（低纪元的是有人恢复备份之前的旧状态）。
-    QString chosen;
-    SyncPosition chosenPosition;
+
+    // 收集各对端全部快照并找出最高纪元（低纪元属于恢复备份前的旧状态，不能作为首次加入起点）。
+    QHash<QString, QList<SyncPosition>> snapshotsByDevice;
+    qint64 highestEpoch = -1;
     for (const QString& device : devices) {
-        SyncPosition position;
-        SyncFolder::Error error;
-        if (!latestSnapshot(device, &position, &error)) {
-            if (!error.ok() && !isMissing(error)) {
-                fetch.error = error;
-                return fetch;
-            }
-            continue;
+        SyncFolder::Error listError;
+        const QStringList names = m_folder->list(SyncFiles::deviceDirectory(device), &listError);
+        if (!listError.ok() && !isMissing(listError)) {
+            fetch.error = listError;
+            return fetch;
         }
-        const bool better = chosen.isEmpty() || position.epoch > chosenPosition.epoch
-            || (position.epoch == chosenPosition.epoch && device == preferredDevice);
-        if (better) {
-            chosen = device;
-            chosenPosition = position;
+        QList<SyncPosition> deviceSnapshots;
+        for (const QString& name : names) {
+            SyncPosition position;
+            if (SyncFiles::parseSnapshotFileName(name, &position)) {
+                deviceSnapshots.append(position);
+                highestEpoch = std::max(highestEpoch, position.epoch);
+            }
+        }
+        if (!deviceSnapshots.isEmpty()) {
+            snapshotsByDevice.insert(device, std::move(deviceSnapshots));
         }
     }
-    if (chosen.isEmpty()) {
+    if (highestEpoch < 0) {
+        return fetch;
+    }
+
+    // 排序确定性候选列表：同最高纪元下优先建文件夹的设备，再按设备标识升序；同一设备内按序号降序。
+    QStringList orderedDevices;
+    if (!preferredDevice.isEmpty() && snapshotsByDevice.contains(preferredDevice)) {
+        orderedDevices.append(preferredDevice);
+    }
+    for (const QString& device : devices) {
+        if (device != preferredDevice && snapshotsByDevice.contains(device)) {
+            orderedDevices.append(device);
+        }
+    }
+    struct Candidate {
+        QString device;
+        SyncPosition position;
+    };
+    QList<Candidate> candidates;
+    for (const QString& device : orderedDevices) {
+        QList<SyncPosition> matching;
+        for (const SyncPosition& position : snapshotsByDevice.value(device)) {
+            if (position.epoch == highestEpoch) {
+                matching.append(position);
+            }
+        }
+        std::sort(matching.begin(), matching.end(), [](const SyncPosition& a, const SyncPosition& b) {
+            return a.seq > b.seq;
+        });
+        for (const SyncPosition& position : matching) {
+            candidates.append({device, position});
+        }
+    }
+    if (candidates.isEmpty()) {
+        return fetch;
+    }
+
+    QList<CorruptedSnapshot> corruptList;
+    SyncFolder::Error lastIoError;
+    for (const Candidate& cand : candidates) {
+        SyncFiles::SnapshotFile snapshot;
+        QString parseError;
+        SyncFolder::Error readError;
+        const SyncFiles::ParseStatus status =
+            readSnapshot(cand.device, cand.position, &snapshot, &parseError, &readError);
+        if (readError.ok() && status == SyncFiles::ParseStatus::Ok) {
+            fetch.found = true;
+            fetch.device = cand.device;
+            fetch.position = cand.position;
+            fetch.status = SyncFiles::ParseStatus::Ok;
+            fetch.snapshot = std::move(snapshot);
+            fetch.parseError.clear();
+            return fetch;
+        }
+        if (status == SyncFiles::ParseStatus::NewerFormat) {
+            fetch.found = true;
+            fetch.device = cand.device;
+            fetch.position = cand.position;
+            fetch.status = SyncFiles::ParseStatus::NewerFormat;
+            fetch.parseError = parseError;
+            return fetch;
+        }
+        if (!readError.ok()) {
+            lastIoError = readError;
+        } else {
+            corruptList.append({cand.device, cand.position, parseError});
+        }
+    }
+
+    if (corruptList.isEmpty() && !lastIoError.ok()) {
+        fetch.error = lastIoError;
         return fetch;
     }
     fetch.found = true;
-    fetch.device = chosen;
-    fetch.position = chosenPosition;
-    fetch.status = readSnapshot(chosen, chosenPosition, &fetch.snapshot, &fetch.parseError, &fetch.error);
+    fetch.status = SyncFiles::ParseStatus::Corrupt;
+    if (!corruptList.isEmpty()) {
+        fetch.device = corruptList.first().device;
+        fetch.position = corruptList.first().position;
+        fetch.parseError = corruptList.first().error;
+        fetch.corruptedCandidates = std::move(corruptList);
+    }
     return fetch;
 }
 
@@ -415,6 +492,10 @@ SyncWorker::ScanResult SyncWorker::scan(const ScanRequest& request)
             if (peer.snapshotStatus == SyncFiles::ParseStatus::Ok) {
                 peer.hasSnapshot = true;
                 expected = std::max(applied, snapshot.seq) + 1;
+            } else if (peer.snapshotStatus == SyncFiles::ParseStatus::NewerFormat) {
+                // 更新版本写出的快照不能跳过，立即停在这一步避免继续拉取后续改动或误报缺号。
+                result.peers.append(peer);
+                continue;
             }
         }
 
@@ -595,24 +676,6 @@ SyncFiles::ParseStatus SyncWorker::readSnapshot(const QString& device, const Syn
         return SyncFiles::ParseStatus::Corrupt;
     }
     return SyncFiles::decodeSnapshot(bytes, device, position, snapshot, parseError);
-}
-
-bool SyncWorker::latestSnapshot(const QString& device, SyncPosition* position, SyncFolder::Error* error)
-{
-    const QStringList names = m_folder->list(SyncFiles::deviceDirectory(device), error);
-    bool found = false;
-    for (const QString& name : names) {
-        SyncPosition candidate;
-        if (!SyncFiles::parseSnapshotFileName(name, &candidate)) {
-            continue;
-        }
-        if (!found || candidate.epoch > position->epoch
-            || (candidate.epoch == position->epoch && candidate.seq > position->seq)) {
-            *position = candidate;
-            found = true;
-        }
-    }
-    return found;
 }
 
 QList<qint64> SyncWorker::changeSequences(const QString& device, qint64 epoch, SyncFolder::Error* error)

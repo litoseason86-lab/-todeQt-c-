@@ -1,7 +1,10 @@
 #include "SyncRecord.h"
 
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonValue>
+
+#include <cmath>
 
 bool operator<(const SyncVersion& a, const SyncVersion& b)
 {
@@ -32,6 +35,24 @@ namespace SyncJson {
 
 namespace {
 
+// JSON 双精度浮点可精确无损表示的整数上限（2^53），同时远在 qint64 正负范围之内，避免有符号浮点转整型溢出 UB。
+constexpr double kMaxExactInteger = 9007199254740992.0;
+
+bool parseExactInt64(const QJsonValue& value, qint64* out, bool nonNegativeOnly = false)
+{
+    if (!value.isDouble()) {
+        return false;
+    }
+    const double number = value.toDouble();
+    if (!std::isfinite(number) || std::trunc(number) != number
+        || number < (nonNegativeOnly ? 0.0 : -kMaxExactInteger)
+        || number > kMaxExactInteger) {
+        return false;
+    }
+    *out = static_cast<qint64>(number);
+    return true;
+}
+
 QJsonValue valueToJson(const QVariant& value)
 {
     if (!value.isValid() || value.isNull()) {
@@ -51,22 +72,37 @@ QJsonValue valueToJson(const QVariant& value)
     }
 }
 
-QVariant valueFromJson(const QJsonValue& value)
+bool valueFromJson(const QJsonValue& value, QVariant* out)
 {
     if (value.isNull() || value.isUndefined()) {
-        return QVariant();
+        *out = QVariant();
+        return true;
     }
     if (value.isDouble()) {
-        // 同步的数字列都是整数（时长、排序号、标记位）。JSON 的数字是双精度，按整数取回；
-        // 真有小数时保留小数，不悄悄截断。
+        // 同步的数字列都是整数（时长、排序号、标记位）。JSON 的数字是双精度，落在 2^53 安全精确范围内的整数按 qint64 取回；
+        // 小数或超界有限浮点原样保留为 double 交由上层按单条域校验跳过，绝不强转 qint64 触发溢出 UB。
         const double number = value.toDouble();
-        const qint64 integer = qint64(number);
-        return double(integer) == number ? QVariant(integer) : QVariant(number);
+        if (!std::isfinite(number)) {
+            return false;
+        }
+        qint64 integer = 0;
+        if (parseExactInt64(value, &integer, false)) {
+            *out = QVariant(integer);
+        } else {
+            *out = QVariant(number);
+        }
+        return true;
     }
     if (value.isBool()) {
-        return QVariant(qint64(value.toBool() ? 1 : 0));
+        *out = QVariant(qint64(value.toBool() ? 1 : 0));
+        return true;
     }
-    return QVariant(value.toString());
+    if (value.isString()) {
+        *out = QVariant(value.toString());
+        return true;
+    }
+    // 数组或对象等非标量类型不得静默调用 toString() 退化为空串抹掉文本列。
+    return false;
 }
 
 QJsonObject versionToJson(const SyncVersion& version, const QString& timeKey, const QString& deviceKey,
@@ -82,47 +118,68 @@ bool readVersion(const QJsonObject& object, const QString& timeKey, const QStrin
 {
     const QJsonValue time = object.value(timeKey);
     const QJsonValue device = object.value(deviceKey);
-    if (!time.isDouble() || !device.isString()) {
+    qint64 parsedTime = 0;
+    if (!parseExactInt64(time, &parsedTime, true) || !device.isString()) {
         return false;
     }
-    version->time = qint64(time.toDouble());
+    version->time = parsedTime;
     version->device = device.toString();
     return true;
 }
 
 } // namespace
 
+QJsonObject recordToJson(const SyncRecord& record)
+{
+    QJsonObject object{{QStringLiteral("t"), record.table}, {QStringLiteral("id"), record.syncId}};
+    if (record.deleted) {
+        object.insert(QStringLiteral("del"), true);
+        object = versionToJson(record.deleteVersion, QStringLiteral("vt"), QStringLiteral("vd"), object);
+        object.insert(QStringLiteral("kind"), record.deleteKind);
+        if (!record.mergedInto.isEmpty()) {
+            object.insert(QStringLiteral("into"), record.mergedInto);
+        }
+    } else {
+        QJsonObject fields;
+        for (auto it = record.fields.cbegin(); it != record.fields.cend(); ++it) {
+            QJsonObject field{{QStringLiteral("v"), valueToJson(it.value().value)}};
+            field = versionToJson(it.value().version, QStringLiteral("t"), QStringLiteral("d"), field);
+            field = versionToJson(it.value().base, QStringLiteral("bt"), QStringLiteral("bd"), field);
+            fields.insert(it.key(), field);
+        }
+        object.insert(QStringLiteral("f"), fields);
+    }
+    return object;
+}
+
+QJsonObject settingToJson(const SyncSettingRecord& setting)
+{
+    QJsonObject object{{QStringLiteral("k"), setting.key}, {QStringLiteral("v"), setting.value}};
+    object = versionToJson(setting.version, QStringLiteral("t"), QStringLiteral("d"), object);
+    object = versionToJson(setting.base, QStringLiteral("bt"), QStringLiteral("bd"), object);
+    return object;
+}
+
+qint64 compactJsonBytes(const SyncRecord& record)
+{
+    return QJsonDocument(recordToJson(record)).toJson(QJsonDocument::Compact).size();
+}
+
+qint64 compactJsonBytes(const SyncSettingRecord& setting)
+{
+    return QJsonDocument(settingToJson(setting)).toJson(QJsonDocument::Compact).size();
+}
+
 QJsonObject toJson(const SyncBatch& batch)
 {
     QJsonArray records;
     for (const SyncRecord& record : batch.records) {
-        QJsonObject object{{QStringLiteral("t"), record.table}, {QStringLiteral("id"), record.syncId}};
-        if (record.deleted) {
-            object.insert(QStringLiteral("del"), true);
-            object = versionToJson(record.deleteVersion, QStringLiteral("vt"), QStringLiteral("vd"), object);
-            object.insert(QStringLiteral("kind"), record.deleteKind);
-            if (!record.mergedInto.isEmpty()) {
-                object.insert(QStringLiteral("into"), record.mergedInto);
-            }
-        } else {
-            QJsonObject fields;
-            for (auto it = record.fields.cbegin(); it != record.fields.cend(); ++it) {
-                QJsonObject field{{QStringLiteral("v"), valueToJson(it.value().value)}};
-                field = versionToJson(it.value().version, QStringLiteral("t"), QStringLiteral("d"), field);
-                field = versionToJson(it.value().base, QStringLiteral("bt"), QStringLiteral("bd"), field);
-                fields.insert(it.key(), field);
-            }
-            object.insert(QStringLiteral("f"), fields);
-        }
-        records.append(object);
+        records.append(recordToJson(record));
     }
 
     QJsonArray settings;
     for (const SyncSettingRecord& setting : batch.settings) {
-        QJsonObject object{{QStringLiteral("k"), setting.key}, {QStringLiteral("v"), setting.value}};
-        object = versionToJson(setting.version, QStringLiteral("t"), QStringLiteral("d"), object);
-        object = versionToJson(setting.base, QStringLiteral("bt"), QStringLiteral("bd"), object);
-        settings.append(object);
+        settings.append(settingToJson(setting));
     }
 
     return {
@@ -143,8 +200,9 @@ bool fromJson(const QJsonObject& object, SyncBatch* batch, QString* error)
         return false;
     };
 
-    const int format = object.value(QStringLiteral("format")).toInt(-1);
-    if (format < kOldestReadableFormat || format > kFormatVersion) {
+    qint64 format = -1;
+    if (!parseExactInt64(object.value(QStringLiteral("format")), &format, true)
+        || format < kOldestReadableFormat || format > kFormatVersion) {
         return fail(format > kFormatVersion ? QStringLiteral("同步文件由更新的版本写出，当前版本读不懂")
                                             : QStringLiteral("同步文件格式不认识"));
     }
@@ -164,17 +222,30 @@ bool fromJson(const QJsonObject& object, SyncBatch* batch, QString* error)
 
     SyncBatch result;
     result.device = object.value(QStringLiteral("device")).toString();
-    result.epoch = qint64(object.value(QStringLiteral("epoch")).toDouble());
+    const QJsonValue epochValue = object.value(QStringLiteral("epoch"));
+    if (!epochValue.isUndefined() && !parseExactInt64(epochValue, &result.epoch, true)) {
+        return fail(QStringLiteral("同步文件里的纪元不合法"));
+    }
 
     for (const QJsonValue& value : object.value(QStringLiteral("records")).toArray()) {
+        if (!value.isObject()) {
+            return fail(QStringLiteral("同步文件里的记录项不是对象"));
+        }
         const QJsonObject item = value.toObject();
         SyncRecord record;
+        if (!item.value(QStringLiteral("t")).isString() || !item.value(QStringLiteral("id")).isString()) {
+            return fail(QStringLiteral("同步文件里有缺少表名或身份的记录"));
+        }
         record.table = item.value(QStringLiteral("t")).toString();
         record.syncId = item.value(QStringLiteral("id")).toString();
         if (record.table.isEmpty() || record.syncId.isEmpty()) {
             return fail(QStringLiteral("同步文件里有缺少表名或身份的记录"));
         }
-        record.deleted = item.value(QStringLiteral("del")).toBool(false);
+        const QJsonValue delValue = item.value(QStringLiteral("del"));
+        if (!delValue.isUndefined() && !delValue.isBool()) {
+            return fail(QStringLiteral("同步文件里的删除标记不合法"));
+        }
+        record.deleted = delValue.toBool(false);
         if (record.deleted) {
             if (!readVersion(item, QStringLiteral("vt"), QStringLiteral("vd"), &record.deleteVersion)) {
                 return fail(QStringLiteral("同步文件里的删除记录缺少版本"));
@@ -182,15 +253,27 @@ bool fromJson(const QJsonObject& object, SyncBatch* batch, QString* error)
             record.deleteKind = item.value(QStringLiteral("kind")).toString(QStringLiteral("delete"));
             record.mergedInto = item.value(QStringLiteral("into")).toString();
         } else {
-            const QJsonObject fields = item.value(QStringLiteral("f")).toObject();
+            const QJsonValue fieldsValue = item.value(QStringLiteral("f"));
+            if (!fieldsValue.isUndefined() && !fieldsValue.isObject()) {
+                return fail(QStringLiteral("同步文件里的字段集合不是对象"));
+            }
+            const QJsonObject fields = fieldsValue.toObject();
             for (auto it = fields.constBegin(); it != fields.constEnd(); ++it) {
+                if (!it.value().isObject()) {
+                    return fail(QStringLiteral("同步文件里的字段项不是对象"));
+                }
                 const QJsonObject field = it.value().toObject();
                 SyncFieldValue fieldValue;
-                fieldValue.value = valueFromJson(field.value(QStringLiteral("v")));
+                if (!valueFromJson(field.value(QStringLiteral("v")), &fieldValue.value)) {
+                    return fail(QStringLiteral("同步文件里的字段值类型不合法"));
+                }
                 if (!readVersion(field, QStringLiteral("t"), QStringLiteral("d"), &fieldValue.version)) {
                     return fail(QStringLiteral("同步文件里的字段缺少版本"));
                 }
-                readVersion(field, QStringLiteral("bt"), QStringLiteral("bd"), &fieldValue.base);
+                if ((!field.value(QStringLiteral("bt")).isUndefined() || !field.value(QStringLiteral("bd")).isUndefined())
+                    && !readVersion(field, QStringLiteral("bt"), QStringLiteral("bd"), &fieldValue.base)) {
+                    return fail(QStringLiteral("同步文件里的字段基准版本不合法"));
+                }
                 record.fields.insert(it.key(), fieldValue);
             }
         }
@@ -198,7 +281,13 @@ bool fromJson(const QJsonObject& object, SyncBatch* batch, QString* error)
     }
 
     for (const QJsonValue& value : object.value(QStringLiteral("settings")).toArray()) {
+        if (!value.isObject()) {
+            return fail(QStringLiteral("同步文件里的设置项不是对象"));
+        }
         const QJsonObject item = value.toObject();
+        if (!item.value(QStringLiteral("k")).isString() || !item.value(QStringLiteral("v")).isString()) {
+            return fail(QStringLiteral("同步文件里的设置项不完整"));
+        }
         SyncSettingRecord setting;
         setting.key = item.value(QStringLiteral("k")).toString();
         setting.value = item.value(QStringLiteral("v")).toString();
@@ -206,7 +295,10 @@ bool fromJson(const QJsonObject& object, SyncBatch* batch, QString* error)
             || !readVersion(item, QStringLiteral("t"), QStringLiteral("d"), &setting.version)) {
             return fail(QStringLiteral("同步文件里的设置项不完整"));
         }
-        readVersion(item, QStringLiteral("bt"), QStringLiteral("bd"), &setting.base);
+        if ((!item.value(QStringLiteral("bt")).isUndefined() || !item.value(QStringLiteral("bd")).isUndefined())
+            && !readVersion(item, QStringLiteral("bt"), QStringLiteral("bd"), &setting.base)) {
+            return fail(QStringLiteral("同步文件里的设置项基准版本不合法"));
+        }
         result.settings.append(setting);
     }
 
@@ -227,11 +319,13 @@ QString canonicalValue(const QVariant& value)
     case QMetaType::Bool:
         return QStringLiteral("i:") + QString::number(value.toLongLong());
     case QMetaType::Double: {
-        // 整数值的浮点数按整数写，与从 JSON 读回的整数一致。
+        // 精确安全整数范围内的浮点按整数写，超界或带小数的原样格式化，避免超界 double 强转 qint64 触发 UB。
         const double number = value.toDouble();
-        const qint64 integer = qint64(number);
-        return double(integer) == number ? QStringLiteral("i:") + QString::number(integer)
-                                         : QStringLiteral("r:") + QString::number(number, 'g', 17);
+        if (std::isfinite(number) && std::trunc(number) == number
+            && number >= -kMaxExactInteger && number <= kMaxExactInteger) {
+            return QStringLiteral("i:") + QString::number(static_cast<qint64>(number));
+        }
+        return QStringLiteral("r:") + QString::number(number, 'g', 17);
     }
     default:
         return QStringLiteral("s:") + value.toString();

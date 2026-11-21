@@ -18,10 +18,18 @@
 #include <QStringList>
 #include <QMap>
 
+#include <algorithm>
 #include <iterator>
 
 namespace {
 constexpr auto kConnectionName = "PomodoroTodoConnection";
+
+// SQLite 双引号标识符中的双引号必须写成 "" 转义，避免异常触发器名截断 DROP 语句或借行注释逃逸。
+QString dropTriggerSql(QString name)
+{
+    return QStringLiteral("DROP TRIGGER IF EXISTS \"%1\"")
+        .arg(name.replace(QLatin1Char('"'), QStringLiteral("\"\"")));
+}
 
 QString normalizedCreateSql(QString sql)
 {
@@ -138,30 +146,41 @@ bool DatabaseManager::initialize(const QString& dbPath)
     m_db.setDatabaseName(path);
     if (!m_db.open()) {
         qWarning() << "Failed to open database:" << path << m_db.lastError().text();
+        close();
         return false;
     }
 
-    QSqlQuery pragmaQuery(m_db);
-    if (!pragmaQuery.exec(QStringLiteral("PRAGMA foreign_keys = ON"))) {
-        qWarning() << "Failed to enable SQLite foreign keys:" << pragmaQuery.lastError().text();
-        return false;
-    }
+    {
+        QSqlQuery pragmaQuery(m_db);
+        if (!pragmaQuery.exec(QStringLiteral("PRAGMA foreign_keys = ON"))) {
+            qWarning() << "Failed to enable SQLite foreign keys:" << pragmaQuery.lastError().text();
+            pragmaQuery.finish();
+            pragmaQuery = QSqlQuery();
+            close();
+            return false;
+        }
 
-    // 导出走工作线程，会对同一个库文件另开一条连接（见 ExportService::acquireDatabase）。
-    // SQLite 的 busy_timeout 默认是 0——撞上别的连接持锁就立刻返回 SQLITE_BUSY，
-    // 于是导出期间主线程的一次提交（结束番茄、存会话）会当场失败，而调用方只有 qWarning。
-    // 给足等待窗口，让并发访问退化成"慢一点"而不是"丢一次写入"。
-    // 数值与 BackupOperations 里那条保持一致：同一个库出现两个不同超时值会让人以为有特殊含义。
-    if (!pragmaQuery.exec(QStringLiteral("PRAGMA busy_timeout = 5000"))) {
-        qWarning() << "Failed to set SQLite busy timeout:" << pragmaQuery.lastError().text();
-        return false;
+        // 导出走工作线程，会对同一个库文件另开一条连接（见 ExportService::acquireDatabase）。
+        // SQLite 的 busy_timeout 默认是 0——撞上别的连接持锁就立刻返回 SQLITE_BUSY，
+        // 于是导出期间主线程的一次提交（结束番茄、存会话）会当场失败，而调用方只有 qWarning。
+        // 给足等待窗口，让并发访问退化成"慢一点"而不是"丢一次写入"。
+        // 数值与 BackupOperations 里那条保持一致：同一个库出现两个不同超时值会让人以为有特殊含义。
+        if (!pragmaQuery.exec(QStringLiteral("PRAGMA busy_timeout = 5000"))) {
+            qWarning() << "Failed to set SQLite busy timeout:" << pragmaQuery.lastError().text();
+            pragmaQuery.finish();
+            pragmaQuery = QSqlQuery();
+            close();
+            return false;
+        }
+        // busy_timeout 和 foreign_keys 不一样：它会**返回一行**（设置后的新值）。
+        // 不收尾的话这条语句一直挂在连接上，后面迁移快照的 VACUUM INTO 会报
+        // "cannot VACUUM - SQL statements in progress"，而且这条未完成的语句还会一直占着读锁。
+        pragmaQuery.finish();
     }
-    // busy_timeout 和 foreign_keys 不一样：它会**返回一行**（设置后的新值）。
-    // 不收尾的话这条语句一直挂在连接上，后面迁移快照的 VACUUM INTO 会报
-    // "cannot VACUUM - SQL statements in progress"，而且这条未完成的语句还会一直占着读锁。
-    pragmaQuery.finish();
 
     if (!createTables()) {
+        // 初始化未能完成时立即关闭并移除连接，避免调用方看到 isOpen() 为真去操作未就绪或更高版本的库。
+        close();
         return false;
     }
     // 只有完整打开并迁移成功才提交本次启动的上下文；失败不能污染上一次成功结果。
@@ -277,10 +296,26 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // 区分「对象确实缺失」与「元数据检查 SQL 执行失败」：任何检查查询本身出错时一律 fail-closed，
+    // 防止瞬时 SQLite 故障被当成缺表/缺列而误触发迁移重建或多余的 VACUUM INTO 快照。
+    const auto checkTableExists = [this](const QString& name, bool* exists) {
+        bool ok = false;
+        *exists = tableExists(name, &ok);
+        return ok;
+    };
+    const auto checkColumnExists = [this](const QString& table, const QString& column, bool* exists) {
+        bool ok = false;
+        *exists = columnExists(table, column, &ok);
+        return ok;
+    };
+
     // 活动会话表不参与 user_version 迁移链。旧用户可能已经有该表但缺少新列，
     // 必须在每次建表检查时补齐，否则恢复番茄轮次会静默退回 0。
-    if (!columnExists(QStringLiteral("active_focus_state"),
-                      QStringLiteral("completed_pomodoros"))) {
+    bool exists = false;
+    if (!checkColumnExists(QStringLiteral("active_focus_state"), QStringLiteral("completed_pomodoros"), &exists)) {
+        return false;
+    }
+    if (!exists) {
         if (!execSql(query,
                      QStringLiteral("ALTER TABLE active_focus_state ADD COLUMN "
                                     "completed_pomodoros INTEGER NOT NULL DEFAULT 0 "
@@ -292,7 +327,10 @@ bool DatabaseManager::createTables()
 
     // 休息没有专注行可回查开始时间；新增快照字段保留暂停和重启前的真实起点。
     // 旧快照留空，由恢复逻辑使用最后检查点推算，不把升级后的离线时间计入休息。
-    if (!columnExists(QStringLiteral("active_focus_state"), QStringLiteral("start_time"))
+    if (!checkColumnExists(QStringLiteral("active_focus_state"), QStringLiteral("start_time"), &exists)) {
+        return false;
+    }
+    if (!exists
         && !execSql(query, QStringLiteral("ALTER TABLE active_focus_state ADD COLUMN start_time TEXT"),
                     "Failed to add active state start time:")) {
         return false;
@@ -317,7 +355,10 @@ bool DatabaseManager::createTables()
         {"boot_id", "boot_id TEXT"},
     };
     for (const auto& column : anchorColumns) {
-        if (!columnExists(QStringLiteral("active_focus_state"), QString::fromLatin1(column.name))
+        if (!checkColumnExists(QStringLiteral("active_focus_state"), QString::fromLatin1(column.name), &exists)) {
+            return false;
+        }
+        if (!exists
             && !execSql(query,
                         QStringLiteral("ALTER TABLE active_focus_state ADD COLUMN %1")
                             .arg(QString::fromLatin1(column.definition)),
@@ -327,32 +368,42 @@ bool DatabaseManager::createTables()
     }
 
     // 版本 2 引入 categories/category_id，同时保留旧版文本科目。
-    if (version < 2
-        || !tableExists(QStringLiteral("categories"))
-        || !columnExists(QStringLiteral("tasks"), QStringLiteral("category_id"))) {
+    bool hasCategoriesTable = false;
+    bool hasTaskCategoryId = false;
+    if (!checkTableExists(QStringLiteral("categories"), &hasCategoriesTable)
+        || !checkColumnExists(QStringLiteral("tasks"), QStringLiteral("category_id"), &hasTaskCategoryId)) {
+        return false;
+    }
+    if (version < 2 || !hasCategoriesTable || !hasTaskCategoryId) {
         if (!migrateToVersion2()) {
             return false;
         }
-        version = 2;
+        version = std::max(version, 2);
     } else if (!createCategoriesTable() || !insertPresetCategories()) {
         return false;
     }
 
     // 版本 3 引入每日例行表 routines（纯新增，向后兼容）。
-    if (version < 3 || !tableExists(QStringLiteral("routines"))) {
+    bool hasRoutinesTable = false;
+    if (!checkTableExists(QStringLiteral("routines"), &hasRoutinesTable)) {
+        return false;
+    }
+    if (version < 3 || !hasRoutinesTable) {
         if (!migrateToVersion3()) {
             return false;
         }
-        version = 3;
+        version = std::max(version, 3);
     }
 
     // 版本 4 给 tasks 增加 routine_id 血缘列；列缺失时无论版本号都要补，防御半迁移状态。
-    if (version < 4
-        || !columnExists(QStringLiteral("tasks"), QStringLiteral("routine_id"))) {
+    if (!checkColumnExists(QStringLiteral("tasks"), QStringLiteral("routine_id"), &exists)) {
+        return false;
+    }
+    if (version < 4 || !exists) {
         if (!migrateToVersion4()) {
             return false;
         }
-        version = 4;
+        version = std::max(version, 4);
     }
 
     // v5 是整个迁移链里唯一会整表重建 tasks 的一步，代价最高、破坏力最大。
@@ -364,18 +415,20 @@ bool DatabaseManager::createTables()
         if (!migrateToVersion5()) {
             return false;
         }
-        version = 5;
+        version = std::max(version, 5);
     } else if (!foreignKeyCheckSucceeded) {
         // 不重建，但也不能假装一切正常：下次启动查询成功时会再判一次。
         qWarning() << "跳过 v5 外键检查：无法读取 tasks 外键定义，本次不重建该表";
     }
 
-    if (version < 6
-        || !columnExists(QStringLiteral("tasks"), QStringLiteral("routine_generated"))) {
+    if (!checkColumnExists(QStringLiteral("tasks"), QStringLiteral("routine_generated"), &exists)) {
+        return false;
+    }
+    if (version < 6 || !exists) {
         if (!migrateToVersion6()) {
             return false;
         }
-        version = 6;
+        version = std::max(version, 6);
     }
 
     // 版本 7 给 tasks 增加任务预估列，给 focus_sessions 增加专注模式列；
@@ -386,55 +439,68 @@ bool DatabaseManager::createTables()
     // 一个已经迁到 v10 的库每次启动都会重跑 v7–v10 四步迁移（各建一次迁移快照），
     // 最终状态自愈、用户数据不丢（v10 的回填有 estimated_minutes = 0 守卫），
     // 但那是每次启动都白做一遍的重活。
-    if (version < 7
-        || !columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_minutes"))
-        || !columnExists(QStringLiteral("focus_sessions"), QStringLiteral("mode"))) {
+    bool hasEstimatedMinutes = false;
+    bool hasSessionMode = false;
+    if (!checkColumnExists(QStringLiteral("tasks"), QStringLiteral("estimated_minutes"), &hasEstimatedMinutes)
+        || !checkColumnExists(QStringLiteral("focus_sessions"), QStringLiteral("mode"), &hasSessionMode)) {
+        return false;
+    }
+    if (version < 7 || !hasEstimatedMinutes || !hasSessionMode) {
         if (!migrateToVersion7()) {
             return false;
         }
-        version = 7;
+        version = std::max(version, 7);
     }
 
-    if (version < 8
-        || !columnExists(QStringLiteral("focus_sessions"),
-                         QStringLiteral("pomodoro_completed"))) {
+    if (!checkColumnExists(QStringLiteral("focus_sessions"), QStringLiteral("pomodoro_completed"), &exists)) {
+        return false;
+    }
+    if (version < 8 || !exists) {
         if (!migrateToVersion8()) {
             return false;
         }
-        version = 8;
+        version = std::max(version, 8);
     }
 
-    if (version < 9
-        || !columnExists(QStringLiteral("focus_sessions"),
-                         QStringLiteral("category_id_snapshot"))
-        || !columnExists(QStringLiteral("focus_sessions"),
-                         QStringLiteral("category_name_snapshot"))
-        || !columnExists(QStringLiteral("focus_sessions"),
-                         QStringLiteral("category_color_snapshot"))) {
+    bool hasCatIdSnap = false;
+    bool hasCatNameSnap = false;
+    bool hasCatColorSnap = false;
+    if (!checkColumnExists(QStringLiteral("focus_sessions"), QStringLiteral("category_id_snapshot"), &hasCatIdSnap)
+        || !checkColumnExists(QStringLiteral("focus_sessions"), QStringLiteral("category_name_snapshot"), &hasCatNameSnap)
+        || !checkColumnExists(QStringLiteral("focus_sessions"), QStringLiteral("category_color_snapshot"), &hasCatColorSnap)) {
+        return false;
+    }
+    if (version < 9 || !hasCatIdSnap || !hasCatNameSnap || !hasCatColorSnap) {
         if (!migrateToVersion9()) {
             return false;
         }
-        version = 9;
+        version = std::max(version, 9);
     }
 
     // v10 把「预估番茄数」换成「预计用时（分钟）」。列缺失时无论版本号都要补，
     // 与前面几步一样防御半迁移状态。
-    if (version < 10
-        || !columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_minutes"))) {
+    if (!checkColumnExists(QStringLiteral("tasks"), QStringLiteral("estimated_minutes"), &exists)) {
+        return false;
+    }
+    if (version < 10 || !exists) {
         if (!migrateToVersion10()) {
             return false;
         }
-        version = 10;
+        version = std::max(version, 10);
     }
 
     // v11：任务加备注与手动排序。两列缺任意一列都要补，与前面几步同理防御半迁移状态。
-    if (version < 11
-        || !columnExists(QStringLiteral("tasks"), QStringLiteral("notes"))
-        || !columnExists(QStringLiteral("tasks"), QStringLiteral("display_order"))) {
+    bool hasNotes = false;
+    bool hasDisplayOrder = false;
+    if (!checkColumnExists(QStringLiteral("tasks"), QStringLiteral("notes"), &hasNotes)
+        || !checkColumnExists(QStringLiteral("tasks"), QStringLiteral("display_order"), &hasDisplayOrder)) {
+        return false;
+    }
+    if (version < 11 || !hasNotes || !hasDisplayOrder) {
         if (!migrateToVersion11()) {
             return false;
         }
-        version = 11;
+        version = std::max(version, 11);
     }
 
     // 即使 user_version 已经是 12，也要识别恢复中断或外部写入留下的半迁移数据。
@@ -455,19 +521,23 @@ bool DatabaseManager::createTables()
         if (!migrateToVersion12()) {
             return false;
         }
-        version = 12;
+        version = std::max(version, 12);
     }
 
     // v13 引入课表两表。表缺失时无论版本号都要建，与前面几步同理防御半迁移状态。
     // 注意这里不能只判 schedule_entries：节次表是独立的一张，
     // 只建了课表项而节次表缺失时，「按节次」显示模式会没有任何行可画。
-    if (version < 13
-        || !tableExists(QStringLiteral("schedule_entries"))
-        || !tableExists(QStringLiteral("schedule_periods"))) {
+    bool hasScheduleEntries = false;
+    bool hasSchedulePeriods = false;
+    if (!checkTableExists(QStringLiteral("schedule_entries"), &hasScheduleEntries)
+        || !checkTableExists(QStringLiteral("schedule_periods"), &hasSchedulePeriods)) {
+        return false;
+    }
+    if (version < 13 || !hasScheduleEntries || !hasSchedulePeriods) {
         if (!migrateToVersion13()) {
             return false;
         }
-        version = 13;
+        version = std::max(version, 13);
     }
 
     // 仅判断表名存在是假安全：缺列的 v13 备份也会通过 IF NOT EXISTS，
@@ -478,11 +548,15 @@ bool DatabaseManager::createTables()
     }
 
     // v14 引入知识缺口表。与前面几步同理：表缺失时无论版本号都要建，防御半迁移状态。
-    if (version < 14 || !tableExists(QStringLiteral("knowledge_gaps"))) {
+    bool hasKnowledgeGaps = false;
+    if (!checkTableExists(QStringLiteral("knowledge_gaps"), &hasKnowledgeGaps)) {
+        return false;
+    }
+    if (version < 14 || !hasKnowledgeGaps) {
         if (!migrateToVersion14()) {
             return false;
         }
-        version = 14;
+        version = std::max(version, 14);
     }
 
     // 同样不能只判表名存在：缺列的库也会通过 IF NOT EXISTS，
@@ -494,31 +568,41 @@ bool DatabaseManager::createTables()
 
     // v15 给 routines 增加重复日位掩码。列缺失时无论版本号都要补，与前面几步同理防御半迁移状态：
     // 缺了这一列，例行生成查询会直接报错，整张今日清单都不再自动补例行任务。
-    if (version < 15 || !columnExists(QStringLiteral("routines"), QStringLiteral("weekdays"))) {
+    if (!checkColumnExists(QStringLiteral("routines"), QStringLiteral("weekdays"), &exists)) {
+        return false;
+    }
+    if (version < 15 || !exists) {
         if (!migrateToVersion15()) {
             return false;
         }
-        version = 15;
+        version = std::max(version, 15);
     }
 
     // v16 给 tasks 增加完成记录列。与前面几步同理，列缺失时无论版本号都要补：
     // 任务查询会直接读这一列，缺了它今日任务、周计划整页都加载失败。
-    if (version < 16 || !columnExists(QStringLiteral("tasks"), QStringLiteral("completion_note"))) {
+    if (!checkColumnExists(QStringLiteral("tasks"), QStringLiteral("completion_note"), &exists)) {
+        return false;
+    }
+    if (version < 16 || !exists) {
         if (!migrateToVersion16()) {
             return false;
         }
-        version = 16;
+        version = std::max(version, 16);
     }
 
     // v17 删除长期目标表。表还在时无论版本号都要删，与前面几步同理防御半迁移状态。
     // 恢复 v16 及更早的备份会把表带回来，那时版本号本来就小于 17；版本号已是 17 而表还在，
     // 只可能是外部改过库或恢复中途被打断。旧版本不会把表重新建出来：它打不开 v17 的库
     // （见本函数开头对未来 schema 的拒绝），目标服务也就没有机会按「懒建」再建一张。
-    if (version < 17 || tableExists(QStringLiteral("long_goals"))) {
+    bool hasLongGoals = false;
+    if (!checkTableExists(QStringLiteral("long_goals"), &hasLongGoals)) {
+        return false;
+    }
+    if (version < 17 || hasLongGoals) {
         if (!migrateToVersion17()) {
             return false;
         }
-        version = 17;
+        version = std::max(version, 17);
     }
 
     // 倒计时表要参与同步，下面的同步迁移要给它加列、回填、装触发器，所以先确保它在。
@@ -528,9 +612,13 @@ bool DatabaseManager::createTables()
 
     // 新增表前先拍快照，保存真正的升级前数据；表先于同步迁移建立，
     // 阶段 2 加入同步清单后可复用原来的身份回填与触发器安装，不另写一套迁移。
-    if (version < 20 || !tableExists(QStringLiteral("memos"))) {
+    bool hasMemos = false;
+    if (!checkTableExists(QStringLiteral("memos"), &hasMemos)) {
+        return false;
+    }
+    if (version < 20 || !hasMemos) {
         // 表已完整、只是版本号被调低时没有新结构改动，不占用快照保留名额。
-        if ((!tableExists(QStringLiteral("memos")) && !backupDatabaseBeforeMigration())
+        if ((!hasMemos && !backupDatabaseBeforeMigration())
             || !createMemoTable()) {
             return false;
         }
@@ -546,8 +634,12 @@ bool DatabaseManager::createTables()
     // 按清单补齐 sync_id、回填、入队和触发器（syncSchemaIsComplete 逐表检查，缺列就重跑）；
     // 已经是 v21、废纸篓表却还没有同步列的库（计划 054 阶段 1 留下的）也走同一条路，版本号不变。
     // 补出来的列不属于业务契约（见 trashSchemaIsValid）。
-    if (version < 21 || !tableExists(QStringLiteral("trash_items"))) {
-        if ((!tableExists(QStringLiteral("trash_items")) && !backupDatabaseBeforeMigration())
+    bool hasTrash = false;
+    if (!checkTableExists(QStringLiteral("trash_items"), &hasTrash)) {
+        return false;
+    }
+    if (version < 21 || !hasTrash) {
+        if ((!hasTrash && !backupDatabaseBeforeMigration())
             || !createTrashTable()) {
             return false;
         }
@@ -561,29 +653,43 @@ bool DatabaseManager::createTables()
     // 迁移本身可以重复执行，已经有的身份和版本保持不动。第二期加进同步清单的三张表也由这一步补齐
     // （备忘录、废纸篓同理）：v18 的库里它们还没有 sync_id，结构判为不完整，
     // 这一步就会给它们加列、回填并放进待发送队列。
-    if (version < 18 || !syncSchemaIsComplete()) {
+    bool syncSchemaQueryOk = false;
+    const bool syncComplete = syncSchemaIsComplete(&syncSchemaQueryOk);
+    if (!syncSchemaQueryOk) {
+        return false;
+    }
+    if (version < 18 || !syncComplete) {
         if (!migrateToVersion18()) {
             return false;
         }
-        version = 18;
+        version = std::max(version, 18);
     }
     if (version < 19) {
         if (!migrateToVersion19()) {
             return false;
         }
-        version = 19;
+        version = std::max(version, 19);
     }
     if (!ensureSyncInfrastructure()) {
         return false;
     }
-    if (version < 20 && !migrateToVersion20()) {
-        return false;
+    if (version < 20) {
+        if (!migrateToVersion20()) {
+            return false;
+        }
+        version = std::max(version, 20);
     }
-    if (version < 21 && !migrateToVersion21()) {
-        return false;
+    if (version < 21) {
+        if (!migrateToVersion21()) {
+            return false;
+        }
+        version = std::max(version, 21);
     }
-    if (version < 22 && !migrateToVersion22()) {
-        return false;
+    if (version < 22) {
+        if (!migrateToVersion22()) {
+            return false;
+        }
+        version = std::max(version, 22);
     }
     // 已升级库丢失或损坏的循环计数只影响长休息节奏，告警后从零重新开始；
     // 不从可能陈旧的活动镜像猜测计数。外部备份仍由恢复入口严格校验，不在这里放宽。
@@ -894,20 +1000,47 @@ bool DatabaseManager::scheduleSchemaIsValid() const
         }
     }
 
-    QSqlQuery foreignKey(m_db);
+    return scheduleForeignKeysAreValid(m_db);
+}
+
+bool DatabaseManager::scheduleForeignKeysAreValid(const QSqlDatabase& db)
+{
+    // 与 knowledgeGapForeignKeysAreValid / memoForeignKeysAreValid 同口径：
+    // 1. schedule_entries 必须恰好只有 1 条单列（seq == 0）外键：category_id → categories(id) ON DELETE SET NULL，
+    //    不允许并存额外的 CASCADE 约束或复合外键；
+    // 2. schedule_periods 不得包含任何外键约束。
+    QSqlQuery foreignKey(db);
     if (!foreignKey.exec(QStringLiteral("PRAGMA foreign_key_list(schedule_entries)"))) {
         return false;
     }
+    int matched = 0;
     while (foreignKey.next()) {
-        if (foreignKey.value(2).toString() == QStringLiteral("categories")
-            && foreignKey.value(3).toString() == QStringLiteral("category_id")
-            && foreignKey.value(4).toString() == QStringLiteral("id")
-            && foreignKey.value(6).toString().compare(
-                   QStringLiteral("SET NULL"), Qt::CaseInsensitive) == 0) {
-            return true;
+        const int columnSeq = foreignKey.value(1).toInt();
+        const QString referencedTable = foreignKey.value(2).toString();
+        const QString fromColumn = foreignKey.value(3).toString();
+        const QString toColumn = foreignKey.value(4).toString();
+        const QString onDelete = foreignKey.value(6).toString();
+        if (columnSeq != 0
+            || referencedTable.compare(QStringLiteral("categories"), Qt::CaseInsensitive) != 0
+            || fromColumn != QStringLiteral("category_id")
+            || toColumn != QStringLiteral("id")
+            || onDelete.compare(QStringLiteral("SET NULL"), Qt::CaseInsensitive) != 0) {
+            return false;
         }
+        ++matched;
     }
-    return false;
+    if (foreignKey.lastError().isValid() || matched != 1) {
+        return false;
+    }
+
+    QSqlQuery periodsForeignKey(db);
+    if (!periodsForeignKey.exec(QStringLiteral("PRAGMA foreign_key_list(schedule_periods)"))) {
+        return false;
+    }
+    if (periodsForeignKey.next() || periodsForeignKey.lastError().isValid()) {
+        return false;
+    }
+    return true;
 }
 
 bool DatabaseManager::routineForeignKeyUsesSetNull(bool* checkSucceeded) const
@@ -1129,18 +1262,50 @@ bool DatabaseManager::createCountdownGoalsTable()
                    "Failed to create countdown_goals table:");
 }
 
-bool DatabaseManager::syncSchemaIsComplete() const
+bool DatabaseManager::syncSchemaIsComplete(bool* queryOk) const
 {
+    if (queryOk) {
+        *queryOk = false;
+    }
     for (const SyncSchema::Table& table : SyncSchema::tables()) {
-        if (!columnExists(table.name, QStringLiteral("sync_id"))
-            || !indexExists(QStringLiteral("idx_%1_sync_id").arg(table.name))) {
+        bool colOk = false;
+        const bool hasCol = columnExists(table.name, QStringLiteral("sync_id"), &colOk);
+        if (!colOk) {
+            return false;
+        }
+        if (!hasCol) {
+            if (queryOk) {
+                *queryOk = true;
+            }
+            return false;
+        }
+        bool idxOk = false;
+        const bool hasIdx = indexExists(QStringLiteral("idx_%1_sync_id").arg(table.name), &idxOk);
+        if (!idxOk) {
+            return false;
+        }
+        if (!hasIdx) {
+            if (queryOk) {
+                *queryOk = true;
+            }
             return false;
         }
     }
     for (const QString& name : SyncSchema::infrastructureTableNames()) {
-        if (!tableExists(name)) {
+        bool tblOk = false;
+        const bool hasTbl = tableExists(name, &tblOk);
+        if (!tblOk) {
             return false;
         }
+        if (!hasTbl) {
+            if (queryOk) {
+                *queryOk = true;
+            }
+            return false;
+        }
+    }
+    if (queryOk) {
+        *queryOk = true;
     }
     return true;
 }
@@ -1191,10 +1356,10 @@ bool DatabaseManager::ensureSyncTriggers()
     }
     query.finish();
 
-    // 旧版本留下、现在已经不用的同步触发器一并删掉；别人建的触发器（名字不符合约定）不碰。
+    // 旧版本留下、现在已经不用或异常后缀占用同步前缀的触发器一并删掉；别人建的触发器（名字不以 表名_sync_ 开头）不碰。
     for (auto it = existing.cbegin(); it != existing.cend(); ++it) {
-        if (SyncSchema::isSyncTriggerName(it.key()) && !canonical.contains(it.key())
-            && !query.exec(QStringLiteral("DROP TRIGGER IF EXISTS \"%1\"").arg(it.key()))) {
+        if (SyncSchema::hasSyncTriggerPrefix(it.key()) && !canonical.contains(it.key())
+            && !query.exec(dropTriggerSql(it.key()))) {
             qWarning() << "Failed to drop obsolete sync trigger:" << query.lastError().text();
             return false;
         }
@@ -1204,7 +1369,7 @@ bool DatabaseManager::ensureSyncTriggers()
             continue;
         }
         // 缺失或内容不一致（旧版本、外部改过）：删掉重建。
-        if (!query.exec(QStringLiteral("DROP TRIGGER IF EXISTS \"%1\"").arg(trigger.first))
+        if (!query.exec(dropTriggerSql(trigger.first))
             || !query.exec(trigger.second)) {
             qWarning() << "Failed to create sync trigger" << trigger.first << query.lastError().text();
             return false;
@@ -1231,13 +1396,13 @@ bool DatabaseManager::dropForeignSyncTriggers()
     QStringList foreign;
     while (query.next()) {
         const QString name = query.value(0).toString();
-        if (SyncSchema::isSyncTriggerName(name) && canonical.value(name) != query.value(1).toString()) {
+        if (SyncSchema::hasSyncTriggerPrefix(name) && canonical.value(name) != query.value(1).toString()) {
             foreign.append(name);
         }
     }
     query.finish();
     for (const QString& name : std::as_const(foreign)) {
-        if (!query.exec(QStringLiteral("DROP TRIGGER IF EXISTS \"%1\"").arg(name))) {
+        if (!query.exec(dropTriggerSql(name))) {
             qWarning() << "Failed to drop foreign sync trigger:" << query.lastError().text();
             return false;
         }
@@ -1252,10 +1417,23 @@ bool DatabaseManager::dropSyncTriggersIfSchemaIncomplete()
 {
     bool missing = false;
     for (const QString& name : SyncSchema::infrastructureTableNames()) {
-        missing = missing || !tableExists(name);
+        bool ok = false;
+        const bool exists = tableExists(name, &ok);
+        if (!ok) {
+            return false;
+        }
+        missing = missing || !exists;
     }
     for (const SyncSchema::Table& table : SyncSchema::tables()) {
-        if (missing || !tableExists(table.name)) {
+        if (missing) {
+            continue;
+        }
+        bool ok = false;
+        const bool exists = tableExists(table.name, &ok);
+        if (!ok) {
+            return false;
+        }
+        if (!exists) {
             continue;
         }
         const QStringList columns = tableColumns(table.name);
@@ -1276,13 +1454,13 @@ bool DatabaseManager::dropSyncTriggersIfSchemaIncomplete()
     QStringList names;
     while (query.next()) {
         const QString name = query.value(0).toString();
-        if (SyncSchema::isSyncTriggerName(name)) {
+        if (SyncSchema::hasSyncTriggerPrefix(name)) {
             names.append(name);
         }
     }
     query.finish();
     for (const QString& name : names) {
-        if (!query.exec(QStringLiteral("DROP TRIGGER IF EXISTS \"%1\"").arg(name))) {
+        if (!query.exec(dropTriggerSql(name))) {
             qWarning() << "Failed to drop sync trigger:" << query.lastError().text();
             return false;
         }
@@ -1433,7 +1611,11 @@ bool DatabaseManager::knowledgeGapForeignKeysAreValid(const QSqlDatabase& db)
 
 bool DatabaseManager::ensurePomodoroCycleState()
 {
-    const bool missingTable = !tableExists(QStringLiteral("pomodoro_cycle_state"));
+    bool tableQueryOk = false;
+    const bool missingTable = !tableExists(QStringLiteral("pomodoro_cycle_state"), &tableQueryOk);
+    if (!tableQueryOk) {
+        return false;
+    }
     // VACUUM 快照必须在事务外、建表前拍下，且复用本次启动只拍一份的守卫。
     if (missingTable && !backupDatabaseBeforeMigration()) {
         return false;
@@ -1529,8 +1711,11 @@ void DatabaseManager::pruneOldBackups(const QDir& databaseDir, const QString& ke
     SnapshotRetention::prune(databaseDir, QStringLiteral("pomodoro_backup_*.db"), 3, keepPath);
 }
 
-bool DatabaseManager::indexExists(const QString& indexName) const
+bool DatabaseManager::indexExists(const QString& indexName, bool* queryOk) const
 {
+    if (queryOk) {
+        *queryOk = false;
+    }
     if (!m_db.isOpen()) {
         return false;
     }
@@ -1542,11 +1727,22 @@ bool DatabaseManager::indexExists(const QString& indexName) const
         qWarning() << "Failed to inspect database index:" << query.lastError().text();
         return false;
     }
-    return query.next();
+    const bool found = query.next();
+    if (query.lastError().isValid()) {
+        qWarning() << "Failed to iterate database index check:" << query.lastError().text();
+        return false;
+    }
+    if (queryOk) {
+        *queryOk = true;
+    }
+    return found;
 }
 
-bool DatabaseManager::tableExists(const QString& tableName) const
+bool DatabaseManager::tableExists(const QString& tableName, bool* queryOk) const
 {
+    if (queryOk) {
+        *queryOk = false;
+    }
     if (!m_db.isOpen()) {
         return false;
     }
@@ -1558,8 +1754,15 @@ bool DatabaseManager::tableExists(const QString& tableName) const
         qWarning() << "Failed to inspect database table:" << query.lastError().text();
         return false;
     }
-
-    return query.next();
+    const bool found = query.next();
+    if (query.lastError().isValid()) {
+        qWarning() << "Failed to iterate database table check:" << query.lastError().text();
+        return false;
+    }
+    if (queryOk) {
+        *queryOk = true;
+    }
+    return found;
 }
 
 QStringList DatabaseManager::tableColumns(const QString& tableName) const
@@ -1581,9 +1784,23 @@ QStringList DatabaseManager::tableColumns(const QString& tableName) const
     return columns;
 }
 
-bool DatabaseManager::columnExists(const QString& tableName, const QString& columnName) const
+bool DatabaseManager::columnExists(const QString& tableName, const QString& columnName, bool* queryOk) const
 {
-    if (!m_db.isOpen() || !tableExists(tableName)) {
+    if (queryOk) {
+        *queryOk = false;
+    }
+    if (!m_db.isOpen()) {
+        return false;
+    }
+    bool tableQueryOk = false;
+    const bool hasTable = tableExists(tableName, &tableQueryOk);
+    if (!tableQueryOk) {
+        return false;
+    }
+    if (!hasTable) {
+        if (queryOk) {
+            *queryOk = true;
+        }
         return false;
     }
 
@@ -1595,13 +1812,21 @@ bool DatabaseManager::columnExists(const QString& tableName, const QString& colu
         return false;
     }
 
+    bool found = false;
     while (query.next()) {
         if (query.value(1).toString() == columnName) {
-            return true;
+            found = true;
+            break;
         }
     }
-
-    return false;
+    if (query.lastError().isValid()) {
+        qWarning() << "Failed to iterate database columns:" << query.lastError().text();
+        return false;
+    }
+    if (queryOk) {
+        *queryOk = true;
+    }
+    return found;
 }
 
 QSqlDatabase DatabaseManager::database() const

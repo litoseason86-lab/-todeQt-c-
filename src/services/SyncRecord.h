@@ -90,7 +90,12 @@ constexpr int kFormatVersion = 4;
 // 格式 1–3 是当前格式的子集，仍然接受。
 constexpr int kOldestReadableFormat = 1;
 
+QJsonObject recordToJson(const SyncRecord& record);
+QJsonObject settingToJson(const SyncSettingRecord& setting);
 QJsonObject toJson(const SyncBatch& batch);
+// 返回单条记录/设置序列化为紧凑 UTF-8 JSON 后的精确字节数，用于拆分大改动批次时按字节预算切分。
+qint64 compactJsonBytes(const SyncRecord& record);
+qint64 compactJsonBytes(const SyncSettingRecord& setting);
 // 解析失败（格式不认识、必需字段缺失、类型不对）返回 false，并在 error 里说明原因。
 bool fromJson(const QJsonObject& object, SyncBatch* batch, QString* error);
 

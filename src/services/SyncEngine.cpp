@@ -2,6 +2,7 @@
 
 #include <QDebug>
 #include <QFutureWatcher>
+#include <QPointer>
 #include <QThreadPool>
 #include <QUuid>
 #include <QtConcurrent/QtConcurrentRun>
@@ -91,6 +92,24 @@ QHash<QString, SyncPosition> positionsInEpoch(const QHash<QString, SyncPosition>
     return result;
 }
 
+// 统一构造待写出的游标文件：applied 只保留本纪元，snapshotRequests 保留不低于本纪元的请求，
+// 以支持在滞留旧纪元时向高纪元对端发出补快照请求。
+SyncFiles::CursorFile buildCursorFile(const SyncStore& s, qint64 wallNow)
+{
+    SyncFiles::CursorFile cursor;
+    cursor.device = s.deviceId();
+    cursor.epoch = s.epoch();
+    cursor.writtenAtMs = wallNow;
+    cursor.applied = positionsInEpoch(s.peerCursors(), cursor.epoch);
+    const QHash<QString, SyncPosition> allRequests = s.snapshotRequests();
+    for (auto it = allRequests.cbegin(); it != allRequests.cend(); ++it) {
+        if (it.value().epoch >= cursor.epoch) {
+            cursor.snapshotRequests.insert(it.key(), it.value());
+        }
+    }
+    return cursor;
+}
+
 } // namespace
 
 SyncEngine::SyncEngine(std::unique_ptr<SyncFolder> folder, const Options& options, const QString& connectionName,
@@ -146,6 +165,8 @@ void SyncEngine::setFolder(std::unique_ptr<SyncFolder> folder)
     // 旧文件夹上还在跑的操作照样跑完（排在同一个队里），结果按代数丢掉；新的一轮用新文件夹。
     ++m_generation;
     m_inCycle = false;
+    m_cycleRequested = false;
+    m_continueRequested = false;
     m_stallTimer.stop();
     m_stallWorker.reset();
     m_worker->cancelPendingIo();
@@ -185,7 +206,10 @@ void SyncEngine::stop()
     m_inCycle = false;
     m_stallTimer.stop();
     m_stallWorker.reset();
+    // 与析构和切换目录保持一致：立即打断正在阻塞的工作线程请求，避免停机或切换传输时傻等超时。
+    m_worker->cancelPendingIo();
     m_cycleRequested = false;
+    m_continueRequested = false;
     m_joinConfirmed = false;
     m_cycleFlushOnly = false;
     m_backgroundFlushPending = false;
@@ -249,31 +273,56 @@ bool SyncEngine::flushBeforeExit(int timeoutMs)
     stop();
     SyncStore s = store();
     const QString folderId = s.folderId();
-    if (folderId.isEmpty() || !s.hasPending()) {
+    // 刚恢复备份或刚建空间尚未发布首份基线快照时，禁止退出前单独冲刷无基线支撑的孤儿增量批次，留待下次启动完整发布快照。
+    if (folderId.isEmpty() || s.needsSnapshot() || !s.hasPending()) {
         return true;
     }
-    const SyncBatch batch = s.collectPending();
-    if (batch.isEmpty()) {
-        return true;
-    }
-    const SyncPosition outbound = s.outboundPosition();
-    const qint64 lastSeq = outbound.epoch == batch.epoch ? outbound.seq : 0;
-    const qint64 writtenAt = wallClockMs();
+    QElapsedTimer budget;
+    budget.start();
     const std::shared_ptr<SyncWorker> worker = m_worker;
-    QFuture<SyncWorker::WriteResult> future = QtConcurrent::run(m_pool.get(), [worker, folderId, batch, lastSeq,
-                                                                                writtenAt] {
-        return worker->writeChangesIfFolderMatches(folderId, batch, lastSeq, writtenAt);
-    });
-    // 排在前面的操作（正在进行的那一轮）也要等它做完。等不到就算了：改动还留在本机，下次启动再写。
-    if (!m_pool->waitForDone(timeoutMs)) {
-        return false;
+    while (true) {
+        const SyncStore::PendingChunkResult chunk =
+            s.collectPendingChunk(SyncFiles::kSoftChangesBytes, SyncFiles::kMaxChangesBytes);
+        if (!chunk.ok) {
+            qWarning() << "Failed to collect pending sync changes before exit:" << chunk.error;
+            return false;
+        }
+        if (chunk.oversizeSingleRecord) {
+            qWarning() << "Oversize sync record cannot be flushed before exit:" << chunk.oversizeDetail;
+            return false;
+        }
+        if (chunk.batch.isEmpty()) {
+            return true;
+        }
+        const int remainingMs = timeoutMs <= 0 ? 0 : qMax(0, timeoutMs - int(budget.elapsed()));
+        if (remainingMs <= 0) {
+            return false;
+        }
+        const SyncBatch batch = chunk.batch;
+        const SyncPosition outbound = s.outboundPosition();
+        const qint64 lastSeq = outbound.epoch == batch.epoch ? outbound.seq : 0;
+        const qint64 writtenAt = wallClockMs();
+        QFuture<SyncWorker::WriteResult> future = QtConcurrent::run(
+            m_pool.get(), [worker, folderId, batch, lastSeq, writtenAt] {
+                return worker->writeChangesIfFolderMatches(folderId, batch, lastSeq, writtenAt);
+            });
+        // 排在前面的操作（正在进行的那一轮）也要等它做完；超时则立刻取消阻塞 I/O，未发改动留在本机下次再写。
+        if (!m_pool->waitForDone(remainingMs)) {
+            worker->cancelPendingIo();
+            return false;
+        }
+        const SyncWorker::WriteResult result = future.result();
+        if (!result.error.ok()) {
+            qWarning() << "Failed to flush sync changes before exit:" << result.error.message;
+            return false;
+        }
+        if (!s.acknowledgeOutbound(batch, result.position)) {
+            return false;
+        }
+        if (!chunk.hasMore) {
+            return true;
+        }
     }
-    const SyncWorker::WriteResult result = future.result();
-    if (!result.error.ok()) {
-        qWarning() << "Failed to flush sync changes before exit:" << result.error.message;
-        return false;
-    }
-    return s.setOutboundPosition(result.position) && s.acknowledge(batch);
 }
 
 QString SyncEngine::statusText() const
@@ -352,6 +401,7 @@ void SyncEngine::startCycle()
 {
     m_inCycle = true;
     m_cycleRequested = false;
+    m_continueRequested = false;
     m_cycleFlushOnly = m_backgroundFlushPending && !m_foreground;
     m_backgroundFlushPending = false;
     m_warnings.clear();
@@ -398,9 +448,10 @@ void SyncEngine::afterOpen(const SyncWorker::OpenResult& result)
     if (result.marker.folderId == joined) {
         return publishStep();
     }
-    // 本机自己建的文件夹，只是库里没记下（例如恢复了建文件夹之前的备份）：本机本来就是它的源头，直接接上。
+    // 本机自己建的文件夹，只是库里没记下（例如建完标记文件后立即崩溃、或恢复了建文件夹之前的备份）：
+    // 同一事务内绑定 folder_id、重置旧文件夹传输记账并置位 snapshot_needed，确保必发首份基线快照供对端加入。
     if (result.marker.createdBy == s.deviceId()) {
-        if (!s.setFolderId(result.marker.folderId)) {
+        if (!s.attachOwnFolder(result.marker.folderId, true)) {
             return finishCycle(Status::Error, QStringLiteral("记不下加入的同步文件夹"));
         }
         return publishStep();
@@ -414,9 +465,14 @@ void SyncEngine::afterOpen(const SyncWorker::OpenResult& result)
 
 void SyncEngine::createFolder()
 {
+    SyncStore pre = store();
+    // 先于写标记文件落盘 snapshot_needed：即使标记文件已写出后进程立刻中断，下次启动也会补发首份基线快照。
+    if (!pre.requestFullSnapshot()) {
+        return finishCycle(Status::Error, QStringLiteral("记不下新建同步文件夹的初始快照标记"));
+    }
     SyncFiles::Marker marker;
     marker.folderId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    marker.createdBy = store().deviceId();
+    marker.createdBy = pre.deviceId();
     marker.createdAt = QDateTime::currentDateTime().toString(Qt::ISODate);
     runOnWorker<SyncFolder::Error>(
         [marker](SyncWorker& worker) { return worker.createMarker(marker); },
@@ -424,10 +480,8 @@ void SyncEngine::createFolder()
             if (!error.ok()) {
                 return finishCycle(statusFor(error), error.message);
             }
-            SyncStore s = store();
-            // 先记下要写快照、再记下加入了文件夹：中途被结束，下次启动时标记文件在、身份对得上，
-            // 快照也照样会写出去；反过来就可能出现「文件夹建好了、却永远没有快照」，iPad 加入不了。
-            if (!s.requestFullSnapshot() || !s.setFolderId(marker.folderId)) {
+            // 在同一事务内绑定 folder_id、重置可能残留的旧文件夹传输记账并保持 snapshot_needed。
+            if (!store().attachOwnFolder(marker.folderId, true)) {
                 return finishCycle(Status::Error, QStringLiteral("记不下新建的同步文件夹"));
             }
             publishStep();
@@ -451,29 +505,79 @@ void SyncEngine::joinFolder(const QString& folderId, const QString& creator)
                 return finishCycle(Status::NewerVersion, fetch.parseError);
             }
             if (fetch.status != SyncFiles::ParseStatus::Ok) {
-                return finishCycle(Status::WaitingForSnapshot,
-                                   QStringLiteral("起步用的快照读不出来：%1").arg(fetch.parseError));
+                SyncStore s = store();
+                QList<SyncWorker::CorruptedSnapshot> bads = fetch.corruptedCandidates;
+                if (bads.isEmpty() && !fetch.device.isEmpty()) {
+                    bads.append({fetch.device, fetch.position, fetch.parseError});
+                }
+                const QString detail = QStringLiteral("起步用的快照读不出来：%1").arg(fetch.parseError);
+                if (bads.isEmpty()) {
+                    return finishCycle(Status::WaitingForSnapshot, detail);
+                }
+                // 首次加入时若起步快照全部损坏：不持久化 folder_id 且保留 m_joinConfirmed，
+                // 主动写出带 snapshotRequests 的游标文件请对方在下次维护时重写快照，避免死等。
+                const qint64 wallNow = wallClockMs();
+                SyncFiles::CursorFile cursor;
+                cursor.device = s.deviceId();
+                cursor.epoch = s.epoch();
+                cursor.writtenAtMs = wallNow;
+                for (const auto& bad : bads) {
+                    const QString path = SyncFiles::deviceDirectory(bad.device) + QLatin1Char('/')
+                        + SyncFiles::snapshotFileName(bad.position);
+                    if (!m_loggedBadFiles.contains(path) && s.logFileProblem(bad.device, path, bad.error)) {
+                        m_loggedBadFiles.insert(path);
+                    }
+                    const auto existing = cursor.snapshotRequests.constFind(bad.device);
+                    if (existing == cursor.snapshotRequests.cend()
+                        || bad.position.epoch > existing->epoch
+                        || (bad.position.epoch == existing->epoch && bad.position.seq > existing->seq)) {
+                        cursor.snapshotRequests.insert(bad.device, bad.position);
+                    }
+                }
+                runOnWorker<SyncFolder::Error>(
+                    [cursor](SyncWorker& worker) { return worker.writeCursor(cursor); },
+                    [this, detail, wallNow](const SyncFolder::Error& error) {
+                        if (!error.ok()) {
+                            return finishCycle(statusFor(error), error.message);
+                        }
+                        m_lastCursorWrittenMs = wallNow;
+                        finishCycle(Status::WaitingForSnapshot, detail);
+                    });
+                return;
             }
             Status failure = Status::Error;
             QString error;
-            if (!replaceFromSnapshot(fetch.device, fetch.snapshot, &failure, &error)) {
+            const QPointer<SyncEngine> self(this);
+            const quint64 generation = m_generation;
+            const bool replaced = replaceFromSnapshot(fetch.device, fetch.snapshot, folderId, true, &failure, &error);
+            if (!self || m_generation != generation) {
+                return;
+            }
+            if (!replaced) {
+                // 安全备份或换库事务失败时整笔回滚，本机数据原样保留；这次确认随之作废。
+                // 否则退避重试会在用户看到报错、以为没加入并继续记新内容之后，不再询问就拿文件夹数据覆盖本机。
+                // 只作废这一路：快照还没到（WaitingForSnapshot）时仍按「确认一次就够」等它到达。
+                m_joinConfirmed = false;
                 return finishCycle(failure, error);
             }
-            if (!store().setFolderId(folderId)) {
-                return finishCycle(Status::Error, QStringLiteral("记不下加入的同步文件夹"));
-            }
-            m_joinConfirmed = false;
             publishStep();
         });
 }
 
 bool SyncEngine::replaceFromSnapshot(const QString& source, const SyncFiles::SnapshotFile& snapshot,
+                                     const QString& folderIdToSet, bool resetFolderTransportState,
                                      Status* failure, QString* error)
 {
-    // 被换掉的本机数据只能从这份备份里找回，所以备份不成功就不替换。
-    if (m_safetyBackup) {
+    const QPointer<SyncEngine> self(this);
+    const quint64 generation = m_generation;
+    // 草稿保存和安全备份可能同步发出界面信号，回调期间停机或换目录即中止本次替换。
+    if (const auto backup = m_safetyBackup) {
         QString backupError;
-        if (!m_safetyBackup(&backupError)) {
+        const bool saved = backup(&backupError);
+        if (!self || m_generation != generation) {
+            return false;
+        }
+        if (!saved) {
             *failure = Status::BackupFailed;
             *error = backupError;
             return false;
@@ -481,32 +585,38 @@ bool SyncEngine::replaceFromSnapshot(const QString& source, const SyncFiles::Sna
     }
     SyncStore s = store();
     const QString me = s.deviceId();
-    const SyncStore::ApplyResult result = s.replaceWithSnapshot(snapshot.batch);
+    // 游标重新起步：快照的来源读到它自己的第 coveredSeq 批；别的设备按快照里记的进度接着读。
+    // 连同 folder_id、清旧补发请求与旧文件夹传输记账放入同一事务，杜绝换库成功但记账失败导致重复换库。
+    QHash<QString, SyncPosition> cursors = positionsInEpoch(snapshot.applied, snapshot.batch.epoch);
+    cursors.remove(me);
+    cursors.insert(source, {snapshot.batch.epoch, snapshot.coveredSeq});
+    SyncStore::SnapshotReplaceOptions options;
+    options.folderIdToSet = folderIdToSet;
+    options.peerCursors = std::move(cursors);
+    options.clearSnapshotRequests = true;
+    options.resetFolderTransportState = resetFolderTransportState;
+
+    const SyncStore::ApplyResult result = s.replaceWithSnapshot(snapshot.batch, options);
     if (!result.ok) {
         *failure = Status::Error;
         *error = result.error;
         return false;
     }
-    // 游标重新起步：快照的来源读到它自己的第 coveredSeq 批；别的设备按快照里记的进度接着读，
-    // 不用把它们从头再读一遍。进度记完之前被结束也不要紧，下次从头读，重复应用不改变任何东西。
-    QHash<QString, SyncPosition> cursors = positionsInEpoch(snapshot.applied, snapshot.batch.epoch);
-    cursors.remove(me);
-    cursors.insert(source, {snapshot.batch.epoch, snapshot.coveredSeq});
-    bool ok = s.replacePeerCursors(cursors);
-    const QHash<QString, SyncPosition> requests = s.snapshotRequests();
-    for (auto it = requests.cbegin(); ok && it != requests.cend(); ++it) {
-        ok = s.clearSnapshotRequest(it.key());
+    // 事务已提交：首次加入确认立即消费，避免后续槽函数或下一轮误判仍处于待确认加入状态。
+    if (!folderIdToSet.isEmpty()) {
+        m_joinConfirmed = false;
     }
     m_cursorDirty = true;
     // 本机旧纪元的文件、旧快照都用不上了，这一轮就清掉。
     m_maintenanceDue = true;
     m_gapSinceMs.clear();
-    notify(result);
-    if (!ok) {
-        *failure = Status::Error;
-        *error = QStringLiteral("记不下新的读取进度");
+    // 先让界面与外部写入会话丢弃旧库身份，再通知具体模型刷新。
+    emit snapshotReplaced();
+    if (!self) {
+        return false;
     }
-    return ok;
+    notify(result);
+    return m_generation == generation;
 }
 
 void SyncEngine::publishStep()
@@ -552,8 +662,8 @@ void SyncEngine::publishFullSnapshot()
             }
             SyncStore s = store();
             // 这份快照是给所有设备的（新建的文件夹、恢复备份后的新纪元）：别的设备都会整份采用它，
-            // 所以它已经带上的待发送改动不必再单独发一遍。
-            if (!s.markSnapshotPublished(file.batch) || !s.setSnapshotPosition(written.position)) {
+            // 所以它已经带上的待发送改动不必再单独发一遍；与 snapshot_position 在同一事务内原子落地。
+            if (!s.markSnapshotPublished(file.batch, written.position)) {
                 return finishCycle(Status::Error, QStringLiteral("记不下已经写出的快照"));
             }
             m_lastWrittenPath = written.path;
@@ -568,29 +678,52 @@ void SyncEngine::publishFullSnapshot()
 void SyncEngine::publishChanges()
 {
     SyncStore s = store();
-    const SyncBatch batch = s.collectPending();
-    // 队列里只剩读不出来的记录（外部改过库），没有东西可写。
-    if (batch.isEmpty()) {
+    const SyncStore::PendingChunkResult chunk =
+        s.collectPendingChunk(SyncFiles::kSoftChangesBytes, SyncFiles::kMaxChangesBytes);
+    if (!chunk.ok) {
+        return finishCycle(Status::Error,
+                           chunk.error.isEmpty() ? QStringLiteral("读取待发送改动失败") : chunk.error);
+    }
+    if (chunk.oversizeSingleRecord) {
+        // 单条记录本身超过 8 MiB 硬上限无法拆入合法文件：报警提示但不阻断本轮继续拉取远端小改动。
+        m_flushRequested = false;
+        warn(Status::Error, chunk.oversizeDetail);
         return m_cycleFlushOnly ? finishCycle() : scanStep();
     }
+    // 队列里只剩读不出来的记录（外部改过库），没有东西可写。
+    if (chunk.batch.isEmpty()) {
+        m_flushRequested = false;
+        return m_cycleFlushOnly ? finishCycle() : scanStep();
+    }
+    const SyncBatch batch = chunk.batch;
+    const bool hasMore = chunk.hasMore;
     const SyncPosition outbound = s.outboundPosition();
     const qint64 lastSeq = outbound.epoch == batch.epoch ? outbound.seq : 0;
     const qint64 writtenAt = wallClockMs();
     runOnWorker<SyncWorker::WriteResult>(
         [batch, lastSeq, writtenAt](SyncWorker& worker) { return worker.writeChanges(batch, lastSeq, writtenAt); },
-        [this, batch](const SyncWorker::WriteResult& written) {
+        [this, batch, hasMore](const SyncWorker::WriteResult& written) {
             if (!written.error.ok()) {
                 return finishCycle(statusFor(written.error), written.error.message);
             }
             SyncStore s = store();
-            // 文件已经写出去了：记下序号、确认这批。确认失败时这批下次会再写一遍，重复应用不改变任何东西；
-            // 序号没记下也不要紧，下次写之前会看目录里已有的最大序号。
-            if (!s.setOutboundPosition(written.position) || !s.acknowledge(batch)) {
+            // 文件已经写出去了：在同一事务内原子推进序号并确认本批出队。
+            if (!s.acknowledgeOutbound(batch, written.position)) {
                 return finishCycle(Status::Error, QStringLiteral("改动已写出，但记不下发送进度"));
             }
             m_lastWrittenPath = written.path;
             m_lastPublishMs = nowMs();
-            m_flushRequested = false;
+            if (hasMore) {
+                // 还有剩余积压待发：后台「只写不读」在有限窗口内连续冲刷；
+                // 前台正常轮次先进入 scanStep 拉取对方小改动，本轮收尾后再通过 m_continueRequested 续发下一批。
+                m_flushRequested = true;
+                if (m_cycleFlushOnly) {
+                    return publishChanges();
+                }
+                m_continueRequested = true;
+            } else {
+                m_flushRequested = false;
+            }
             if (m_cycleFlushOnly) {
                 return finishCycle();
             }
@@ -738,9 +871,9 @@ void SyncEngine::afterScan(const SyncWorker::ScanResult& result)
     if (total.ok && hasVisibleChanges(total)) {
         notify(total);
     }
-    // 这一轮读满了上限：紧接着再来一轮，不等下一个扫描间隔。
+    // 这一轮读满了上限：本轮若成功收尾则紧接着再来一轮，不等下一个扫描间隔；若中途失败则清零遵守退避。
     if (result.more) {
-        m_cycleRequested = true;
+        m_continueRequested = true;
     }
     writeCursorStep();
 }
@@ -757,6 +890,7 @@ void SyncEngine::adopt(const SyncWorker::Adoption& adoption)
             if (bads.isEmpty()) {
                 bads.append({adoption.device, adoption.position, adoption.error});
             }
+            QHash<QString, SyncPosition> highestPerDevice;
             for (const auto& bad : bads) {
                 const QString path = SyncFiles::deviceDirectory(bad.device) + QLatin1Char('/')
                     + SyncFiles::snapshotFileName(bad.position);
@@ -765,7 +899,15 @@ void SyncEngine::adopt(const SyncWorker::Adoption& adoption)
                         m_loggedBadFiles.insert(path);
                     }
                 }
-                if (!s.setSnapshotRequest(bad.device, bad.position)) {
+                const auto existing = highestPerDevice.constFind(bad.device);
+                if (existing == highestPerDevice.cend()
+                    || bad.position.epoch > existing->epoch
+                    || (bad.position.epoch == existing->epoch && bad.position.seq > existing->seq)) {
+                    highestPerDevice.insert(bad.device, bad.position);
+                }
+            }
+            for (auto it = highestPerDevice.cbegin(); it != highestPerDevice.cend(); ++it) {
+                if (!s.setSnapshotRequest(it.key(), it.value())) {
                     return finishCycle(Status::Error, QStringLiteral("无法记录快照请求"));
                 }
             }
@@ -776,19 +918,7 @@ void SyncEngine::adopt(const SyncWorker::Adoption& adoption)
 
             // 写出覆盖高 epoch 的 snapshot request（writeCursor 不能把这个高 epoch 请求按本机旧 epoch 过滤掉）
             const qint64 wallNow = wallClockMs();
-            SyncFiles::CursorFile cursor;
-            cursor.device = s.deviceId();
-            cursor.epoch = s.epoch();
-            cursor.writtenAtMs = wallNow;
-            cursor.applied = positionsInEpoch(s.peerCursors(), cursor.epoch);
-            QHash<QString, SyncPosition> requests;
-            const QHash<QString, SyncPosition> allRequests = s.snapshotRequests();
-            for (auto it = allRequests.cbegin(); it != allRequests.cend(); ++it) {
-                if (it.value().epoch >= cursor.epoch) {
-                    requests.insert(it.key(), it.value());
-                }
-            }
-            cursor.snapshotRequests = requests;
+            const SyncFiles::CursorFile cursor = buildCursorFile(s, wallNow);
 
             runOnWorker<SyncFolder::Error>(
                 [cursor](SyncWorker& worker) { return worker.writeCursor(cursor); },
@@ -809,19 +939,7 @@ void SyncEngine::adopt(const SyncWorker::Adoption& adoption)
             }
             m_cursorDirty = true;
             const qint64 wallNow = wallClockMs();
-            SyncFiles::CursorFile cursor;
-            cursor.device = s.deviceId();
-            cursor.epoch = s.epoch();
-            cursor.writtenAtMs = wallNow;
-            cursor.applied = positionsInEpoch(s.peerCursors(), cursor.epoch);
-            QHash<QString, SyncPosition> requests;
-            const QHash<QString, SyncPosition> allRequests = s.snapshotRequests();
-            for (auto it = allRequests.cbegin(); it != allRequests.cend(); ++it) {
-                if (it.value().epoch >= cursor.epoch) {
-                    requests.insert(it.key(), it.value());
-                }
-            }
-            cursor.snapshotRequests = requests;
+            const SyncFiles::CursorFile cursor = buildCursorFile(s, wallNow);
 
             runOnWorker<SyncFolder::Error>(
                 [cursor](SyncWorker& worker) { return worker.writeCursor(cursor); },
@@ -842,11 +960,17 @@ void SyncEngine::adopt(const SyncWorker::Adoption& adoption)
     }
     Status failure = Status::Error;
     QString error;
-    if (!replaceFromSnapshot(adoption.device, adoption.snapshot, &failure, &error)) {
+    const QPointer<SyncEngine> self(this);
+    const quint64 generation = m_generation;
+    const bool replaced = replaceFromSnapshot(adoption.device, adoption.snapshot, QString(), false, &failure, &error);
+    if (!self || m_generation != generation) {
+        return;
+    }
+    if (!replaced) {
         return finishCycle(failure, error);
     }
     // 换到新纪元之后，本机的游标文件、旧文件都要跟着更新：紧接着再来一轮。
-    m_cycleRequested = true;
+    m_continueRequested = true;
     finishCycle();
 }
 
@@ -858,20 +982,7 @@ void SyncEngine::writeCursorStep()
     if (!m_cursorDirty && !refresh) {
         return maintenanceStep();
     }
-    SyncStore s = store();
-    SyncFiles::CursorFile cursor;
-    cursor.device = s.deviceId();
-    cursor.epoch = s.epoch();
-    cursor.writtenAtMs = wallNow;
-    cursor.applied = positionsInEpoch(s.peerCursors(), cursor.epoch);
-    QHash<QString, SyncPosition> validRequests;
-    const QHash<QString, SyncPosition> allRequests = s.snapshotRequests();
-    for (auto it = allRequests.cbegin(); it != allRequests.cend(); ++it) {
-        if (it.value().epoch >= cursor.epoch) {
-            validRequests.insert(it.key(), it.value());
-        }
-    }
-    cursor.snapshotRequests = validRequests;
+    const SyncFiles::CursorFile cursor = buildCursorFile(store(), wallNow);
     runOnWorker<SyncFolder::Error>(
         [cursor](SyncWorker& worker) { return worker.writeCursor(cursor); },
         [this, wallNow](const SyncFolder::Error& error) {
@@ -908,7 +1019,11 @@ void SyncEngine::afterSurvey(const SyncWorker::Survey& survey)
     const SyncPosition outbound = s.outboundPosition();
     const qint64 written = outbound.epoch == epoch ? outbound.seq : 0;
     const SyncPosition snapshot = s.snapshotPosition();
-    const qint64 covered = snapshot.epoch == epoch ? snapshot.seq : -1;
+    // 区分「尚未写过任何快照」与「纪元 0 第 0 批」，并核对目录里确实存在该快照文件，
+    // 避免未写过快照或远端快照缺失时 covered 误判为 0 而漏响应对端补快照请求。
+    const bool snapshotPresent = s.hasSnapshotPosition() && snapshot.epoch == epoch
+        && survey.ownSnapshots.contains(snapshot);
+    const qint64 covered = snapshotPresent ? snapshot.seq : -1;
 
     // 要不要写一份新快照：
     // - 有设备请本机补（读到了本机的坏文件，或者本机的某一批它一直没收到）；
@@ -1002,7 +1117,7 @@ void SyncEngine::cleanupStep(const SyncWorker::Survey& survey)
     const QString me = s.deviceId();
     const qint64 epoch = s.epoch();
     const SyncPosition snapshot = s.snapshotPosition();
-    const bool haveSnapshot = snapshot.epoch == epoch;
+    const bool haveSnapshot = s.hasSnapshotPosition() && snapshot.epoch == epoch;
     // 删到哪一批：必须有快照兜底（快照覆盖到的才删），还要所有还在用的设备都已经读过。
     // 对端时钟可能快慢不一，只比较本机观察同一游标指纹经过的时间；过期设备回来时从快照追上。
     const qint64 staleMs = qint64(m_options.peerStaleDays) * 24 * 60 * 60 * 1000;
@@ -1092,7 +1207,8 @@ void SyncEngine::finishCycle(Status failure, const QString& detail)
             m_lastSyncedSavedMs = now;
         }
     } else {
-        // 中途失败：隔一段再试，间隔逐次翻倍。文件夹不可用时每 5 秒试一次没有意义。
+        // 中途失败：清除内部续跑标记（分页/拆批），严格按指数退避等待重试，防止 0ms 热自旋。
+        m_continueRequested = false;
         m_retryDelayMs = m_retryDelayMs == 0 ? m_options.retryMinMs
                                              : std::min(m_retryDelayMs * 2, m_options.retryMaxMs);
         m_retryAtMs = nowMs() + m_retryDelayMs;
@@ -1103,9 +1219,18 @@ void SyncEngine::finishCycle(Status failure, const QString& detail)
     m_status = status;
     m_detail = text;
     m_pendingCount = store().pendingCount();
+    // 信号回调（如传输方式切换的 waitForOneSyncThen）可能同步销毁当前引擎，
+    // 每次发射信号后先核实对象仍存活，避免在已释放堆块上继续发信号或读取成员。
+    const QPointer<SyncEngine> self(this);
     emit statusChanged();
+    if (!self) {
+        return;
+    }
     emit cycleFinished();
-    if (m_cycleRequested && m_running) {
+    if (!self) {
+        return;
+    }
+    if (m_running && (m_cycleRequested || (completed && m_continueRequested))) {
         // 放到事件循环里再开始，不在这一层调用栈里层层递归。
         QTimer::singleShot(0, this, &SyncEngine::requestCycle);
     }
@@ -1113,8 +1238,8 @@ void SyncEngine::finishCycle(Status failure, const QString& detail)
 
 void SyncEngine::notify(const SyncStore::ApplyResult& result)
 {
-    if (m_notifier) {
-        m_notifier(result);
+    if (const auto notifier = m_notifier) {
+        notifier(result);
     }
 }
 
@@ -1170,7 +1295,7 @@ void SyncEngine::onTick()
     refreshPending();
     const bool scanDue = m_lastScanMs < 0 || now - m_lastScanMs >= m_options.scanIntervalMs;
     const bool publishDue = m_pendingCount > 0
-        && (m_lastPublishMs < 0 || now - m_lastPublishMs >= m_options.publishIntervalMs);
+        && (m_flushRequested || m_lastPublishMs < 0 || now - m_lastPublishMs >= m_options.publishIntervalMs);
     if (scanDue || publishDue) {
         requestCycle();
     }

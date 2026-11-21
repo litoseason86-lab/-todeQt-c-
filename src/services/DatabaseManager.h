@@ -27,6 +27,9 @@ public:
 
     // 启动和备份检查共用：id 必须是 SQLite 自动生成编号的 INTEGER ROWID 别名。
     static bool hasGeneratedIntegerId(const QSqlDatabase& db, const QString& tableName);
+    // 启动和备份检查共用：课表两表的外键契约（schedule_entries 恰好 1 条单列 SET NULL 外键指向 categories(id)，
+    // schedule_periods 不得有任何外键），防止额外的 CASCADE 或复合外键在运行时引发意外级联删除或写入失败。
+    static bool scheduleForeignKeysAreValid(const QSqlDatabase& db);
     // 启动和备份检查共用：knowledge_gaps 的外键必须恰好是契约里的三条
     // （category_id → categories，source_task_id / linked_task_id → tasks），删除动作一律 SET NULL。
     // 只校验列和 CHECK 挡不住 ON DELETE CASCADE：那种表照样能用，直到用户删掉一条任务，
@@ -144,7 +147,7 @@ private:
     // 目标倒计时表原来由倒计时服务第一次用到时才建（CountdownService::initializeDatabase）。
     // 它要参与同步，迁移时表必须已经在，所以建表流程里也建一次，结构与服务里的相同。
     bool createCountdownGoalsTable();
-    bool syncSchemaIsComplete() const;
+    bool syncSchemaIsComplete(bool* queryOk = nullptr) const;
     // 每次启动都执行：补附属表的初始行、sync_id 唯一索引，并让同步触发器与规范文本一致。
     // 触发器随业务表存在，整表重建（v5）会把它们一起删掉，所以不能只在迁移时建一次。
     bool ensureSyncInfrastructure();
@@ -171,9 +174,10 @@ private:
     bool backupDatabaseBeforeMigration() const;
     // keepPath 是本次迁移前刚拍的快照，无条件保留（见 SnapshotRetention::prune）。
     void pruneOldBackups(const QDir& databaseDir, const QString& keepPath) const;
-    bool tableExists(const QString& tableName) const;
-    bool indexExists(const QString& indexName) const;
-    bool columnExists(const QString& tableName, const QString& columnName) const;
+    // queryOk 可区分「对象确实不存在」与「检查 SQL 执行失败」，避免瞬时 SQLite 故障误触发迁移或快照。
+    bool tableExists(const QString& tableName, bool* queryOk = nullptr) const;
+    bool indexExists(const QString& indexName, bool* queryOk = nullptr) const;
+    bool columnExists(const QString& tableName, const QString& columnName, bool* queryOk = nullptr) const;
     // v13 是首个会被备份整库恢复的课表版本。CREATE TABLE IF NOT EXISTS
     // 不会修补已存在表的缺列、缺约束或错外键，所以必须显式验证。
     bool scheduleSchemaIsValid() const;

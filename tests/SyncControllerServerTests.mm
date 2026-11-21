@@ -34,8 +34,11 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <memory>
+#include <mutex>
 
 namespace {
 
@@ -203,6 +206,11 @@ private slots:
     void switchToICloudIpadRequiresFolderPicker();
     void settingsFailureKeepsTransportAndReportsError();
     void restoreStopsAndRestartsServerWatcher();
+    void serverToServerSwitchStopsOldEngineAndRollsBackOnFolderClearFailure();
+    void switchToICloudIpadClearsServerFolderIdEvenWhenPickerCancelled();
+    void remoteFolderAndWatcherRejectOutOfRangeFloatSizesAndRevisions();
+    void cancelTransportSwitchAbortsInFlightCreateAndJoinAndRestoresPreviousEngine();
+    void setEnabledFalseDuringTransportSwitchCancelsSwitchWithoutWedging();
 
 private:
     void openMainDatabase(const QString& name);
@@ -1058,7 +1066,8 @@ void SyncControllerServerTests::settingsFailureKeepsTransportAndReportsError()
     SyncController controller(macPlatform(harness));
     controller.initialize();
     const QString ini = QSettings().fileName();
-    QVERIFY(QFile::remove(ini));
+    // 单独运行本用例时偏好尚未落盘，先允许文件不存在再占位成同名目录。
+    QVERIFY(!QFileInfo::exists(ini) || QFile::remove(ini));
     QVERIFY(QDir().mkpath(ini));
     const auto restorePreferencesFile = qScopeGuard([&] {
         QDir(ini).removeRecursively();
@@ -1120,6 +1129,285 @@ void SyncControllerServerTests::restoreStopsAndRestartsServerWatcher()
         taskTitles(DatabaseManager::instance()->database().connectionName())
             .contains(QStringLiteral("恢复后写入")),
         5000);
+}
+
+void SyncControllerServerTests::serverToServerSwitchStopsOldEngineAndRollsBackOnFolderClearFailure()
+{
+    // 产品保证：从已有服务器空间重建另一服务器空间时，切换期间先停下旧引擎；若清除旧 folder_id 写库失败，必须保持旧服务器配置与配对码不变，绝不半提交新空间偏好。
+    openMainDatabase(QStringLiteral("mac"));
+    auto harness = std::make_shared<MacHarness>();
+    harness->iCloudRoot = data->filePath(QStringLiteral("icloud"));
+    QVERIFY(QDir().mkpath(harness->iCloudRoot));
+    SyncController controller(macPlatform(harness));
+    controller.initialize();
+    controller.createServerSpace(baseUrl().toString(), enrollSecret);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        controller.transport() == QStringLiteral("server")
+        && !controller.isSwitchingTransport(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.statusKey() == QStringLiteral("upToDate"), 10000);
+
+    const QString oldSpace = QSettings().value(QStringLiteral("sync/server/space")).toString();
+    const QString oldPairing = controller.pairingCode();
+    const QString oldFolderId = SyncStore().folderId();
+    QVERIFY(!oldSpace.isEmpty());
+    QVERIFY(!oldPairing.isEmpty());
+    QVERIFY(!oldFolderId.isEmpty());
+
+    // 令清除 folder_id 失败，验证不会先把 QSettings 改写到新空间而留下旧 folder_id
+    QSqlQuery rejectDelete(DatabaseManager::instance()->database());
+    QVERIFY(rejectDelete.exec(QStringLiteral(
+        "CREATE TEMP TRIGGER reject_folder_id_delete BEFORE DELETE ON sync_state "
+        "WHEN OLD.key = 'folder_id' BEGIN SELECT RAISE(ABORT, 'folder_id delete blocked'); END")));
+    const auto dropTrigger = qScopeGuard([&] {
+        QSqlQuery drop(DatabaseManager::instance()->database());
+        drop.exec(QStringLiteral("DROP TRIGGER IF EXISTS reject_folder_id_delete"));
+    });
+
+    controller.createServerSpace(baseUrl().toString(), enrollSecret);
+    // 切换请求发出后，旧空间引擎必须立即停止运行，不在后台并发读写旧空间
+    QVERIFY(controller.isSwitchingTransport());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.isSwitchingTransport(), 10000);
+    QVERIFY(!controller.transportProblem().isEmpty());
+    QCOMPARE(controller.transport(), QStringLiteral("server"));
+    QCOMPARE(QSettings().value(QStringLiteral("sync/server/space")).toString(), oldSpace);
+    QCOMPARE(controller.pairingCode(), oldPairing);
+    QCOMPARE(SyncStore().folderId(), oldFolderId);
+}
+
+void SyncControllerServerTests::switchToICloudIpadClearsServerFolderIdEvenWhenPickerCancelled()
+{
+    // 产品保证：iPad 从自建服务器切回 iCloud 时必须立即清除旧服务器空间的 folder_id，即使随后取消文件夹选择器也不会残留旧空间标记误导恢复提醒。
+    openMainDatabase(QStringLiteral("ipad"));
+    auto harness = std::make_shared<IosHarness>();
+    SyncController controller(ipadPlatform(harness));
+    controller.initialize();
+
+    Peer macServer = openPeer(QStringLiteral("mac-server"), true);
+    QVERIFY(joinIpadControllerToPeer(&controller, &macServer, kSpace, kSecret));
+    QVERIFY(!SyncStore().folderId().isEmpty());
+
+    // 用户在切回 iCloud 弹出的文件夹选择器里点了取消（书签为空）
+    harness->pickedBookmark.clear();
+    harness->pickedPath.clear();
+    controller.switchToICloud();
+    QTRY_VERIFY_WITH_TIMEOUT(
+        controller.transport() == QStringLiteral("icloud")
+        && !controller.isSwitchingTransport(), 10000);
+    QVERIFY(SyncStore().folderId().isEmpty());
+    QVERIFY(controller.restoreWarning().isEmpty());
+}
+
+namespace {
+
+class StubHttpClient : public SyncHttpClient
+{
+public:
+    QByteArray nextBody;
+    int nextStatus = 200;
+
+    Response send(const Request&) override
+    {
+        Response r;
+        r.status = nextStatus;
+        r.body = nextBody;
+        return r;
+    }
+
+    void cancelAll() override {}
+};
+
+class GatedHttpClient final : public SyncHttpClient
+{
+public:
+    ~GatedHttpClient() override { releaseWithoutCancel(); }
+
+    Response send(const Request& request) override
+    {
+        entered.store(true);
+        std::unique_lock<std::mutex> lock(mutex);
+        cond.wait(lock, [this] { return released; });
+        if (cancelled.load()) {
+            Response r;
+            r.failure = Failure::Cancelled;
+            r.message = QStringLiteral("测试主动取消");
+            return r;
+        }
+        lock.unlock();
+        return inner.send(request);
+    }
+
+    void cancelAll() override
+    {
+        cancelled.store(true);
+        ++cancelCalls;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            released = true;
+        }
+        cond.notify_all();
+        inner.cancelAll();
+    }
+
+    void releaseWithoutCancel()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            released = true;
+        }
+        cond.notify_all();
+    }
+
+    void resetGate()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        entered.store(false);
+        cancelled.store(false);
+        released = false;
+    }
+
+    AppleSyncHttpClient inner;
+    std::atomic<bool> entered{false};
+    std::atomic<bool> cancelled{false};
+    std::atomic<int> cancelCalls{0};
+    std::mutex mutex;
+    std::condition_variable cond;
+    bool released = false;
+};
+
+} // namespace
+
+void SyncControllerServerTests::remoteFolderAndWatcherRejectOutOfRangeFloatSizesAndRevisions()
+{
+    // 产品保证：RemoteSyncFolder 与 SyncServerWatcher 面对超出精确整数范围的浮点文件大小或修订号（如 2^63、1e100）时安全拒绝，绝不执行越界有符号整型强转。
+    auto http = std::make_shared<StubHttpClient>();
+    auto cipher = std::make_shared<AppleSyncBlockCipher>();
+    RemoteSyncFolder folder(
+        RemoteSyncFolder::Config{QUrl(QStringLiteral("https://example.com")), kSpace, kSecret},
+        http, cipher);
+
+    for (const QByteArray& badTree : {
+             QByteArrayLiteral("{\"entries\":[{\"path\":\".pomodoro-sync.json\",\"type\":\"file\",\"size\":9223372036854775808}]}"),
+             QByteArrayLiteral("{\"entries\":[{\"path\":\".pomodoro-sync.json\",\"type\":\"file\",\"size\":1e100}]}"),
+             QByteArrayLiteral("{\"entries\":[{\"path\":\".pomodoro-sync.json\",\"type\":\"file\",\"size\":12.5}]}")}) {
+        http->nextBody = badTree;
+        SyncFolder::Error err;
+        QVERIFY2(!folder.open(&err), badTree.constData());
+        QVERIFY(!err.ok());
+    }
+}
+
+void SyncControllerServerTests::cancelTransportSwitchAbortsInFlightCreateAndJoinAndRestoresPreviousEngine()
+{
+    // 产品保证：cancelTransportSwitch() 立即打断在途的建空间或配对码加入网络请求，使迟到回调失效，
+    // 不留错误文案、不丢失原有 iCloud 书签与传输设置，并按切换前运行状态恢复原引擎。
+    {
+        openMainDatabase(QStringLiteral("ipad-cancel"));
+        const QString icloudRoot = data->filePath(QStringLiteral("icloud"));
+        QVERIFY(QDir().mkpath(icloudRoot));
+        const QString icloudFolder = icloudRoot + QStringLiteral("/番茄Todo同步");
+        Peer macLocal = openPeer(QStringLiteral("mac-local"), true, icloudFolder);
+        macLocal.engine->start();
+        QVERIFY(waitIdle(*macLocal.engine));
+
+        QString createError;
+        QVERIFY2(createEmptyServerSpace(kSpace, kSecret, &createError),
+                 qPrintable(createError));
+        Peer macServer = openPeer(QStringLiteral("mac-server"), true);
+        QVERIFY(pairRemoteEngine(&macServer, kSpace, kSecret, true, QStringLiteral("服务器任务")));
+        const QString validCode = SyncPairing::encode({baseUrl(), kSpace, kSecret});
+
+        auto harness = std::make_shared<IosHarness>();
+        harness->pickedBookmark = icloudFolder.toUtf8();
+        harness->pickedPath = icloudFolder;
+        auto gatedHttp = std::make_shared<GatedHttpClient>();
+        SyncController::Platform platform = ipadPlatform(harness);
+        platform.makeHttpClient = [gatedHttp] { return gatedHttp; };
+
+        SyncController controller(platform);
+        controller.initialize();
+        controller.setEnabled(true);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.isEnabled() && !controller.isChoosingFolder(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.statusKey() == QStringLiteral("needsConfirmation"), 5000);
+        controller.confirmJoin();
+        QTRY_VERIFY_WITH_TIMEOUT(controller.statusKey() == QStringLiteral("upToDate"), 5000);
+        const QByteArray bookmarkBefore = QSettings().value(QStringLiteral("sync/bookmark")).toByteArray();
+        QVERIFY(!bookmarkBefore.isEmpty());
+
+        // 1. iPad 在途配对码加入期间点取消：打断 HTTP，保留 iCloud 书签并恢复旧引擎运行
+        controller.joinWithPairingCode(validCode);
+        QVERIFY(controller.isSwitchingTransport());
+        QTRY_VERIFY_WITH_TIMEOUT(gatedHttp->entered.load(), 3000);
+
+        controller.cancelTransportSwitch();
+        QVERIFY(!controller.isSwitchingTransport());
+        QVERIFY(controller.transportProblem().isEmpty());
+        QVERIFY(gatedHttp->cancelCalls.load() >= 1);
+        QCOMPARE(controller.transport(), QStringLiteral("icloud"));
+        QCOMPARE(QSettings().value(QStringLiteral("sync/bookmark")).toByteArray(), bookmarkBefore);
+        QVERIFY(controller.engine() && controller.engine()->isRunning());
+        QCoreApplication::processEvents();
+        QCOMPARE(controller.transport(), QStringLiteral("icloud"));
+    }
+
+    // 2. Mac 在途 createServerSpace 期间点取消：使用独立库与全新门控客户端隔离，打断 HTTP 并恢复原 iCloud 引擎
+    {
+        QSettings settings;
+        settings.clear();
+        settings.sync();
+        openMainDatabase(QStringLiteral("mac-cancel"));
+        auto macHarness = std::make_shared<MacHarness>();
+        macHarness->iCloudRoot = data->filePath(QStringLiteral("icloud-mac"));
+        QVERIFY(QDir().mkpath(macHarness->iCloudRoot));
+        auto macGatedHttp = std::make_shared<GatedHttpClient>();
+        SyncController::Platform macPlat = macPlatform(macHarness);
+        macPlat.makeHttpClient = [macGatedHttp] { return macGatedHttp; };
+
+        SyncController macCtrl(macPlat);
+        macCtrl.initialize();
+        macCtrl.setEnabled(true);
+        QTRY_VERIFY_WITH_TIMEOUT(macCtrl.statusKey() == QStringLiteral("upToDate"), 5000);
+
+        macCtrl.createServerSpace(baseUrl().toString(), enrollSecret);
+        QVERIFY(macCtrl.isSwitchingTransport());
+        QTRY_VERIFY_WITH_TIMEOUT(macGatedHttp->entered.load(), 5000);
+
+        macCtrl.cancelTransportSwitch();
+        QVERIFY(!macCtrl.isSwitchingTransport());
+        QVERIFY(macCtrl.transportProblem().isEmpty());
+        QVERIFY(macGatedHttp->cancelCalls.load() >= 1);
+        QCOMPARE(macCtrl.transport(), QStringLiteral("icloud"));
+        QVERIFY(macCtrl.engine() && macCtrl.engine()->isRunning());
+    }
+}
+
+void SyncControllerServerTests::setEnabledFalseDuringTransportSwitchCancelsSwitchWithoutWedging()
+{
+    // 产品保证：传输切换进行中用户关闭同步开关（setEnabled(false)）时，必须一并取消在途切换并复位 switchingTransport，
+    // 且不得在取消后误把已关闭的引擎重新拉起。
+    openMainDatabase(QStringLiteral("mac-disable-switch"));
+    auto harness = std::make_shared<MacHarness>();
+    harness->iCloudRoot = data->filePath(QStringLiteral("icloud"));
+    QVERIFY(QDir().mkpath(harness->iCloudRoot));
+    auto gatedHttp = std::make_shared<GatedHttpClient>();
+    SyncController::Platform platform = macPlatform(harness);
+    platform.makeHttpClient = [gatedHttp] { return gatedHttp; };
+
+    SyncController controller(platform);
+    controller.initialize();
+    controller.setEnabled(true);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.statusKey() == QStringLiteral("upToDate"), 5000);
+
+    controller.createServerSpace(baseUrl().toString(), enrollSecret);
+    QVERIFY(controller.isSwitchingTransport());
+    QTRY_VERIFY_WITH_TIMEOUT(gatedHttp->entered.load(), 5000);
+
+    controller.setEnabled(false);
+    QVERIFY(!controller.isSwitchingTransport());
+    QVERIFY(!controller.isEnabled());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QCOMPARE(controller.transport(), QStringLiteral("icloud"));
 }
 
 QTEST_GUILESS_MAIN(SyncControllerServerTests)

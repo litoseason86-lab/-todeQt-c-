@@ -40,9 +40,25 @@ public:
 
     // 本机待发送的改动，按表的依赖顺序（科目 → 例行 → 任务 → 专注 → 休息）、同表内按改动先后排列。
     SyncBatch collectPending() const;
+    // 按字节预算分批取出本机待发送改动，避免大积压超过单改动文件 8 MiB 上限阻断整条同步链路。
+    struct PendingChunkResult {
+        SyncBatch batch;
+        // 为真表示队列中仍有更多待发送记录或设置等待下一轮继续发送。
+        bool hasMore = false;
+        // 为真表示单条记录本身已超过单文件硬上限（hardMaxBytes），无法拆入任何合法改动文件；
+        // 该记录保留在队列中不丢失，由调用方提示用户而不阻断拉取远端改动。
+        bool oversizeSingleRecord = false;
+        QString oversizeDetail;
+        bool ok = false;
+        QString error;
+    };
+    PendingChunkResult collectPendingChunk(qint64 softMaxBytes = 4 * 1024 * 1024,
+                                           qint64 hardMaxBytes = 8 * 1024 * 1024) const;
     // 这批改动已经写进同步文件：队列里期间没再改过的记录出队，字段的「待发送」标记清掉。
     // 期间又改过的保留，并把 base 更新成刚发出的那一版（对方马上就会见到它）。
     bool acknowledge(const SyncBatch& batch);
+    // 在同一事务内推进本地已写改动位置（outbound）并确认该批改动出队，防止两者半提交分裂。
+    bool acknowledgeOutbound(const SyncBatch& batch, const SyncPosition& position);
 
     struct ApplyResult {
         bool ok = false;
@@ -56,6 +72,8 @@ public:
         // 整体替换时快照里没有、本机却记着的设置项（例如 iPad 上测试用的某一天的今日目标）。
         // 以快照为准，由调用方从本机删掉；增量应用不会产生这一项。
         QSet<QString> removedSettings;
+        // 整库快照替换成功后为 true：宿主需重置页面脏草稿、取消旧库待删槽并轮换外部写入会话。
+        bool replacedSnapshot = false;
         int conflictsLogged = 0;
         int skippedRecords = 0;
     };
@@ -88,11 +106,23 @@ public:
     SyncBatch exportSnapshot(bool* ok = nullptr, QString* errorOut = nullptr) const;
     // 快照已经写进同步文件：待发送队列里快照已经带上的改动出队（与 acknowledge 相同），并清掉「需要发布快照」标记。
     bool markSnapshotPublished(const SyncBatch& snapshot);
+    // 同上，并在同一事务内写入最新快照覆盖位置（snapshot_position），防止写标记与写位置分裂。
+    bool markSnapshotPublished(const SyncBatch& snapshot, const SyncPosition& position);
+    // 整体快照替换时的可选同事务传输记账项：避免换库已提交但 folder_id/游标未写入造成下次重试二次换库。
+    struct SnapshotReplaceOptions {
+        QString folderIdToSet;
+        std::optional<QHash<QString, SyncPosition>> peerCursors;
+        bool clearSnapshotRequests = false;
+        bool resetFolderTransportState = false;
+    };
     // 用快照整体替换本机的同步数据，并采用快照的纪元：首次加入（你定了以 Mac 为准）、另一台做了全局回滚时用。
     // 快照里没有的记录按本机删除的做法删掉（预置科目例外，它们不能删）；快照里的记录原样落地，
     // 已有的保留本机编号，课表、知识缺口这些不同步的表里的引用不会断。本机进行中的专注不受影响。
     // 调用前由调用方先做自动备份：被换掉的本机数据只能从那份备份里找回。
     ApplyResult replaceWithSnapshot(const SyncBatch& snapshot);
+    ApplyResult replaceWithSnapshot(const SyncBatch& snapshot, const SnapshotReplaceOptions& options);
+    // 在同一事务内绑定本机新建的同步文件夹并置位 snapshot_needed，可选重置旧文件夹的传输记账。
+    bool attachOwnFolder(const QString& folderId, bool resetTransportState = false);
     // 本机恢复了备份（全局回滚）之后调用：纪元在恢复前与备份里两者较大的基础上加一及随机增量；设备标识改回恢复前的
     // （备份可能来自另一台设备，两台共用一个标识会把合并搅乱）；清空待发送；置「需要发布快照」。
     // 可选传入 restoreOperationId 作为本地幂等恢复事务标识，同标识重试时不重复递增纪元。
@@ -134,6 +164,8 @@ public:
     SyncPosition outboundPosition() const;
     bool setOutboundPosition(const SyncPosition& position);
     // 本机最近一份快照覆盖到第几批。只删它覆盖到的旧改动文件：之后才加入、或落后太久的设备还能从快照起步。
+    // 未曾写过快照时 snapshotPosition() 仍返回 {0, 0}，需用 hasSnapshotPosition() 区分「尚未发布」与「纪元 0 第 0 批」。
+    bool hasSnapshotPosition() const;
     SyncPosition snapshotPosition() const;
     bool setSnapshotPosition(const SyncPosition& position);
     // 本机请别的设备补一份至少覆盖到这一批的快照：读到它的坏文件，或者它的某一批一直没传到。

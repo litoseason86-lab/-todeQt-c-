@@ -70,7 +70,7 @@ QStringList infrastructureTableNames();
 QStringList tableStatements();
 // 五张业务表 sync_id 唯一索引的建立语句（可重复执行）。
 QStringList indexStatements();
-// 附属表里必须存在的初始行（运行标记与设备标识等），可重复执行，已存在的不改。
+// 附属表里必须存在的初始行（强制复位运行标记，并补齐设备标识等），可重复执行。
 QStringList seedStatements();
 // 维护字段版本、删除记录与待发送队列的触发器：（触发器名, CREATE TRIGGER 语句）。
 // 语句不带 IF NOT EXISTS：启动时按规范文本比较，不一致就删掉重建，这样以后改了触发器也能升级上去。
@@ -78,9 +78,10 @@ QList<QPair<QString, QString>> triggers();
 // 触发器名 → SQLite 存进 sqlite_master 的文本。SQLite 保存触发器时会改写语句开头，
 // 所以比较前必须让双方经过同一道处理：在临时内存库里真的建一遍，再读回来。
 QHash<QString, QString> canonicalTriggerSql();
-// 是不是本应用命名的同步触发器（「表名_sync_」开头）。启动时据此清掉旧版本留下、现已不用的同步触发器，
-// 不碰别人建的触发器。
+// 是不是合法的同步触发器名（「表名_sync_」后跟非空 [a-z0-9_]+ 后缀）。备份检查据此拦截引号或注释伪造名。
 bool isSyncTriggerName(const QString& name);
+// 是否占用同步触发器命名空间前缀（「表名_sync_」开头）。启动清理据此连同历史旧名与异常后缀一并拆掉，不碰其它触发器。
+bool hasSyncTriggerPrefix(const QString& name);
 
 // SQL 片段。
 // 此刻的 UTC 毫秒数。测试可以往 sync_runtime.test_now_ms 写一个值来固定时钟，正式运行时这一列恒为 NULL。

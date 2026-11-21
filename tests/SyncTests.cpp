@@ -29,6 +29,7 @@
 #include "../src/services/RoutineManager.h"
 #include "../src/services/RoutineRules.h"
 #include "../src/services/ScheduleService.h"
+#include "../src/services/SyncFiles.h"
 #include "../src/services/SyncNotifier.h"
 #include "../src/services/SyncRecord.h"
 #include "../src/services/SyncSchema.h"
@@ -848,6 +849,19 @@ private slots:
     void restoreOperationIdProvidesIdempotencyAcrossRetries();
     void restoreTokenFailureRollsBackEntireRestoreTransaction();
     void restoreRejectsWhenRequiredStateRowsAreMissing();
+
+    // 077 R07 & R11：同步入库域校验、合并刷新/科目名回填/快照排序归一与 JSON 安全反序列化
+    void syncApplierSkipsInvalidBusinessDomainValuesWithoutAbortingBatch();
+    void mergeCategoryMarksScheduleAndKnowledgeGapsChanged();
+    void outOfOrderCategoryAndRemoteRenameSyncTaskCategoryText();
+    void replaceWithSnapshotNormalizesTaskCountdownAndMemoOrders();
+    void syncJsonRejectsOutOfRangeFloatsNonScalarFieldsAndNonStringSettings();
+
+    // 074 深度复审：分批字节预算、SQL 错误传播、删除回滚防泄漏、批量快照导出与课表外键收紧
+    void collectPendingChunkSplitsByByteBudgetHandlesOversizeAndPropagatesSqlError();
+    void applyDeletionRollbackDoesNotLeakDeletedTaskIdsOrConflictsAndMergeUsesPendingCategoryName();
+    void bulkExportSnapshotAndOptimizedAcknowledgePreserveExactSemantics();
+    void scheduleForeignKeysRejectsExtraCascadeCompositeAndPeriodForeignKeys();
 
 private:
     Device openDevice(const QString& name);
@@ -5537,6 +5551,646 @@ void SyncTests::exportSnapshotRejectsMissingOrMalformedIdentityAndEpoch()
         QVERIFY(exec(a, QStringLiteral("BEGIN IMMEDIATE TRANSACTION")));
         QVERIFY(exec(a, QStringLiteral("ROLLBACK")));
     }
+}
+
+void SyncTests::syncApplierSkipsInvalidBusinessDomainValuesWithoutAbortingBatch()
+{
+    // 产品保证：远端批次中违反业务域契约的记录（紧凑无连字符日期、越界布尔值、小数枚举列、非法 JSON 废纸篓载荷等）按单条毒丸回滚保存点并记 skipped，同批合法记录照常落库。
+    Device b = openDevice(QStringLiteral("b"));
+    const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
+    const SyncVersion v{kFuture, remote};
+
+    auto makeRec = [&](const QString& table, const QString& id,
+                       std::initializer_list<QPair<QString, QVariant>> kv) {
+        SyncRecord r;
+        r.table = table;
+        r.syncId = id;
+        for (const auto& pair : kv) {
+            r.fields.insert(pair.first, {pair.second, v, {}});
+        }
+        return r;
+    };
+
+    SyncBatch batch;
+    batch.device = remote;
+    batch.records = {
+        makeRec(QStringLiteral("tasks"), QStringLiteral("bad-task-date"),
+                {{QStringLiteral("title"), QStringLiteral("紧凑日期")},
+                 {QStringLiteral("date"), QStringLiteral("20260203")},
+                 {QStringLiteral("completed"), 0}}),
+        makeRec(QStringLiteral("tasks"), QStringLiteral("bad-task-completed"),
+                {{QStringLiteral("title"), QStringLiteral("越界完成")},
+                 {QStringLiteral("date"), QStringLiteral("2026-10-03")},
+                 {QStringLiteral("completed"), 2}}),
+        makeRec(QStringLiteral("categories"), QStringLiteral("bad-cat-preset"),
+                {{QStringLiteral("name"), QStringLiteral("坏科目")},
+                 {QStringLiteral("color"), QStringLiteral("#123456")},
+                 {QStringLiteral("is_preset"), 2},
+                 {QStringLiteral("display_order"), 99}}),
+        makeRec(QStringLiteral("routines"), QStringLiteral("bad-routine-float"),
+                {{QStringLiteral("title"), QStringLiteral("小数例行")},
+                 {QStringLiteral("active"), 1},
+                 {QStringLiteral("weekdays"), 5.5}}),
+        makeRec(QStringLiteral("focus_sessions"), QStringLiteral("bad-focus-neg"),
+                {{QStringLiteral("start_time"), QStringLiteral("2026-10-03T09:00:00")},
+                 {QStringLiteral("end_time"), QStringLiteral("2026-10-03T09:25:00")},
+                 {QStringLiteral("duration"), -10},
+                 {QStringLiteral("mode"), 1}}),
+        makeRec(QStringLiteral("schedule_entries"), QStringLiteral("bad-sched-float"),
+                {{QStringLiteral("title"), QStringLiteral("小数星期课程")},
+                 {QStringLiteral("weekday"), 2.5},
+                 {QStringLiteral("start_minutes"), 480},
+                 {QStringLiteral("end_minutes"), 540},
+                 {QStringLiteral("week_start"), 1},
+                 {QStringLiteral("week_end"), 16},
+                 {QStringLiteral("week_parity"), 0}}),
+        makeRec(QStringLiteral("countdown_goals"), QStringLiteral("bad-goal-date"),
+                {{QStringLiteral("name"), QStringLiteral("空日期目标")},
+                 {QStringLiteral("target_date"), QStringLiteral("")},
+                 {QStringLiteral("display_order"), 0}}),
+        makeRec(QStringLiteral("trash_items"), QStringLiteral("bad-trash-json"),
+                {{QStringLiteral("kind"), QStringLiteral("task")},
+                 {QStringLiteral("title"), QStringLiteral("坏JSON废纸篓")},
+                 {QStringLiteral("payload"), QStringLiteral("{not-json")},
+                 {QStringLiteral("deleted_at"), QStringLiteral("2026-10-03T10:00:00.000Z")}}),
+        makeRec(QStringLiteral("trash_items"), QStringLiteral("bad-trash-time"),
+                {{QStringLiteral("kind"), QStringLiteral("task")},
+                 {QStringLiteral("title"), QStringLiteral("坏时间废纸篓")},
+                 {QStringLiteral("payload"), QStringLiteral("{\"v\":1}")},
+                 {QStringLiteral("deleted_at"), QStringLiteral("0000-01-01T00:00:00Z")}}),
+        makeRec(QStringLiteral("tasks"), QStringLiteral("good-task"),
+                {{QStringLiteral("title"), QStringLiteral("同批合法任务")},
+                 {QStringLiteral("date"), QStringLiteral("2026-10-03")},
+                 {QStringLiteral("completed"), 1}}),
+    };
+
+    const SyncStore::ApplyResult res = SyncStore(b.connection).applyRemote(batch);
+    QVERIFY2(res.ok, qPrintable(res.error));
+    QCOMPARE(res.skippedRecords, 9);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = 'good-task'")), 1);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM routines")), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM focus_sessions")), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM schedule_entries")), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM countdown_goals")), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM trash_items")), 0);
+    QCOMPARE(logCount(b, QStringLiteral("skipped")), 9);
+}
+
+void SyncTests::mergeCategoryMarksScheduleAndKnowledgeGapsChanged()
+{
+    // 产品保证：两台设备各自创建的同名科目发生自动合并时，返回结果必须将 schedule_entries 与 knowledge_gaps 纳入 changedTables 以刷新课表与知识缺口界面。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    const QString catA = addCategory(a, QStringLiteral("数据结构"), QStringLiteral("aaaa-cat-ds"));
+    const QString catB = addCategory(b, QStringLiteral("数据结构"), QStringLiteral("bbbb-cat-ds"));
+    QVERIFY(!catA.isEmpty() && !catB.isEmpty());
+
+    const SyncBatch outboundB = SyncStore(b.connection).collectPending();
+    const SyncStore::ApplyResult result = SyncStore(a.connection).applyRemote(outboundB);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(result.changedTables.contains(QStringLiteral("schedule_entries")));
+    QVERIFY(result.changedTables.contains(QStringLiteral("knowledge_gaps")));
+}
+
+void SyncTests::outOfOrderCategoryAndRemoteRenameSyncTaskCategoryText()
+{
+    // 产品保证：任务先于新增科目乱序到达并在稍后接回 category_id 时，同步回填 tasks.category 文本；远端科目改名落地时也同步更新关联任务的 tasks.category 并通知刷新任务表。
+    Device b = openDevice(QStringLiteral("b"));
+    const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
+    const SyncVersion v1{kFuture, remote};
+    const SyncVersion v2{kFuture + 100, remote};
+
+    // 1. 第一批只到任务（引用的科目 cat-late 尚未到达）：category_id 与 category 暂时置空。
+    SyncRecord task;
+    task.table = QStringLiteral("tasks");
+    task.syncId = QStringLiteral("task-early");
+    task.fields = {
+        {QStringLiteral("title"), {QStringLiteral("先到的任务"), v1, {}}},
+        {QStringLiteral("date"), {QStringLiteral("2026-10-05"), v1, {}}},
+        {QStringLiteral("completed"), {0, v1, {}}},
+        {QStringLiteral("category_id"), {QStringLiteral("cat-late"), v1, {}}},
+        {QStringLiteral("category"), {QStringLiteral("离散数学"), v1, {}}},
+    };
+    SyncBatch firstBatch;
+    firstBatch.device = remote;
+    firstBatch.records = {task};
+    const SyncStore::ApplyResult r1 = SyncStore(b.connection).applyRemote(firstBatch);
+    QVERIFY2(r1.ok, qPrintable(r1.error));
+    QVERIFY(taskValue(b, QStringLiteral("task-early"), QStringLiteral("category_id")).isNull());
+    QVERIFY(taskValue(b, QStringLiteral("task-early"), QStringLiteral("category")).isNull());
+
+    // 2. 第二批到达科目 cat-late：接回 tasks.category_id 的同时必须回填 tasks.category = "离散数学"。
+    SyncRecord cat;
+    cat.table = QStringLiteral("categories");
+    cat.syncId = QStringLiteral("cat-late");
+    cat.fields = {
+        {QStringLiteral("name"), {QStringLiteral("离散数学"), v1, {}}},
+        {QStringLiteral("color"), {QStringLiteral("#336699"), v1, {}}},
+        {QStringLiteral("is_preset"), {0, v1, {}}},
+        {QStringLiteral("display_order"), {10, v1, {}}},
+    };
+    SyncBatch secondBatch;
+    secondBatch.device = remote;
+    secondBatch.records = {cat};
+    const SyncStore::ApplyResult r2 = SyncStore(b.connection).applyRemote(secondBatch);
+    QVERIFY2(r2.ok, qPrintable(r2.error));
+    QCOMPARE(taskCategory(b, QStringLiteral("task-early")), QStringLiteral("cat-late"));
+    QCOMPARE(taskValue(b, QStringLiteral("task-early"), QStringLiteral("category")).toString(),
+             QStringLiteral("离散数学"));
+
+    // 3. 第三批远端仅修改科目名称为 "组合数学"：本机关联任务的 tasks.category 同步更新，且 changedTables 包含 tasks。
+    SyncRecord renameCat;
+    renameCat.table = QStringLiteral("categories");
+    renameCat.syncId = QStringLiteral("cat-late");
+    renameCat.fields = {
+        {QStringLiteral("name"), {QStringLiteral("组合数学"), v2, v1}},
+    };
+    SyncBatch thirdBatch;
+    thirdBatch.device = remote;
+    thirdBatch.records = {renameCat};
+    const SyncStore::ApplyResult r3 = SyncStore(b.connection).applyRemote(thirdBatch);
+    QVERIFY2(r3.ok, qPrintable(r3.error));
+    QCOMPARE(taskValue(b, QStringLiteral("task-early"), QStringLiteral("category")).toString(),
+             QStringLiteral("组合数学"));
+    QVERIFY(r3.changedTables.contains(QStringLiteral("tasks")));
+}
+
+void SyncTests::replaceWithSnapshotNormalizesTaskCountdownAndMemoOrders()
+{
+    // 产品保证：快照整体替换落地后自动对任务、倒计时和备忘录执行排序归一，消除快照内或预置科目合并造成的重复/非正排序号。
+    Device b = openDevice(QStringLiteral("b"));
+    // 先在本机预置科目 preset-1（数学）下放一条备忘录 sort_order = 1（虽然快照缺席会被删，但构造快照里 preset-1 与同名自定义科目各带一条 sort_order = 1 的备忘录合并进 preset-1）
+    const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
+    const SyncVersion v{kFuture, remote};
+
+    auto makeRec = [&](const QString& table, const QString& id,
+                       std::initializer_list<QPair<QString, QVariant>> kv) {
+        SyncRecord r;
+        r.table = table;
+        r.syncId = id;
+        for (const auto& pair : kv) {
+            r.fields.insert(pair.first, {pair.second, v, {}});
+        }
+        return r;
+    };
+
+    SyncBatch snapshot;
+    snapshot.device = remote;
+    snapshot.epoch = 2;
+    snapshot.records = {
+        // 自定义科目与本机保留的预置科目「数学」(preset-1) 同名，finalizeCategoryNames 会把它并入 preset-1
+        makeRec(QStringLiteral("categories"), QStringLiteral("custom-math"),
+                {{QStringLiteral("name"), QStringLiteral("数学")},
+                 {QStringLiteral("color"), QStringLiteral("#112233")},
+                 {QStringLiteral("is_preset"), 0},
+                 {QStringLiteral("display_order"), 10}}),
+        // 两条同日任务共享相同的 display_order = 0（非正且重复）
+        makeRec(QStringLiteral("tasks"), QStringLiteral("snap-task-1"),
+                {{QStringLiteral("title"), QStringLiteral("任务一")},
+                 {QStringLiteral("date"), QStringLiteral("2026-10-08")},
+                 {QStringLiteral("completed"), 0},
+                 {QStringLiteral("display_order"), 0},
+                 {QStringLiteral("created_at"), QStringLiteral("2026-10-08T08:00:00")}}),
+        makeRec(QStringLiteral("tasks"), QStringLiteral("snap-task-2"),
+                {{QStringLiteral("title"), QStringLiteral("任务二")},
+                 {QStringLiteral("date"), QStringLiteral("2026-10-08")},
+                 {QStringLiteral("completed"), 0},
+                 {QStringLiteral("display_order"), 0},
+                 {QStringLiteral("created_at"), QStringLiteral("2026-10-08T08:05:00")}}),
+        // 两条倒计时目标共享相同的 display_order = 0
+        makeRec(QStringLiteral("countdown_goals"), QStringLiteral("snap-goal-1"),
+                {{QStringLiteral("name"), QStringLiteral("初试")},
+                 {QStringLiteral("target_date"), QStringLiteral("2026-12-20")},
+                 {QStringLiteral("display_order"), 0},
+                 {QStringLiteral("created_at"), QStringLiteral("2026-10-01T08:00:00")}}),
+        makeRec(QStringLiteral("countdown_goals"), QStringLiteral("snap-goal-2"),
+                {{QStringLiteral("name"), QStringLiteral("复试")},
+                 {QStringLiteral("target_date"), QStringLiteral("2027-03-20")},
+                 {QStringLiteral("display_order"), 0},
+                 {QStringLiteral("created_at"), QStringLiteral("2026-10-01T08:05:00")}}),
+        // 两条备忘录分别挂在 preset-1 与 custom-math 下，sort_order 都是 1；科目合并后同属 preset-1 发生撞号
+        makeRec(QStringLiteral("memos"), QStringLiteral("snap-memo-1"),
+                {{QStringLiteral("title"), QStringLiteral("数学笔记甲")},
+                 {QStringLiteral("body"), QStringLiteral("A")},
+                 {QStringLiteral("category_id"), QStringLiteral("preset-1")},
+                 {QStringLiteral("sort_order"), 1},
+                 {QStringLiteral("created_at"), QStringLiteral("2026-10-01T08:00:00.000Z")}}),
+        makeRec(QStringLiteral("memos"), QStringLiteral("snap-memo-2"),
+                {{QStringLiteral("title"), QStringLiteral("数学笔记乙")},
+                 {QStringLiteral("body"), QStringLiteral("B")},
+                 {QStringLiteral("category_id"), QStringLiteral("custom-math")},
+                 {QStringLiteral("sort_order"), 1},
+                 {QStringLiteral("created_at"), QStringLiteral("2026-10-01T08:05:00.000Z")}}),
+    };
+
+    const SyncStore::ApplyResult res = SyncStore(b.connection).replaceWithSnapshot(snapshot);
+    QVERIFY2(res.ok, qPrintable(res.error));
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(DISTINCT display_order) FROM tasks WHERE date = '2026-10-08'")), 2);
+    QCOMPARE(count(b, QStringLiteral("SELECT MIN(display_order) FROM tasks WHERE date = '2026-10-08'")), 1);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(DISTINCT display_order) FROM countdown_goals")), 2);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(DISTINCT sort_order) FROM memos")), 2);
+}
+
+void SyncTests::syncJsonRejectsOutOfRangeFloatsNonScalarFieldsAndNonStringSettings()
+{
+    // 产品保证：SyncJson::fromJson 安全拦截超出双精度精确整数范围的浮点数、非标量字段值（数组/对象）、非对象字段表以及非字符串设置值，绝不触发整型溢出 UB 或静默转成空串。
+    const QByteArray validBytes = QJsonDocument(SyncJson::toJson(
+        SyncBatch{QStringLiteral("0123456789abcdef0123456789abcdef"), 1, {}, {}})).toJson(QJsonDocument::Compact);
+    const QJsonObject base = QJsonDocument::fromJson(validBytes).object();
+
+    auto expectRejected = [&](std::function<void(QJsonObject&)> mutate, const char* label) {
+        QJsonObject obj = base;
+        mutate(obj);
+        SyncBatch out;
+        QString err;
+        QVERIFY2(!SyncJson::fromJson(obj, &out, &err), label);
+        QVERIFY2(!err.isEmpty(), label);
+    };
+
+    // 1. epoch 为 1e100 超界浮点数
+    expectRejected([](QJsonObject& o) {
+        o.insert(QStringLiteral("epoch"), 1e100);
+    }, "huge-epoch");
+
+    // 2. 删除记录 vt 为 1e100 超界浮点数
+    expectRejected([](QJsonObject& o) {
+        o.insert(QStringLiteral("records"), QJsonArray{QJsonObject{
+            {QStringLiteral("t"), QStringLiteral("tasks")},
+            {QStringLiteral("id"), QStringLiteral("r1")},
+            {QStringLiteral("del"), true},
+            {QStringLiteral("vt"), 1e100},
+            {QStringLiteral("vd"), QStringLiteral("0123456789abcdef0123456789abcdef")},
+        }});
+    }, "huge-vt");
+
+    // 3. 字段 t 为 2^63 (9223372036854775808.0) 超界浮点数
+    expectRejected([](QJsonObject& o) {
+        o.insert(QStringLiteral("records"), QJsonArray{QJsonObject{
+            {QStringLiteral("t"), QStringLiteral("tasks")},
+            {QStringLiteral("id"), QStringLiteral("r1")},
+            {QStringLiteral("f"), QJsonObject{
+                {QStringLiteral("title"), QJsonObject{
+                    {QStringLiteral("v"), QStringLiteral("x")},
+                    {QStringLiteral("t"), 9223372036854775808.0},
+                    {QStringLiteral("d"), QStringLiteral("0123456789abcdef0123456789abcdef")},
+                }},
+            }},
+        }});
+    }, "2pow63-field-time");
+
+    // 4. 字段值 v 为数组或对象（不能静默转成空串抹掉原值）
+    expectRejected([](QJsonObject& o) {
+        o.insert(QStringLiteral("records"), QJsonArray{QJsonObject{
+            {QStringLiteral("t"), QStringLiteral("tasks")},
+            {QStringLiteral("id"), QStringLiteral("r1")},
+            {QStringLiteral("f"), QJsonObject{
+                {QStringLiteral("title"), QJsonObject{
+                    {QStringLiteral("v"), QJsonArray{1, 2}},
+                    {QStringLiteral("t"), 1},
+                    {QStringLiteral("d"), QStringLiteral("0123456789abcdef0123456789abcdef")},
+                }},
+            }},
+        }});
+    }, "array-field-value");
+
+    // 5. 记录存在非对象的 f（如数组）
+    expectRejected([](QJsonObject& o) {
+        o.insert(QStringLiteral("records"), QJsonArray{QJsonObject{
+            {QStringLiteral("t"), QStringLiteral("tasks")},
+            {QStringLiteral("id"), QStringLiteral("r1")},
+            {QStringLiteral("f"), QJsonArray{}},
+        }});
+    }, "non-object-f");
+
+    // 6. 设置项的 v 不是字符串（数字、对象、null 均不能静默转成 "" 抹空昵称）
+    for (const QJsonValue& badVal : {QJsonValue(123), QJsonValue(true), QJsonValue(QJsonObject{}), QJsonValue(QJsonValue::Null)}) {
+        expectRejected([&](QJsonObject& o) {
+            o.insert(QStringLiteral("settings"), QJsonArray{QJsonObject{
+                {QStringLiteral("k"), QStringLiteral("profile/nickname")},
+                {QStringLiteral("v"), badVal},
+                {QStringLiteral("t"), 1},
+                {QStringLiteral("d"), QStringLiteral("0123456789abcdef0123456789abcdef")},
+            }});
+        }, "non-string-setting-value");
+    }
+
+    // 7. canonicalValue 对 1e100 大浮点数安全输出 r: 而不触发 qint64 强转 UB
+    QVERIFY(SyncJson::canonicalValue(QVariant(1e100)).startsWith(QStringLiteral("r:")));
+}
+
+void SyncTests::collectPendingChunkSplitsByByteBudgetHandlesOversizeAndPropagatesSqlError()
+{
+    // 产品保证：待发送改动超软上限时按精确 UTF-8 紧凑 JSON 字节拆分多批发送，单条超软上限但不超硬上限时独占一批，
+    // 单条超硬上限时报警且保留队列，且读取过程遇 SQL 错误必须失败向上传播而非静默漏发。
+    Device a = openDevice(QStringLiteral("chunk_dev_a"));
+    SyncStore store(a.connection);
+
+    // 写入 6 条带 1500 字节备注的任务，总编码体积远超 4096 字节软上限
+    QStringList insertedIds;
+    for (int i = 0; i < 6; ++i) {
+        const QString syncId = addTask(a, QStringLiteral("任务-%1").arg(i));
+        QVERIFY(!syncId.isEmpty());
+        QSqlQuery upd(deviceDb(a));
+        upd.prepare(QStringLiteral("UPDATE tasks SET notes = :n WHERE sync_id = :id"));
+        upd.bindValue(QStringLiteral(":n"), QString(1500, QLatin1Char('a' + i)));
+        upd.bindValue(QStringLiteral(":id"), syncId);
+        QVERIFY(upd.exec());
+        insertedIds.append(syncId);
+    }
+
+    constexpr qint64 kSoft = 4096;
+    constexpr qint64 kHard = 8192;
+    QSet<QString> sentIds;
+    int chunkCount = 0;
+    qint64 seq = 0;
+    while (true) {
+        const SyncStore::PendingChunkResult chunk = store.collectPendingChunk(kSoft, kHard);
+        QVERIFY2(chunk.ok, qPrintable(chunk.error));
+        QVERIFY(!chunk.oversizeSingleRecord);
+        if (chunk.batch.isEmpty()) {
+            QVERIFY(!chunk.hasMore);
+            break;
+        }
+        ++chunkCount;
+        const QByteArray encoded = SyncFiles::encodeChanges({++seq, 1700000000000LL, chunk.batch});
+        QVERIFY2(encoded.size() <= kSoft,
+                 qPrintable(QStringLiteral("单批字节 %1 超过软上限 %2").arg(encoded.size()).arg(kSoft)));
+        for (const SyncRecord& rec : chunk.batch.records) {
+            if (rec.table == QLatin1String("tasks")) {
+                sentIds.insert(rec.syncId);
+            }
+        }
+        QVERIFY(store.acknowledgeOutbound(chunk.batch, {chunk.batch.epoch, seq}));
+        if (!chunk.hasMore) {
+            break;
+        }
+    }
+    QVERIFY2(chunkCount >= 3, qPrintable(QStringLiteral("期望至少拆成 3 批，实际 %1 批").arg(chunkCount)));
+    for (const QString& id : insertedIds) {
+        QVERIFY(sentIds.contains(id));
+    }
+    QVERIFY(!store.hasPending());
+
+    // 单条介于软上限与硬上限之间（约 5500 字节）应独占一批发出，并准确标记后续仍有更多记录。
+    // 先把 mediumId 的大备注写完再插入 smallId，确保 mediumId 的 change_time 排在前面。
+    const QString mediumId = addTask(a, QStringLiteral("中大任务"));
+    {
+        QSqlQuery upd(deviceDb(a));
+        upd.prepare(QStringLiteral("UPDATE tasks SET notes = :n WHERE sync_id = :id"));
+        upd.bindValue(QStringLiteral(":n"), QString(5200, QLatin1Char('m')));
+        upd.bindValue(QStringLiteral(":id"), mediumId);
+        QVERIFY(upd.exec());
+    }
+    const QString smallId = addTask(a, QStringLiteral("紧随小任务"));
+    const SyncStore::PendingChunkResult mediumChunk = store.collectPendingChunk(kSoft, kHard);
+    QVERIFY(mediumChunk.ok);
+    QVERIFY(!mediumChunk.oversizeSingleRecord);
+    QVERIFY(mediumChunk.hasMore);
+    QCOMPARE(mediumChunk.batch.records.size(), 1);
+    QCOMPARE(mediumChunk.batch.records.first().syncId, mediumId);
+    const QByteArray mediumEncoded = SyncFiles::encodeChanges({++seq, 1700000000000LL, mediumChunk.batch});
+    QVERIFY(mediumEncoded.size() > kSoft && mediumEncoded.size() <= kHard);
+    QVERIFY(store.acknowledgeOutbound(mediumChunk.batch, {mediumChunk.batch.epoch, seq}));
+
+    const SyncStore::PendingChunkResult tailChunk = store.collectPendingChunk(kSoft, kHard);
+    QVERIFY(tailChunk.ok);
+    QVERIFY(!tailChunk.hasMore);
+    QCOMPARE(tailChunk.batch.records.size(), 1);
+    QCOMPARE(tailChunk.batch.records.first().syncId, smallId);
+    QVERIFY(store.acknowledgeOutbound(tailChunk.batch, {tailChunk.batch.epoch, ++seq}));
+
+    // 单条超过硬上限：报错标记 oversizeSingleRecord 且保留队列不丢数据
+    const QString hugeId = addTask(a, QStringLiteral("超大任务"));
+    {
+        QSqlQuery upd(deviceDb(a));
+        upd.prepare(QStringLiteral("UPDATE tasks SET notes = :n WHERE sync_id = :id"));
+        upd.bindValue(QStringLiteral(":n"), QString(9000, QLatin1Char('h')));
+        upd.bindValue(QStringLiteral(":id"), hugeId);
+        QVERIFY(upd.exec());
+    }
+    const SyncStore::PendingChunkResult hugeChunk = store.collectPendingChunk(kSoft, kHard);
+    QVERIFY(hugeChunk.ok);
+    QVERIFY(hugeChunk.oversizeSingleRecord);
+    QVERIFY(!hugeChunk.oversizeDetail.isEmpty());
+    QVERIFY(hugeChunk.batch.isEmpty());
+    QVERIFY(store.hasPending());
+
+    // SQL 读取故障（重命名 sync_field_versions）必须返回 ok == false 而非静默跳过记录
+    QVERIFY(exec(a, QStringLiteral("ALTER TABLE sync_field_versions RENAME TO sync_field_versions_broken")));
+    const auto restoreTable = qScopeGuard([&] {
+        exec(a, QStringLiteral("ALTER TABLE sync_field_versions_broken RENAME TO sync_field_versions"));
+    });
+    const SyncStore::PendingChunkResult faultChunk = store.collectPendingChunk(kSoft, kHard);
+    QVERIFY(!faultChunk.ok);
+    QVERIFY(!faultChunk.error.isEmpty());
+}
+
+void SyncTests::applyDeletionRollbackDoesNotLeakDeletedTaskIdsOrConflictsAndMergeUsesPendingCategoryName()
+{
+    // 产品保证：删除记录因单条保存点回滚时绝不向结果泄漏幽灵 deletedTaskIds 或虚增 conflictsLogged；
+    // 同批次内科目改名与另一科目合并到该科目时，关联任务的 category 文本必须落为最终名而非临时占位名。
+    Device a = openDevice(QStringLiteral("del_rollback_a"));
+    Device b = openDevice(QStringLiteral("del_rollback_b"));
+
+    // 场景 1：任务同步到两端后，在 A 本地制造未发改动，同时 B 发来删除该任务，并在 A 上用 TEMP TRIGGER 阻断 DELETE
+    const QString taskId = addTask(a, QStringLiteral("防幽灵删除任务"));
+    QVERIFY(!taskId.isEmpty());
+    SyncStore aStore(a.connection);
+    SyncStore bStore(b.connection);
+    const SyncBatch initial = aStore.collectPending();
+    QVERIFY(bStore.applyRemote(initial).ok);
+    QVERIFY(aStore.acknowledge(initial));
+    // 先清掉设备 B 初始化时自带的 5 个预置科目待发项，确保后续删除批次只含本用例要测的任务墓碑。
+    QVERIFY(bStore.acknowledge(bStore.collectPending()));
+
+    // A 本地产生未发修改（会触发删除冲突日志），B 删除该任务生成墓碑批次
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '本地未发改名' WHERE sync_id = '%1'").arg(taskId)));
+    QVERIFY(exec(b, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(taskId)));
+    const SyncBatch deleteBatch = bStore.collectPending();
+    QCOMPARE(deleteBatch.records.size(), 1);
+    QVERIFY(deleteBatch.records.first().deleted);
+
+    QVERIFY(exec(a, QStringLiteral(
+        "CREATE TEMP TRIGGER block_task_delete BEFORE DELETE ON tasks "
+        "WHEN OLD.sync_id = '%1' BEGIN SELECT RAISE(ABORT, 'delete blocked by test'); END").arg(taskId)));
+    const auto dropTrigger = qScopeGuard([&] {
+        exec(a, QStringLiteral("DROP TRIGGER IF EXISTS block_task_delete"));
+    });
+
+    const SyncStore::ApplyResult blockedResult = aStore.applyRemote(deleteBatch);
+    QVERIFY2(blockedResult.ok, qPrintable(blockedResult.error));
+    QCOMPARE(blockedResult.skippedRecords, 1);
+    QVERIFY(blockedResult.deletedTaskIds.isEmpty());
+    // 保存点回滚必须还原删除前记下的 delete 冲突，外层 logSkipped 仅追加 1 条 skipped 日志（若未还原会虚增为 2）。
+    QCOMPARE(blockedResult.conflictsLogged, 1);
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE kind = 'delete'")), 0);
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE kind = 'skipped'")), 1);
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(taskId)), 1);
+
+    // 场景 2：同批次内把科目 target 改名为「最终目标名」并把科目 source 合并到 target
+    const QString catSource = addCategory(a, QStringLiteral("源科目"));
+    const QString catTarget = addCategory(a, QStringLiteral("旧目标名"));
+    QVERIFY(!catSource.isEmpty() && !catTarget.isEmpty());
+    const qint64 catSourceRowId = scalar(a, QStringLiteral("SELECT id FROM categories WHERE sync_id = '%1'").arg(catSource)).toLongLong();
+    const QString linkedTask = addTask(a, QStringLiteral("归属源科目任务"));
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET category_id = %1, category = '源科目' WHERE sync_id = '%2'")
+                        .arg(catSourceRowId).arg(linkedTask)));
+    const SyncBatch catBatch = aStore.collectPending();
+    QVERIFY(bStore.applyRemote(catBatch).ok);
+    QVERIFY(aStore.acknowledge(catBatch));
+
+    // 手工构造单批次：先改名 catTarget，再把 catSource 合并到 catTarget；
+    // 时间戳必须高于当前 13 位毫秒时钟与本地已记版本，确保 LWW 胜出。
+    const qint64 maxLocalTime = scalar(a, QStringLiteral("SELECT COALESCE(MAX(time), 0) FROM sync_field_state")).toLongLong();
+    const qint64 futureTime = qMax(QDateTime::currentMSecsSinceEpoch(), maxLocalTime) + 60000LL;
+    SyncBatch renameAndMerge;
+    renameAndMerge.device = b.id;
+    renameAndMerge.epoch = bStore.epoch();
+    SyncRecord renameTarget;
+    renameTarget.table = QStringLiteral("categories");
+    renameTarget.syncId = catTarget;
+    renameTarget.fields.insert(QStringLiteral("name"),
+                               {QStringLiteral("最终目标名"), {futureTime, b.id}, {}});
+    renameAndMerge.records.append(renameTarget);
+
+    SyncRecord mergeSource;
+    mergeSource.table = QStringLiteral("categories");
+    mergeSource.syncId = catSource;
+    mergeSource.deleted = true;
+    mergeSource.deleteVersion = {futureTime, b.id};
+    mergeSource.deleteKind = QStringLiteral("merge");
+    mergeSource.mergedInto = catTarget;
+    renameAndMerge.records.append(mergeSource);
+
+    // 批内合并写 tasks.category 时必须直接使用待生效名，不得把 \u0001 临时占位名落进 tasks。
+    QVERIFY(exec(a, QStringLiteral(
+        "CREATE TEMP TRIGGER reject_sentinel_category BEFORE UPDATE ON tasks "
+        "WHEN substr(NEW.category, 1, 1) = char(1) "
+        "BEGIN SELECT RAISE(ABORT, 'sentinel category leaked into tasks'); END")));
+    const auto dropSentinelTrigger = qScopeGuard([&] {
+        exec(a, QStringLiteral("DROP TRIGGER IF EXISTS reject_sentinel_category"));
+    });
+
+    const SyncStore::ApplyResult mergeResult = aStore.applyRemote(renameAndMerge);
+    QVERIFY2(mergeResult.ok, qPrintable(mergeResult.error));
+    QCOMPARE(mergeResult.skippedRecords, 0);
+    const QString taskCategoryText = taskValue(a, linkedTask, QStringLiteral("category")).toString();
+    QCOMPARE(taskCategoryText, QStringLiteral("最终目标名"));
+    QVERIFY(!taskCategoryText.startsWith(QChar(0x0001)));
+}
+
+void SyncTests::bulkExportSnapshotAndOptimizedAcknowledgePreserveExactSemantics()
+{
+    // 产品保证：按表批量装载的 exportSnapshot 与预编译合并 UPDATE 的 acknowledge / markSnapshotPublished，
+    // 完整保留引用映射、待接回引用、墓碑、设置以及并发编辑时的 base 重算语义。
+    Device a = openDevice(QStringLiteral("bulk_a"));
+    Device b = openDevice(QStringLiteral("bulk_b"));
+    SyncStore aStore(a.connection);
+    SyncStore bStore(b.connection);
+
+    QVERIFY(!aStore.hasSnapshotPosition());
+    QCOMPARE(aStore.snapshotPosition(), (SyncPosition{0, 0}));
+
+    const QString catId = addCategory(a, QStringLiteral("物理"));
+    const qint64 catRowId = scalar(a, QStringLiteral("SELECT id FROM categories WHERE sync_id = '%1'").arg(catId)).toLongLong();
+    const QString taskKeep = addTask(a, QStringLiteral("保留任务"));
+    const QString taskDel = addTask(a, QStringLiteral("待删任务"));
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET category_id = %1, category = '物理' WHERE sync_id = '%2'")
+                        .arg(catRowId).arg(taskKeep)));
+    QVERIFY(aStore.recordLocalSetting(QStringLiteral("logic/dayStartHour"), QStringLiteral("5"), false));
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(taskDel)));
+
+    // 导出全量快照并确认：应包含业务行、外键 sync_id、墓碑与设置，且 markSnapshotPublished 同步写 snapshot_position
+    bool ok = false;
+    QString err;
+    const SyncBatch snap = aStore.exportSnapshot(&ok, &err);
+    QVERIFY2(ok, qPrintable(err));
+    QVERIFY(aStore.markSnapshotPublished(snap, {0, 0}));
+    QVERIFY(aStore.hasSnapshotPosition());
+    QCOMPARE(aStore.snapshotPosition(), (SyncPosition{0, 0}));
+    QVERIFY(!aStore.hasPending());
+
+    // 将快照整体应用到设备 B，验证两端快照导出完全等价
+    QVERIFY(bStore.replaceWithSnapshot(snap).ok);
+    QCOMPARE(describe(bStore.exportSnapshot()), describe(aStore.exportSnapshot()));
+
+    // 验证合并 UPDATE 在「发出后并发再改」时保留 pending=1 并把 base 推进到刚发出的版本
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '第一版' WHERE sync_id = '%1'").arg(taskKeep)));
+    const SyncBatch sent = aStore.collectPending();
+    SyncVersion sentTitleVersion;
+    for (const SyncRecord& rec : sent.records) {
+        if (rec.syncId == taskKeep) {
+            sentTitleVersion = rec.fields.value(QStringLiteral("title")).version;
+        }
+    }
+    QVERIFY(sentTitleVersion.time > 0);
+    // 模拟发出期间本机又改了一次 title（并发编辑）
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '第二版' WHERE sync_id = '%1'").arg(taskKeep)));
+    QVERIFY(aStore.acknowledgeOutbound(sent, {0, 1}));
+    QCOMPARE(aStore.outboundPosition(), (SyncPosition{0, 1}));
+
+    const SyncBatch next = aStore.collectPending();
+    QCOMPARE(next.records.size(), 1);
+    QCOMPARE(next.records.first().syncId, taskKeep);
+    QCOMPARE(next.records.first().fields.value(QStringLiteral("title")).value.toString(), QStringLiteral("第二版"));
+    QCOMPARE(next.records.first().fields.value(QStringLiteral("title")).base, sentTitleVersion);
+}
+
+void SyncTests::scheduleForeignKeysRejectsExtraCascadeCompositeAndPeriodForeignKeys()
+{
+    // 产品保证：课表外键校验严格要求 schedule_entries 仅有 1 条单列 SET NULL 外键指向 categories(id)，
+    // 且 schedule_periods 不含任何外键，拒绝附带额外 CASCADE、复合外键或节次表外键的异常结构。
+    const auto checkSchema = [](const QString& suffix, const QString& entriesSql, const QString& periodsSql) {
+        const QString connName = QStringLiteral("schedule_fk_test_") + suffix;
+        bool valid = false;
+        {
+            QSqlDatabase testDb = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName);
+            testDb.setDatabaseName(QStringLiteral(":memory:"));
+            if (testDb.open()) {
+                QSqlQuery q(testDb);
+                const bool created = q.exec(QStringLiteral("CREATE TABLE categories (id INTEGER PRIMARY KEY)"))
+                    && q.exec(entriesSql)
+                    && q.exec(periodsSql);
+                if (created) {
+                    valid = DatabaseManager::scheduleForeignKeysAreValid(testDb);
+                }
+                testDb.close();
+            }
+        }
+        QSqlDatabase::removeDatabase(connName);
+        return valid;
+    };
+
+    const QString validEntries = QStringLiteral(
+        "CREATE TABLE schedule_entries ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL)");
+    const QString validPeriods = QStringLiteral(
+        "CREATE TABLE schedule_periods (id INTEGER PRIMARY KEY AUTOINCREMENT, period_index INTEGER NOT NULL UNIQUE)");
+
+    // 正例：标准结构通过
+    QVERIFY(checkSchema(QStringLiteral("ok"), validEntries, validPeriods));
+
+    // 反例 1：schedule_entries 额外挂一条 ON DELETE CASCADE 外键
+    const QString extraCascadeEntries = QStringLiteral(
+        "CREATE TABLE schedule_entries ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL, "
+        "FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE)");
+    QVERIFY(!checkSchema(QStringLiteral("extra_cascade"), extraCascadeEntries, validPeriods));
+
+    // 反例 2：schedule_entries 使用双列复合外键
+    const QString compositeFkEntries = QStringLiteral(
+        "CREATE TABLE schedule_entries ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER, extra_id INTEGER, "
+        "FOREIGN KEY(category_id, extra_id) REFERENCES categories(id, id) ON DELETE SET NULL)");
+    QVERIFY(!checkSchema(QStringLiteral("composite"), compositeFkEntries, validPeriods));
+
+    // 反例 3：schedule_periods 带有任意外键
+    const QString fkPeriods = QStringLiteral(
+        "CREATE TABLE schedule_periods ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, period_index INTEGER REFERENCES categories(id) ON DELETE SET NULL)");
+    QVERIFY(!checkSchema(QStringLiteral("period_fk"), validEntries, fkPeriods));
 }
 
 QTEST_GUILESS_MAIN(SyncTests)

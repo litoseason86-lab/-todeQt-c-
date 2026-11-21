@@ -1,6 +1,7 @@
 #include <QDir>
 #include <QFile>
 #include <QMutex>
+#include <QPointer>
 #include <QProcess>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -408,6 +409,18 @@ private slots:
     void settingsAccessErrorOnEnableBlocksEngineAndRecoversOnRetry();
     void settingsAccessErrorOnAcceptFolderPreservesExistingEngineAndRecovers();
     void settingsAccessErrorOnBookmarkRefreshPreservesEngineAndExposesError();
+
+    // 074：信号重入销毁守卫与设置对账容错
+    void destroyingEngineInsideCycleSignalsDoesNotTouchFreedEngine();
+    void unknownFutureSettingKeyPreservesWritebackMarkWithoutBlockingSync();
+    void clampedRemoteSettingValuePreservesWritebackMarkWithoutBlockingSync();
+    void readOnlyPreferencesOnStartupBlocksSyncAndRecoversOnSyncNow();
+
+    // 077 R10：书签刷新不误清非书签类设置错误
+    void bookmarkRefreshDoesNotClearUnrelatedSettingsError();
+
+    // 074 深度复审：本机设置写库失败跟踪重试，且不覆写夹紧的远端设置与恢复不确定期不写入
+    void localSettingWriteFailureRetriesOnSubsequentTriggerWithoutClobberingClampedRemote();
 
 private:
     QString cloudFolder() const { return m_data->filePath(QStringLiteral("cloud/番茄Todo同步")); }
@@ -1758,6 +1771,7 @@ void SyncControllerTests::invalidRemoteSettingsAreNotWrittenBack()
     QCOMPARE(SyncStore().pendingSettingWriteBacks().size(), batch.settings.size());
     SyncController relaunched(macPlatform(cloudFolder()));
     relaunched.initialize();
+    QVERIFY2(!relaunched.hasProblem(), qPrintable(relaunched.statusText()));
     QCOMPARE(SyncStore().syncedSetting(QStringLiteral("focus/workMinutes")), QStringLiteral("很长"));
     QCOMPARE(SyncStore().pendingSettingWriteBacks().size(), batch.settings.size());
 }
@@ -4279,6 +4293,434 @@ void SyncControllerTests::restoreFinalizeQSettingsWriteBackFailureBlocksSyncAndP
     QVERIFY(!QFileInfo::exists(journalPath));
     QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'writeback/logic/dayStartHour'")).toInt(), 0);
     QCOMPARE(AppSettings::instance()->dayStartHour(), 5);
+}
+
+void SyncControllerTests::destroyingEngineInsideCycleSignalsDoesNotTouchFreedEngine()
+{
+    // 保证同步周期结束信号回调中立即销毁引擎或切换传输不会读写已释放对象、续发信号或崩溃。
+    // 1. 在 cycleFinished 同线程回调内且排着下一轮请求（m_cycleRequested == true）时立即销毁 SyncEngine
+    {
+        SyncEngine::Options options = testOptions();
+        options.mayCreateFolder = true;
+        auto engine = std::make_unique<SyncEngine>(std::make_unique<LocalSyncFolder>(cloudFolder()), options);
+        QPointer<SyncEngine> guard(engine.get());
+        QVERIFY(!guard.isNull());
+
+        bool destroyedInCycleFinished = false;
+        QObject context;
+        connect(engine.get(), &SyncEngine::cycleFinished, &context, [&] {
+            destroyedInCycleFinished = true;
+            engine.reset();
+        });
+
+        engine->start();
+        // 第一轮仍在进行时排队下一轮，使 finishCycle 进入信号发射时 m_cycleRequested && m_running 均为 true
+        QVERIFY(!engine->isIdle());
+        engine->syncNow();
+
+        QTRY_VERIFY_WITH_TIMEOUT(destroyedInCycleFinished, 10000);
+        QVERIFY(guard.isNull());
+        // 让事件循环排空，确认没有向已析构对象投递悬垂的 0ms requestCycle 定时器
+        QTest::qWait(20);
+    }
+
+    // 2. 在 statusChanged 同线程回调内立即销毁 SyncEngine，后续 cycleFinished 与 0ms 续跑定时器均不得在已释放对象上触发
+    {
+        QVERIFY(SyncStore().setFolderId(QString()));
+        const QString secondRoot = m_data->filePath(QStringLiteral("cloud2"));
+        QVERIFY(QDir().mkpath(secondRoot));
+        SyncEngine::Options options = testOptions();
+        options.mayCreateFolder = true;
+        auto engine = std::make_unique<SyncEngine>(
+            std::make_unique<LocalSyncFolder>(secondRoot + QStringLiteral("/番茄Todo同步")), options);
+        QPointer<SyncEngine> guard(engine.get());
+        QVERIFY(!guard.isNull());
+
+        bool destroyedInStatusChanged = false;
+        int cycleFinishedCount = 0;
+        QObject context;
+        connect(engine.get(), &SyncEngine::statusChanged, &context, [&] {
+            if (engine && engine->status() == SyncEngine::Status::UpToDate) {
+                destroyedInStatusChanged = true;
+                engine.reset();
+            }
+        });
+        connect(engine.get(), &SyncEngine::cycleFinished, &context, [&] {
+            ++cycleFinishedCount;
+        });
+
+        engine->start();
+        QVERIFY(!engine->isIdle());
+        engine->syncNow();
+
+        QTRY_VERIFY_WITH_TIMEOUT(destroyedInStatusChanged, 10000);
+        QVERIFY(guard.isNull());
+        QCOMPARE(cycleFinishedCount, 0);
+        QTest::qWait(20);
+    }
+}
+
+void SyncControllerTests::unknownFutureSettingKeyPreservesWritebackMarkWithoutBlockingSync()
+{
+    // 保证数据库中存在未知同步设置键及待写回标记时，重启初始化保留待写回标记与远端原值且不阻断任务同步。
+    std::unique_ptr<Peer> peer = openMacPeer();
+    {
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        controller.setEnabled(true);
+        QVERIFY(waitIdle(controller.engine()));
+        QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+        AppSettings::instance()->setWorkMinutes(40);
+        controller.syncNow();
+        QVERIFY(waitIdle(controller.engine()));
+    }
+
+    peer->engine->start();
+    QVERIFY(waitIdle(peer->engine.get()));
+    if (peer->engine->status() == SyncEngine::Status::NeedsConfirmation) {
+        peer->engine->confirmJoin();
+        QVERIFY(waitIdle(peer->engine.get()));
+    }
+    QCOMPARE(peer->engine->status(), SyncEngine::Status::UpToDate);
+
+    // 模拟更新版本设备同步来当前版本不认识的设置键（含非空值与空串值），落库后尚未写回即重启
+    const QString unknownKey = QStringLiteral("future/newOption");
+    const QString unknownEmptyKey = QStringLiteral("future/emptyOption");
+    const qint64 remoteTime = QDateTime::currentMSecsSinceEpoch() + 100000LL;
+    QVERIFY(applyRemoteSettingsWithoutWritingBack(
+        {{unknownKey, QStringLiteral("enabled")}, {unknownEmptyKey, QString()}},
+        remoteTime));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(unknownKey), QStringLiteral("set"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(unknownEmptyKey), QStringLiteral("set"));
+    QCOMPARE(AppSettings::instance()->workMinutes(), 40);
+
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+
+    QVERIFY2(!relaunched.hasProblem(), qPrintable(relaunched.statusText()));
+    QVERIFY(relaunched.engine() && relaunched.engine()->isRunning());
+    QVERIFY(waitIdle(relaunched.engine()));
+    QCOMPARE(relaunched.statusKey(), QStringLiteral("upToDate"));
+
+    // 未知键的值与待写回标记完整保留，且未被当成本机改动反向重发
+    QCOMPARE(SyncStore().syncedSetting(unknownKey), QStringLiteral("enabled"));
+    QCOMPARE(SyncStore().syncedSetting(unknownEmptyKey), QString());
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(unknownKey), QStringLiteral("set"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(unknownEmptyKey), QStringLiteral("set"));
+    QVERIFY(!settingRow(unknownKey).pending);
+    QVERIFY(!settingRow(unknownEmptyKey).pending);
+    QCOMPARE(AppSettings::instance()->workMinutes(), 40);
+
+    // 普通任务收发完全正常
+    QVERIFY(!addTask(QStringLiteral("本机重启后任务")).isEmpty());
+    relaunched.syncNow();
+    QVERIFY(waitIdle(relaunched.engine()));
+    peer->engine->syncNow();
+    QVERIFY(waitIdle(peer->engine.get()));
+    QCOMPARE(taskTitles(peer->database()), QStringList{QStringLiteral("本机重启后任务")});
+
+    QSqlQuery peerInsert(peer->database());
+    QVERIFY(peerInsert.exec(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, display_order) VALUES ('对端新增任务', '2026-09-30', 0, 2)")));
+    peer->engine->syncNow();
+    QVERIFY(waitIdle(peer->engine.get()));
+    relaunched.syncNow();
+    QVERIFY(waitIdle(relaunched.engine()));
+    QCOMPARE(taskTitles(DatabaseManager::instance()->database()),
+             (QStringList{QStringLiteral("对端新增任务"), QStringLiteral("本机重启后任务")}));
+}
+
+void SyncControllerTests::clampedRemoteSettingValuePreservesWritebackMarkWithoutBlockingSync()
+{
+    // 保证远端已知设置超出本版本范围被本机归一夹紧时，重启对账生效本机归一值、保留待写回标记不覆盖远端值且不阻断同步。
+    std::unique_ptr<Peer> peer = openMacPeer();
+    {
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        controller.setEnabled(true);
+        QVERIFY(waitIdle(controller.engine()));
+        // 先把本机设为非默认值 45，确保后续收到超上限 "500" 时能观察到本机归一动作确实执行（45 -> 25）
+        AppSettings::instance()->setWorkMinutes(45);
+        QCOMPARE(AppSettings::instance()->workMinutes(), 45);
+        controller.syncNow();
+        QVERIFY(waitIdle(controller.engine()));
+    }
+
+    peer->engine->start();
+    QVERIFY(waitIdle(peer->engine.get()));
+    if (peer->engine->status() == SyncEngine::Status::NeedsConfirmation) {
+        peer->engine->confirmJoin();
+        QVERIFY(waitIdle(peer->engine.get()));
+    }
+    QCOMPARE(peer->engine->status(), SyncEngine::Status::UpToDate);
+
+    const QString key = QStringLiteral("focus/workMinutes");
+    const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
+    const qint64 remoteTime = settingRow(key).time + 100000LL;
+    QVERIFY(applyRemoteSettingsWithoutWritingBack({{key, QStringLiteral("500")}}, remoteTime));
+    QCOMPARE(AppSettings::instance()->workMinutes(), 45);
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(key), QStringLiteral("set"));
+
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+
+    // 本机归一值生效（超上限回到默认时长 25 分钟），且同步不报错、不死锁
+    QCOMPARE(AppSettings::instance()->workMinutes(), AppSettings::kDefaultWorkMinutes);
+    QVERIFY(AppSettings::instance()->workMinutes() != 45);
+    QVERIFY2(!relaunched.hasProblem(), qPrintable(relaunched.statusText()));
+    QVERIFY(relaunched.engine() && relaunched.engine()->isRunning());
+    QVERIFY(waitIdle(relaunched.engine()));
+    QCOMPARE(relaunched.statusKey(), QStringLiteral("upToDate"));
+
+    // 待写回标记保留，同步库中仍是远端的 "500"，没有被本机归一后的 "25" 反写覆盖
+    QCOMPARE(SyncStore().syncedSetting(key), QStringLiteral("500"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(key), QStringLiteral("set"));
+    QCOMPARE(settingRow(key).device, remote);
+    QVERIFY(!settingRow(key).pending);
+
+    // 改另一项设置不能替本机归一值制造一个新版本。
+    AppSettings::instance()->setNickname(QStringLiteral("本机昵称"));
+    QCOMPARE(SyncStore().syncedSetting(QStringLiteral("profile/nickname")), QStringLiteral("本机昵称"));
+    QCOMPARE(SyncStore().syncedSetting(key), QStringLiteral("500"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(key), QStringLiteral("set"));
+    QVERIFY(!settingRow(key).pending);
+
+    // 任务同步正常收发
+    QVERIFY(!addTask(QStringLiteral("夹紧后仍能同步的任务")).isEmpty());
+    relaunched.syncNow();
+    QVERIFY(waitIdle(relaunched.engine()));
+    peer->engine->syncNow();
+    QVERIFY(waitIdle(peer->engine.get()));
+    QCOMPARE(taskTitles(peer->database()), QStringList{QStringLiteral("夹紧后仍能同步的任务")});
+
+    // 用户明确改动这一项时，应以本机编辑为准，并结束此前未完成的远端写回。
+    AppSettings::instance()->setWorkMinutes(40);
+    QCOMPARE(SyncStore().syncedSetting(key), QStringLiteral("40"));
+    QVERIFY(settingRow(key).pending);
+    QVERIFY(!SyncStore().pendingSettingWriteBacks().contains(key));
+}
+
+void SyncControllerTests::readOnlyPreferencesOnStartupBlocksSyncAndRecoversOnSyncNow()
+{
+    // 保证无恢复日志时真实 INI 只读权限导致启动写回设置失败会阻断同步且不误报恢复受阻，解除只读后立即同步可自愈恢复。
+    {
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        controller.setEnabled(true);
+        QVERIFY(waitIdle(controller.engine()));
+        QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+    }
+
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    QVERIFY(!QFileInfo::exists(dbPath + QStringLiteral(".sync-restore.json")));
+
+    const QString key = QStringLiteral("focus/workMinutes");
+    const QString goalDate = QStringLiteral("2026-09-30");
+    const QString goalKey = SyncSchema::dailyGoalSettingKey(goalDate);
+    QCOMPARE(AppSettings::instance()->workMinutes(), 25);
+    QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(goalDate), 0);
+    const qint64 remoteTime = QDateTime::currentMSecsSinceEpoch() + 100000LL;
+    QVERIFY(applyRemoteSettingsWithoutWritingBack(
+        {{key, QStringLiteral("45")}, {goalKey, QStringLiteral("90")}}, remoteTime));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(key), QStringLiteral("set"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(goalKey), QStringLiteral("set"));
+
+    QString ini;
+    {
+        QSettings settings;
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+        ini = settings.fileName();
+    }
+    const QString directory = QFileInfo(ini).absolutePath();
+    const auto filePermissions = QFileInfo(ini).permissions();
+    const auto directoryPermissions = QFileInfo(directory).permissions();
+    const auto restorePermissions = qScopeGuard([&] {
+        QFile::setPermissions(directory, directoryPermissions);
+        QFile::setPermissions(ini, filePermissions);
+    });
+
+    // 剥夺 INI 文件与父目录的写权限，模拟真实偏好只读 I/O 故障
+    QVERIFY(QFile::setPermissions(ini, QFileDevice::ReadOwner));
+    QVERIFY(QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    {
+        QFile probe(ini);
+        QVERIFY(!probe.open(QIODevice::WriteOnly | QIODevice::Append));
+    }
+
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+
+    // 偏好写入失败必须阻断同步并保留待写回标记，且不能误报「恢复备份后同步受阻」
+    QVERIFY(relaunched.hasProblem());
+    QCOMPARE(relaunched.statusKey(), QStringLiteral("error"));
+    QVERIFY(!relaunched.engine() || !relaunched.engine()->isRunning());
+    QVERIFY2(relaunched.summaryText() != QStringLiteral("恢复备份后同步受阻"),
+             qPrintable(relaunched.summaryText()));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(key), QStringLiteral("set"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(goalKey), QStringLiteral("set"));
+    QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(goalDate), 0);
+    {
+        QFile disk(ini);
+        QVERIFY(disk.open(QIODevice::ReadOnly));
+        QVERIFY(!disk.readAll().contains("workMinutes=45"));
+    }
+
+    // 权限未恢复前点击立即同步仍保持阻断
+    relaunched.syncNow();
+    QVERIFY(relaunched.hasProblem());
+    QVERIFY(!relaunched.engine() || !relaunched.engine()->isRunning());
+
+    // 解除只读权限后点击立即同步，应重试对账写回设置并恢复同步引擎
+    QVERIFY(QFile::setPermissions(directory, directoryPermissions));
+    QVERIFY(QFile::setPermissions(ini, filePermissions));
+
+    relaunched.syncNow();
+    QVERIFY2(!relaunched.hasProblem(), qPrintable(relaunched.statusText()));
+    QVERIFY(relaunched.engine() && relaunched.engine()->isRunning());
+    QVERIFY(waitIdle(relaunched.engine()));
+    QCOMPARE(relaunched.statusKey(), QStringLiteral("upToDate"));
+    QCOMPARE(AppSettings::instance()->workMinutes(), 45);
+    QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(goalDate), 90);
+    QVERIFY(SyncStore().pendingSettingWriteBacks().isEmpty());
+    {
+        QFile disk(ini);
+        QVERIFY(disk.open(QIODevice::ReadOnly));
+        QVERIFY(disk.readAll().contains("workMinutes=45"));
+    }
+
+    QVERIFY(!addTask(QStringLiteral("权限恢复后同步的任务")).isEmpty());
+    relaunched.syncNow();
+    QVERIFY(waitIdle(relaunched.engine()));
+    QVERIFY(!SyncStore().hasPending());
+}
+
+void SyncControllerTests::bookmarkRefreshDoesNotClearUnrelatedSettingsError()
+{
+    // 产品保证：工作线程延迟投递回来的 iCloud 书签刷新成功回调，只允许清理先前书签更新自身的保存错误，绝不能抹掉正在生效的非书签类设置告警。
+    std::unique_ptr<Peer> mac = openMacPeer();
+    mac->engine->start();
+    QVERIFY(waitIdle(mac->engine.get()));
+
+    FakePicker picker;
+    picker.bookmark = cloudFolder().toUtf8();
+    QList<std::function<void(const QByteArray&)>> refreshers;
+    SyncController controller(ipadPlatform(&picker, &refreshers));
+    controller.initialize();
+    controller.setEnabled(true);
+    QTRY_VERIFY(controller.isEnabled());
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(refreshers.size(), 2);
+
+    // 制造关闭保护记录路径被目录占位的非书签类设置错误：关闭同步后偏好可写但关闭保护记录异常
+    const QString disableIntent = m_data->filePath(QStringLiteral("this.sqlite.sync-disabled"));
+    QVERIFY(QDir().mkpath(disableIntent));
+    const auto cleanupDir = qScopeGuard([&] { QDir(disableIntent).removeRecursively(); });
+    controller.setEnabled(false);
+    QVERIFY(controller.hasProblem());
+    QVERIFY(controller.statusText().contains(QStringLiteral("关闭保护记录异常")));
+
+    // 模拟此前排队的书签刷新回调在主线程到达并成功写入 QSettings：非书签类错误必须保持不丢
+    refreshers.last()(QByteArrayLiteral("刷新后的书签"));
+    QCoreApplication::processEvents();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(controller.statusText().contains(QStringLiteral("关闭保护记录异常")));
+}
+
+void SyncControllerTests::localSettingWriteFailureRetriesOnSubsequentTriggerWithoutClobberingClampedRemote()
+{
+    // 产品保证：本机设置改动因瞬时写库失败时，该键留在待重试集合，后续改其他设置或点立即同步时自动补记并清掉旧 writeback 标记；
+    // 同步期间被本机夹紧的远端设置绝不被顺带覆盖，且恢复不确定期内不得将本地偏好写入同步库。
+    const QString kWork = QStringLiteral("focus/workMinutes");
+    const QString kNick = QStringLiteral("profile/nickname");
+    const QString kLongBreak = QStringLiteral("focus/longBreakMinutes");
+
+    {
+        SyncController initial(macPlatform(cloudFolder()));
+        initial.initialize();
+        initial.setEnabled(true);
+        QVERIFY(waitIdle(initial.engine()));
+        AppSettings::instance()->setWorkMinutes(30);
+        AppSettings::instance()->setLongBreakMinutes(20);
+        AppSettings::instance()->setNickname(QStringLiteral("旧昵称"));
+        initial.syncNow();
+        QVERIFY(waitIdle(initial.engine()));
+    }
+
+    // 写入一条超出上限的远端 longBreakMinutes = "999"，模拟本机夹紧后保留远端值与 writeback 标记
+    const qint64 remoteTime = settingRow(kLongBreak).time + 100000LL;
+    QVERIFY(applyRemoteSettingsWithoutWritingBack({{kLongBreak, QStringLiteral("999")}}, remoteTime));
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(SyncStore().syncedSetting(kLongBreak), QStringLiteral("999"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(kLongBreak), QStringLiteral("set"));
+
+    // 为 K1 植入一条陈旧的 writeback 标记（模拟上次未清掉的远端写回），随后注入 UPDATE 阻断触发器
+    {
+        QSqlQuery mark(DatabaseManager::instance()->database());
+        QVERIFY(mark.exec(QStringLiteral(
+            "INSERT OR REPLACE INTO sync_state (key, value) VALUES ('writeback/focus/workMinutes', 'set')")));
+        QVERIFY(mark.exec(QStringLiteral(
+            "CREATE TEMP TRIGGER block_work_minutes_update BEFORE UPDATE ON sync_settings "
+            "WHEN NEW.key = 'focus/workMinutes' BEGIN SELECT RAISE(ABORT, 'workMinutes update blocked'); END")));
+    }
+    const auto dropTrigger = qScopeGuard([] {
+        QSqlQuery drop(DatabaseManager::instance()->database());
+        drop.exec(QStringLiteral("DROP TRIGGER IF EXISTS block_work_minutes_update"));
+    });
+
+    // 步骤 1：本机修改 K1=40，写库被触发器阻断，库内仍停留在 30 且旧 writeback 标记仍在
+    AppSettings::instance()->setWorkMinutes(40);
+    QCOMPARE(SyncStore().syncedSetting(kWork), QStringLiteral("30"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(kWork), QStringLiteral("set"));
+
+    // 步骤 2：故障恢复后，仅修改另一设置 K2，必须同时把 K1 补记进库并清掉旧 writeback/K1，且不覆写夹紧的 K3
+    {
+        QSqlQuery drop(DatabaseManager::instance()->database());
+        QVERIFY(drop.exec(QStringLiteral("DROP TRIGGER IF EXISTS block_work_minutes_update")));
+    }
+    AppSettings::instance()->setNickname(QStringLiteral("新昵称"));
+    QCOMPARE(SyncStore().syncedSetting(kWork), QStringLiteral("40"));
+    QVERIFY(!SyncStore().pendingSettingWriteBacks().contains(kWork));
+    QCOMPARE(SyncStore().syncedSetting(kNick), QStringLiteral("新昵称"));
+    QCOMPARE(SyncStore().syncedSetting(kLongBreak), QStringLiteral("999"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(kLongBreak), QStringLiteral("set"));
+
+    // 步骤 3：再次制造 K1 写库失败后不改其他设置，直接点击 syncNow() 也必须补记进库，且重启后保留 45
+    {
+        QSqlQuery block(DatabaseManager::instance()->database());
+        QVERIFY(block.exec(QStringLiteral(
+            "CREATE TEMP TRIGGER block_work_minutes_update BEFORE UPDATE ON sync_settings "
+            "WHEN NEW.key = 'focus/workMinutes' BEGIN SELECT RAISE(ABORT, 'workMinutes update blocked'); END")));
+    }
+    AppSettings::instance()->setWorkMinutes(45);
+    QCOMPARE(SyncStore().syncedSetting(kWork), QStringLiteral("40"));
+    {
+        QSqlQuery drop(DatabaseManager::instance()->database());
+        QVERIFY(drop.exec(QStringLiteral("DROP TRIGGER IF EXISTS block_work_minutes_update")));
+    }
+    controller.syncNow();
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(SyncStore().syncedSetting(kWork), QStringLiteral("45"));
+    QCOMPARE(SyncStore().syncedSetting(kLongBreak), QStringLiteral("999"));
+
+    // 步骤 4：恢复准备中（不确定期）修改本机设置不得写入同步库
+    QVERIFY(controller.prepareForRestore());
+    AppSettings::instance()->setWorkMinutes(50);
+    QCOMPARE(SyncStore().syncedSetting(kWork), QStringLiteral("45"));
+    controller.finishRestore(false, true);
+
+    // 模拟重启对账：本机保留 45（而非退回旧值），K3 仍保留远端 "999"
+    AppSettings::instance()->setWorkMinutes(45);
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+    QVERIFY(waitIdle(relaunched.engine()));
+    QCOMPARE(AppSettings::instance()->workMinutes(), 45);
+    QCOMPARE(SyncStore().syncedSetting(kWork), QStringLiteral("45"));
+    QCOMPARE(SyncStore().syncedSetting(kLongBreak), QStringLiteral("999"));
 }
 
 int main(int argc, char** argv)

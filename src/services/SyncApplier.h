@@ -86,6 +86,10 @@ private:
                         bool* resurrected, QString* error);
     bool insertRow(const SyncSchema::Table& table, const SyncRecord& record, QString* error);
     bool mergeRow(const SyncSchema::Table& table, const SyncRecord& record, const LocalRow& row, QString* error);
+    bool validateIncomingFieldTypes(const SyncSchema::Table& table, const SyncRecord& record, QString* error) const;
+    bool validateStoredRowDomain(const QString& table, qint64 rowId, QString* error);
+    bool syncTasksCategoryText(qint64 categoryId, const QString& categoryName, QString* error);
+    QString pendingOrStoredCategoryName(qint64 localId, const QString& syncId);
     QString contentTimestamp(const SyncSchema::Table& table, const SyncRecord& record,
                              const QHash<QString, LocalVersion>& local = {}) const;
     bool deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row, const Tombstone& tombstone,

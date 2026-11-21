@@ -347,6 +347,196 @@ void Applier::touchTaskDate(const QVariant& date)
     }
 }
 
+namespace {
+
+bool isStrictIntegerColumn(const QString& table, const QString& column)
+{
+    if (table == QLatin1String("categories")) {
+        return column == QLatin1String("is_preset") || column == QLatin1String("display_order");
+    }
+    if (table == QLatin1String("routines")) {
+        return column == QLatin1String("active") || column == QLatin1String("weekdays")
+            || column == QLatin1String("display_order");
+    }
+    if (table == QLatin1String("tasks")) {
+        return column == QLatin1String("completed") || column == QLatin1String("routine_generated")
+            || column == QLatin1String("estimated_minutes") || column == QLatin1String("display_order");
+    }
+    if (table == QLatin1String("focus_sessions")) {
+        return column == QLatin1String("duration") || column == QLatin1String("mode")
+            || column == QLatin1String("pomodoro_completed");
+    }
+    if (table == QLatin1String("rest_sessions")) {
+        return column == QLatin1String("duration") || column == QLatin1String("manual");
+    }
+    if (table == QLatin1String("schedule_entries")) {
+        return column == QLatin1String("weekday") || column == QLatin1String("start_minutes")
+            || column == QLatin1String("end_minutes") || column == QLatin1String("week_start")
+            || column == QLatin1String("week_end") || column == QLatin1String("week_parity");
+    }
+    if (table == QLatin1String("knowledge_gaps")) {
+        return column == QLatin1String("priority") || column == QLatin1String("status");
+    }
+    if (table == QLatin1String("countdown_goals")) {
+        return column == QLatin1String("display_order");
+    }
+    if (table == QLatin1String("memos")) {
+        return column == QLatin1String("sort_order");
+    }
+    return false;
+}
+
+bool isStrictIntegerVariant(const QVariant& value)
+{
+    switch (value.typeId()) {
+    case QMetaType::Int:
+    case QMetaType::UInt:
+    case QMetaType::LongLong:
+    case QMetaType::ULongLong:
+    case QMetaType::Bool:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// 与 BackupOperations::validateBusinessValues 完全同源的单行 SQLite 业务域谓词（因同步模块 R4 头文件隔离独立维护同源契约）。
+QString rowDomainConditionFor(const QString& table)
+{
+    const auto dateCond = [](const char* col) {
+        return QStringLiteral("(typeof(%1) = 'text' AND substr(%1, 1, 4) <> '0000' AND date(%1, '+0 days') IS %1)")
+            .arg(QLatin1String(col));
+    };
+    const auto dateTimeCond = [](const char* col) {
+        return QStringLiteral("(typeof(%1) = 'text' AND substr(%1, 1, 4) <> '0000' "
+                              "AND date(substr(%1, 1, 10), '+0 days') IS substr(%1, 1, 10) "
+                              "AND datetime(%1) IS NOT NULL)")
+            .arg(QLatin1String(col));
+    };
+    if (table == QLatin1String("tasks")) {
+        return QStringLiteral("%1 AND typeof(completed) = 'integer' AND completed IN (0, 1)")
+            .arg(dateCond("date"));
+    }
+    if (table == QLatin1String("categories")) {
+        return QStringLiteral("typeof(is_preset) = 'integer' AND is_preset IN (0, 1)");
+    }
+    if (table == QLatin1String("routines")) {
+        return QStringLiteral("typeof(active) = 'integer' AND active IN (0, 1) "
+                              "AND typeof(weekdays) = 'integer' AND weekdays BETWEEN 1 AND 127 "
+                              "AND (last_generated_date IS NULL OR last_generated_date = '' OR %1)")
+            .arg(dateCond("last_generated_date"));
+    }
+    if (table == QLatin1String("focus_sessions")) {
+        return QStringLiteral("%1 AND (end_time IS NULL OR %2) "
+                              "AND (duration IS NULL OR (typeof(duration) = 'integer' AND duration >= 0))")
+            .arg(dateTimeCond("start_time"), dateTimeCond("end_time"));
+    }
+    if (table == QLatin1String("rest_sessions")) {
+        return QStringLiteral("%1 AND %2 AND typeof(duration) = 'integer' AND duration > 0 "
+                              "AND typeof(manual) = 'integer' AND manual IN (0, 1)")
+            .arg(dateTimeCond("start_time"), dateTimeCond("end_time"));
+    }
+    if (table == QLatin1String("knowledge_gaps")) {
+        return QStringLiteral("due_date IS NULL OR due_date = '' OR %1").arg(dateCond("due_date"));
+    }
+    if (table == QLatin1String("schedule_entries")) {
+        return QStringLiteral("typeof(weekday) = 'integer' AND typeof(start_minutes) = 'integer' "
+                              "AND typeof(end_minutes) = 'integer' AND typeof(week_start) = 'integer' "
+                              "AND typeof(week_end) = 'integer' AND typeof(week_parity) = 'integer'");
+    }
+    if (table == QLatin1String("countdown_goals")) {
+        return QStringLiteral("typeof(name) = 'text' AND length(trim(name)) > 0 AND %1")
+            .arg(dateCond("target_date"));
+    }
+    if (table == QLatin1String("trash_items")) {
+        return QStringLiteral("json_valid(payload) AND %1").arg(dateTimeCond("deleted_at"));
+    }
+    return QString();
+}
+
+} // namespace
+
+bool Applier::validateIncomingFieldTypes(const SyncSchema::Table& table, const SyncRecord& record, QString* error) const
+{
+    for (const SyncSchema::Field& field : table.fields) {
+        if (!record.fields.contains(field.column)) {
+            continue;
+        }
+        const QVariant& val = record.fields.value(field.column).value;
+        if (!val.isNull() && isStrictIntegerColumn(table.name, field.column) && !isStrictIntegerVariant(val)) {
+            if (error) {
+                *error = QStringLiteral("字段 %1.%2 不是有效整数").arg(table.name, field.column);
+            }
+            return false;
+        }
+        if (table.name == QLatin1String("categories") && field.column == QLatin1String("name")) {
+            // 科目名在保存点内会先以临时名写入，必须提前拦住空白最终名，防止留到整批收尾时触发非空检查。
+            if (!val.isValid() || val.isNull() || val.toString().trimmed().isEmpty()) {
+                if (error) {
+                    *error = QStringLiteral("科目名称不能为空");
+                }
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool Applier::validateStoredRowDomain(const QString& table, qint64 rowId, QString* error)
+{
+    const QString cond = rowDomainConditionFor(table);
+    if (cond.isEmpty()) {
+        return true;
+    }
+    QSqlQuery check(m_db);
+    prepare(check, QStringLiteral("SELECT CASE WHEN (%1) THEN 1 ELSE 0 END FROM %2 WHERE id = :id")
+                       .arg(cond, table));
+    check.bindValue(QStringLiteral(":id"), rowId);
+    if (!exec(check, error) || !next(check)) {
+        if (error && error->isEmpty()) {
+            *error = QStringLiteral("校验 %1 业务数据失败").arg(table);
+        }
+        return false;
+    }
+    if (check.value(0).toInt() != 1) {
+        if (error) {
+            *error = QStringLiteral("%1 记录违反业务值域约束").arg(table);
+        }
+        return false;
+    }
+    return true;
+}
+
+QString Applier::pendingOrStoredCategoryName(qint64 localId, const QString& syncId)
+{
+    if (!syncId.isEmpty() && m_pendingCategoryNames.contains(syncId)) {
+        return m_pendingCategoryNames.value(syncId).second;
+    }
+    for (auto it = m_pendingCategoryNames.cbegin(); it != m_pendingCategoryNames.cend(); ++it) {
+        if (it.value().first == localId) {
+            return it.value().second;
+        }
+    }
+    return nameOf(QStringLiteral("categories"), localId);
+}
+
+bool Applier::syncTasksCategoryText(qint64 categoryId, const QString& categoryName, QString* error)
+{
+    QSqlQuery syncTasks(m_db);
+    prepare(syncTasks, QStringLiteral(
+        "UPDATE tasks SET category = :name WHERE category_id = :id AND (category IS NULL OR category <> :name2)"));
+    syncTasks.bindValue(QStringLiteral(":name"), categoryName);
+    syncTasks.bindValue(QStringLiteral(":id"), categoryId);
+    syncTasks.bindValue(QStringLiteral(":name2"), categoryName);
+    if (!exec(syncTasks, error)) {
+        return false;
+    }
+    if (syncTasks.numRowsAffected() > 0) {
+        m_result->changedTables.insert(QStringLiteral("tasks"));
+    }
+    return true;
+}
+
 bool Applier::apply(const SyncRecord& record, QString* error)
 {
     const SyncSchema::Table* table = SyncSchema::table(record.table);
@@ -381,6 +571,20 @@ bool Applier::apply(const SyncRecord& record, QString* error)
 bool Applier::applyDeletion(const SyncSchema::Table& table, const SyncRecord& record, const LocalRow& row,
                             const Tombstone& local, QString* error)
 {
+    // 单条删除失败时外层会回滚到保存点：提前记下内存汇总计数与集合，失败时一并还原，
+    // 防止已回滚的任务删除仍触发 taskDeleted、误刷界面表或虚增 conflictsLogged。
+    const int previousConflictsLogged = m_result->conflictsLogged;
+    const qsizetype previousDeletedCount = m_result->deletedTaskIds.size();
+    const QSet<QString> previousChangedTables = m_result->changedTables;
+    const auto failDeletion = [&]() {
+        m_result->conflictsLogged = previousConflictsLogged;
+        while (m_result->deletedTaskIds.size() > previousDeletedCount) {
+            m_result->deletedTaskIds.removeLast();
+        }
+        m_result->changedTables = previousChangedTables;
+        return false;
+    };
+
     Tombstone incoming;
     incoming.exists = true;
     incoming.version = record.deleteVersion;
@@ -412,16 +616,20 @@ bool Applier::applyDeletion(const SyncSchema::Table& table, const SyncRecord& re
                 "OR EXISTS (SELECT 1 FROM focus_sessions fs WHERE fs.task_id = t.id))"));
             touched.bindValue(QStringLiteral(":id"), row.id);
             if (!exec(touched, error)) {
-                return false;
+                return failDeletion();
             }
             if (next(touched) || winner.version < latestLocalVersion(table.name, record.syncId)) {
-                return republish(table.name, record.syncId, QStringLiteral("routine_generated"), winner.version.time, error);
+                return republish(table.name, record.syncId, QStringLiteral("routine_generated"), winner.version.time, error)
+                    ? true
+                    : failDeletion();
             }
         }
         if (table.name == QLatin1String("categories") && row.values.value(QStringLiteral("is_preset")).toInt() == 1) {
             // 预置科目不能删除，任何设备都不会发出它的删除。收到了就是数据有问题，不照做。
-            *error = QStringLiteral("收到删除预置科目的记录，已忽略");
-            return false;
+            if (error) {
+                *error = QStringLiteral("收到删除预置科目的记录，已忽略");
+            }
+            return failDeletion();
         }
 
         // 本机还没发出去的修改随删除作废，逐列记下来，你能在冲突日志里看到丢了什么。
@@ -460,24 +668,27 @@ bool Applier::applyDeletion(const SyncSchema::Table& table, const SyncRecord& re
 
         if (winner.kind == kKindReclaim && table.name == QLatin1String("tasks")
             && !notePendingRefsToReclaimed(record.syncId, row.id, error)) {
-            return false;
+            return failDeletion();
         }
         if (!deleteLocalRow(table, row, winner, error)) {
-            return false;
+            return failDeletion();
         }
         m_result->changedTables.insert(table.name);
     }
 
     const bool localWins = local.exists && winner.version == local.version && winner.kind == local.kind;
     if (!localWins && !writeTombstone(table.name, record.syncId, winner, error)) {
-        return false;
+        return failDeletion();
     }
     // 本机的删除记录压过了对方发来的那条（用户删除压过收回，或同类里本机的更新）：对方手里还是较弱的那条，
     // 本机这条若还在待发送里，就得留着发出去。以前在这里一并出队，对方永远只有「收回」，
     // 它当天重新启用例行、生成回这条实例后，本机按删除优先忽略，两边从此一边有、一边没有。
     // 两条完全相同（对方本来就有这一条）时不必再发。
     const bool sameAsIncoming = winner.version == incoming.version && winner.kind == incoming.kind;
-    return clearLocalSyncState(table.name, record.syncId, !(localWins && !sameAsIncoming), error);
+    if (!clearLocalSyncState(table.name, record.syncId, !(localWins && !sameAsIncoming), error)) {
+        return failDeletion();
+    }
+    return true;
 }
 
 bool Applier::applyToDeleted(const SyncSchema::Table& table, const SyncRecord& record, const Tombstone& local,
@@ -552,6 +763,9 @@ QString Applier::contentTimestamp(const SyncSchema::Table& table, const SyncReco
 
 bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record, QString* error)
 {
+    if (!validateIncomingFieldTypes(table, record, error)) {
+        return false;
+    }
     QStringList columns{QStringLiteral("sync_id")};
     QVariantList values{record.syncId};
     bool categoryDangling = false;
@@ -617,6 +831,9 @@ bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record
         return false;
     }
     const qint64 insertedId = insert.lastInsertId().toLongLong();
+    if (!validateStoredRowDomain(table.name, insertedId, error)) {
+        return false;
+    }
     if (nameColumn >= 0) {
         m_pendingCategoryNames.insert(record.syncId, {insertedId, finalName});
     }
@@ -715,10 +932,19 @@ bool Applier::resolvePendingRefsTo(const QString& targetTable, const QString& ta
             continue;
         }
         QSqlQuery relink(m_db);
-        prepare(relink, QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
-                           .arg(item.table, item.field));
-        relink.bindValue(QStringLiteral(":target"), localId);
-        relink.bindValue(QStringLiteral(":id"), item.syncId);
+        if (item.table == QLatin1String("tasks") && item.field == QLatin1String("category_id")) {
+            // 任务先于新增科目乱序到达时 category 文本曾被置空；接回科目外键时同步回填科目名。
+            prepare(relink, QStringLiteral(
+                "UPDATE tasks SET category_id = :target, category = :name WHERE sync_id = :id AND category_id IS NULL"));
+            relink.bindValue(QStringLiteral(":target"), localId);
+            relink.bindValue(QStringLiteral(":name"), pendingOrStoredCategoryName(localId, targetSyncId));
+            relink.bindValue(QStringLiteral(":id"), item.syncId);
+        } else {
+            prepare(relink, QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
+                               .arg(item.table, item.field));
+            relink.bindValue(QStringLiteral(":target"), localId);
+            relink.bindValue(QStringLiteral(":id"), item.syncId);
+        }
         if (!exec(relink, error)) {
             return false;
         }
@@ -834,10 +1060,18 @@ bool Applier::resolveAllPendingRefs(QString* error)
             continue;
         }
         QSqlQuery relink(m_db);
-        prepare(relink, QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
-                           .arg(item.table, item.field));
-        relink.bindValue(QStringLiteral(":target"), target);
-        relink.bindValue(QStringLiteral(":id"), item.syncId);
+        if (item.table == QLatin1String("tasks") && item.field == QLatin1String("category_id")) {
+            prepare(relink, QStringLiteral(
+                "UPDATE tasks SET category_id = :target, category = :name WHERE sync_id = :id AND category_id IS NULL"));
+            relink.bindValue(QStringLiteral(":target"), target);
+            relink.bindValue(QStringLiteral(":name"), pendingOrStoredCategoryName(target.toLongLong(), item.target));
+            relink.bindValue(QStringLiteral(":id"), item.syncId);
+        } else {
+            prepare(relink, QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
+                               .arg(item.table, item.field));
+            relink.bindValue(QStringLiteral(":target"), target);
+            relink.bindValue(QStringLiteral(":id"), item.syncId);
+        }
         if (!exec(relink, error)) {
             return false;
         }
@@ -851,6 +1085,15 @@ bool Applier::resolveAllPendingRefs(QString* error)
 bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record, const LocalRow& row,
                        QString* error)
 {
+    if (!validateIncomingFieldTypes(table, record, error)) {
+        return false;
+    }
+    const int previousConflictsLogged = m_result->conflictsLogged;
+    const auto failMerge = [&]() {
+        m_result->conflictsLogged = previousConflictsLogged;
+        return false;
+    };
+
     const QHash<QString, LocalVersion> versions = readVersions(table.name, record.syncId);
     const QString label = recordLabel(table, row.values);
     QStringList assignments;
@@ -859,6 +1102,9 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
     SyncRecord acceptedContent;
     bool categoryDangling = false;
     bool routineDeleted = false;
+    bool hasPendingCategoryRename = false;
+    QString pendingCategoryFinalName;
+    QList<QVariant> deferredTouchedTaskDates;
 
     for (const SyncSchema::Field& field : table.fields) {
         if (!record.fields.contains(field.column)) {
@@ -919,20 +1165,21 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
             categoryDangling = categoryDangling || (dangling && field.column == QLatin1String("category_id"));
             routineDeleted = routineDeleted || (permanentlyDeleted && field.column == QLatin1String("routine_id"));
             if (!noteReference(table.name, record.syncId, field, incoming, dangling, error)) {
-                return false;
+                return failMerge();
             }
         }
         if (table.name == QLatin1String("tasks")
             && (field.column == QLatin1String("date") || field.column == QLatin1String("display_order")
                 || field.column == QLatin1String("completed"))) {
-            touchTaskDate(row.values.value(QStringLiteral("date")));
+            deferredTouchedTaskDates.append(row.values.value(QStringLiteral("date")));
             if (field.column == QLatin1String("date")) {
-                touchTaskDate(value);
+                deferredTouchedTaskDates.append(value);
             }
         }
         if (table.name == QLatin1String("categories") && field.column == QLatin1String("name")) {
-            // 科目改名先落临时名，整批应用完再换成最终名（见 finalizeCategoryNames）。
-            m_pendingCategoryNames.insert(record.syncId, {row.id, value.toString()});
+            // 科目改名先落临时名，待单行值域校验通过后再登记到 m_pendingCategoryNames。
+            hasPendingCategoryRename = true;
+            pendingCategoryFinalName = value.toString();
             value = temporaryCategoryName(record.syncId);
         }
         assignments.append(field.column + QStringLiteral(" = ?"));
@@ -943,15 +1190,23 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
         }
     }
 
+    const auto setAssignment = [&assignments, &assignedValues](const QString& column, const QVariant& value) {
+        const QString clause = column + QStringLiteral(" = ?");
+        const qsizetype existing = assignments.indexOf(clause);
+        if (existing >= 0) {
+            assignedValues[existing] = value;
+        } else {
+            assignments.append(clause);
+            assignedValues.append(value);
+        }
+    };
     if (table.name == QLatin1String("tasks")) {
-        // 新引用的科目或例行在本机已经删除：按本机删除它们时的做法补齐关联列。
+        // 新引用的科目或例行在本机已经删除：按本机删除它们时的做法覆写关联列，避免在 SET 子句里重复赋值同一列。
         if (categoryDangling) {
-            assignments.append(QStringLiteral("category = ?"));
-            assignedValues.append(QVariant());
+            setAssignment(QStringLiteral("category"), QVariant());
         }
         if (routineDeleted) {
-            assignments.append(QStringLiteral("routine_generated = ?"));
-            assignedValues.append(0);
+            setAssignment(QStringLiteral("routine_generated"), 0);
         }
     }
 
@@ -969,14 +1224,20 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
             update.addBindValue(value);
         }
         update.addBindValue(row.id);
-        if (!exec(update, error)) {
-            return false;
+        if (!exec(update, error) || !validateStoredRowDomain(table.name, row.id, error)) {
+            return failMerge();
+        }
+        if (hasPendingCategoryRename) {
+            m_pendingCategoryNames.insert(record.syncId, {row.id, pendingCategoryFinalName});
+        }
+        for (const QVariant& touchedDate : deferredTouchedTaskDates) {
+            touchTaskDate(touchedDate);
         }
         m_result->changedTables.insert(table.name);
     }
     for (const auto& version : newVersions) {
         if (!writeVersion(table.name, record.syncId, version.first, version.second, error)) {
-            return false;
+            return failMerge();
         }
     }
 
@@ -989,7 +1250,10 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
     outbox.bindValue(QStringLiteral(":id"), record.syncId);
     outbox.bindValue(QStringLiteral(":tbl2"), table.name);
     outbox.bindValue(QStringLiteral(":id2"), record.syncId);
-    return exec(outbox, error);
+    if (!exec(outbox, error)) {
+        return failMerge();
+    }
+    return true;
 }
 
 bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row, const Tombstone& tombstone,
@@ -1010,7 +1274,8 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
             ? resolveLocal(QStringLiteral("categories"), tombstone.mergedInto, &dangling) : QVariant();
         if (target.isValid() && !target.isNull() && target.toLongLong() != row.id) {
             // 合并：凡是指向被合并掉的科目的，都改指向留下的那个（本机不同步的课表、知识缺口也一样）。
-            const QVariant targetName = nameOf(QStringLiteral("categories"), target);
+            // 目标科目可能在本批里刚改名、库中暂存着临时名，需经 pendingOrStoredCategoryName 取最终名。
+            const QVariant targetName = pendingOrStoredCategoryName(target.toLongLong(), tombstone.mergedInto);
             if (!run(QStringLiteral("UPDATE tasks SET category_id = ?, category = ? WHERE category_id = ?"),
                      {target, targetName, row.id})
                 || !run(QStringLiteral("UPDATE routines SET category_id = ? WHERE category_id = ?"), {target, row.id})
@@ -1024,6 +1289,9 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
                         {target, row.id})) {
                 return false;
             }
+            if (!run(QStringLiteral("DELETE FROM %1 WHERE id = ?").arg(table.name), {row.id})) {
+                return false;
+            }
             m_result->changedTables.insert(QStringLiteral("tasks"));
             m_result->changedTables.insert(QStringLiteral("routines"));
             // 课表、知识缺口第二期起也同步：两台设备收到同一条合并记录，改指得一样，不用当成本机改动再发。
@@ -1031,12 +1299,14 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
             m_result->changedTables.insert(QStringLiteral("schedule_entries"));
             m_result->changedTables.insert(QStringLiteral("knowledge_gaps"));
             m_result->changedTables.insert(QStringLiteral("memos"));
+            return true;
         } else {
             // 与 CategoryManager::deleteCategory 一致：任务不删，外键和旧的科目名文本一起清空，变成未分类。
             // 例行、课表、知识缺口的外键是 ON DELETE SET NULL，删行时自动置空。
             if (!run(QStringLiteral("UPDATE tasks SET category_id = NULL, category = NULL "
                                     "WHERE category_id = ? OR (category_id IS NULL AND trim(category) = ?)"),
-                     {row.id, row.values.value(QStringLiteral("name"))})) {
+                     {row.id, row.values.value(QStringLiteral("name"))})
+                || !run(QStringLiteral("DELETE FROM %1 WHERE id = ?").arg(table.name), {row.id})) {
                 return false;
             }
             m_result->changedTables.insert(QStringLiteral("tasks"));
@@ -1045,21 +1315,29 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
             m_result->changedTables.insert(QStringLiteral("schedule_entries"));
             m_result->changedTables.insert(QStringLiteral("knowledge_gaps"));
             m_result->changedTables.insert(QStringLiteral("memos"));
+            return true;
         }
     } else if (table.name == QLatin1String("routines")) {
         // 与 RoutineManager::deleteRoutine 一致：历史任务退化成普通任务，生成标记一起清掉。
         // 今天那条没动过的实例由对方的「收回」删除记录处理，这里不自己收回：对方和本机对「今天」可能不同。
         if (!run(QStringLiteral("UPDATE tasks SET routine_id = NULL, routine_generated = 0 WHERE routine_id = ?"),
-                 {row.id})) {
+                 {row.id})
+            || !run(QStringLiteral("DELETE FROM %1 WHERE id = ?").arg(table.name), {row.id})) {
             return false;
         }
         m_result->changedTables.insert(QStringLiteral("tasks"));
+        return true;
     } else if (table.name == QLatin1String("tasks")) {
-        // 专注记录、知识缺口、正在计时的状态对它的引用由外键置空，与本机删除任务的效果一致。
+        if (!run(QStringLiteral("DELETE FROM %1 WHERE id = ?").arg(table.name), {row.id})) {
+            return false;
+        }
+        // 专注记录、知识缺口、正在计时的状态对它的引用由外键置空，与本机删除任务的效果一致；
+        // 仅在真正 DELETE 成功后记录 deletedTaskIds，避免保存点回滚时发出幽灵删除信号。
         m_result->deletedTaskIds.append(int(row.id));
         touchTaskDate(row.values.value(QStringLiteral("date")));
         m_result->changedTables.insert(QStringLiteral("focus_sessions"));
         m_result->changedTables.insert(QStringLiteral("knowledge_gaps"));
+        return true;
     }
     return run(QStringLiteral("DELETE FROM %1 WHERE id = ?").arg(table.name), {row.id});
 }
@@ -1240,11 +1518,17 @@ bool Applier::overwriteFromSnapshot(const SyncRecord& record, QString* error)
         return insertRow(*table, record, error);
     }
 
+    if (!validateIncomingFieldTypes(*table, record, error)) {
+        return false;
+    }
+
     // 本机已有这条：以快照为准逐列照抄，版本也照抄快照的；本机编号不变。
     QStringList assignments;
     QVariantList values;
     bool categoryDangling = false;
     bool routineDeleted = false;
+    bool hasPendingCategoryRename = false;
+    QString pendingCategoryFinalName;
     for (const SyncSchema::Field& field : table->fields) {
         if (!record.fields.contains(field.column)) {
             continue;
@@ -1262,7 +1546,8 @@ bool Applier::overwriteFromSnapshot(const SyncRecord& record, QString* error)
             }
         }
         if (table->name == QLatin1String("categories") && field.column == QLatin1String("name")) {
-            m_pendingCategoryNames.insert(record.syncId, {row.id, value.toString()});
+            hasPendingCategoryRename = true;
+            pendingCategoryFinalName = value.toString();
             value = temporaryCategoryName(record.syncId);
         }
         assignments.append(field.column + QStringLiteral(" = ?"));
@@ -1273,14 +1558,22 @@ bool Applier::overwriteFromSnapshot(const SyncRecord& record, QString* error)
         assignments.append(table->versionStamp.column + QStringLiteral(" = ?"));
         values.append(contentTimestamp(*table, record));
     }
+    const auto setAssignment = [&assignments, &values](const QString& column, const QVariant& value) {
+        const QString clause = column + QStringLiteral(" = ?");
+        const qsizetype existing = assignments.indexOf(clause);
+        if (existing >= 0) {
+            values[existing] = value;
+        } else {
+            assignments.append(clause);
+            values.append(value);
+        }
+    };
     if (table->name == QLatin1String("tasks")) {
         if (categoryDangling) {
-            assignments.append(QStringLiteral("category = ?"));
-            values.append(QVariant());
+            setAssignment(QStringLiteral("category"), QVariant());
         }
         if (routineDeleted) {
-            assignments.append(QStringLiteral("routine_generated = ?"));
-            values.append(0);
+            setAssignment(QStringLiteral("routine_generated"), 0);
         }
     }
     if (!assignments.isEmpty()) {
@@ -1291,8 +1584,19 @@ bool Applier::overwriteFromSnapshot(const SyncRecord& record, QString* error)
             update.addBindValue(value);
         }
         update.addBindValue(row.id);
-        if (!exec(update, error)) {
+        if (!exec(update, error) || !validateStoredRowDomain(table->name, row.id, error)) {
             return false;
+        }
+    } else if (!validateStoredRowDomain(table->name, row.id, error)) {
+        return false;
+    }
+    if (hasPendingCategoryRename) {
+        m_pendingCategoryNames.insert(record.syncId, {row.id, pendingCategoryFinalName});
+    }
+    if (table->name == QLatin1String("tasks")) {
+        touchTaskDate(row.values.value(QStringLiteral("date")));
+        if (record.fields.contains(QStringLiteral("date"))) {
+            touchTaskDate(record.fields.value(QStringLiteral("date")).value);
         }
     }
     for (auto it = record.fields.cbegin(); it != record.fields.cend(); ++it) {
@@ -1500,7 +1804,8 @@ bool Applier::mergeCategory(qint64 loserId, const QString& loserSyncId, qint64 w
     const SyncSchema::Table* categories = SyncSchema::table(QStringLiteral("categories"));
     logConflict(kKindMerge, *categories, loserSyncId, name, QString(), QString(), QString(), QString(), QString(),
                 QStringLiteral("两台设备上各有一个「%1」，已合并成一个").arg(name));
-    for (const char* changed : {"categories", "tasks", "routines", "focus_sessions", "memos"}) {
+    for (const char* changed : {"categories", "tasks", "routines", "focus_sessions",
+                                "schedule_entries", "knowledge_gaps", "memos"}) {
         m_result->changedTables.insert(QString::fromLatin1(changed));
     }
     return true;
@@ -1528,7 +1833,8 @@ bool Applier::renameWithSuffix(qint64 id, const QString& name, QString* error)
     prepare(rename, QStringLiteral("UPDATE categories SET name = :name WHERE id = :id"));
     rename.bindValue(QStringLiteral(":name"), candidate);
     rename.bindValue(QStringLiteral(":id"), id);
-    if (!setApplying(false, error) || !exec(rename, error) || !setApplying(true, error)) {
+    if (!setApplying(false, error) || !exec(rename, error) || !setApplying(true, error)
+        || !syncTasksCategoryText(id, candidate, error)) {
         return false;
     }
     const SyncSchema::Table* categories = SyncSchema::table(QStringLiteral("categories"));
@@ -1570,7 +1876,7 @@ bool Applier::finalizeCategoryNames(QString* error)
         finalize.bindValue(QStringLiteral(":name"), name);
         finalize.bindValue(QStringLiteral(":id"), id);
         if (!next(holder)) {
-            if (!exec(finalize, error)) {
+            if (!exec(finalize, error) || !syncTasksCategoryText(id, name, error)) {
                 return false;
             }
             continue;
@@ -1585,10 +1891,11 @@ bool Applier::finalizeCategoryNames(QString* error)
             const bool selfWins = fieldVersion(QStringLiteral("categories"), holderSyncId, QStringLiteral("name"))
                 < fieldVersion(QStringLiteral("categories"), syncId, QStringLiteral("name"));
             if (selfWins) {
-                if (!renameWithSuffix(holderId, name, error) || !exec(finalize, error)) {
+                if (!renameWithSuffix(holderId, name, error) || !exec(finalize, error)
+                    || !syncTasksCategoryText(id, name, error)) {
                     return false;
                 }
-            } else if (!renameWithSuffix(id, name, error)) {
+            } else if (!renameWithSuffix(id, name, error) || !syncTasksCategoryText(holderId, name, error)) {
                 return false;
             }
             continue;
@@ -1596,10 +1903,12 @@ bool Applier::finalizeCategoryNames(QString* error)
         // 预置科目总是留下（它不能被删）；都是自定义的，留身份较小的那个。两台设备算出同一个结果。
         const bool selfWins = selfPreset || (!holderPreset && syncId < holderSyncId);
         if (selfWins) {
-            if (!mergeCategory(holderId, holderSyncId, id, syncId, name, error) || !exec(finalize, error)) {
+            if (!mergeCategory(holderId, holderSyncId, id, syncId, name, error) || !exec(finalize, error)
+                || !syncTasksCategoryText(id, name, error)) {
                 return false;
             }
-        } else if (!mergeCategory(id, syncId, holderId, holderSyncId, name, error)) {
+        } else if (!mergeCategory(id, syncId, holderId, holderSyncId, name, error)
+                   || !syncTasksCategoryText(holderId, name, error)) {
             return false;
         }
     }
@@ -1698,8 +2007,7 @@ bool Applier::normalizeMemoOrders(QString* error)
     QSqlQuery check(m_db);
     // GROUP BY 将 NULL 单独分组，未分类同样要处理；用 = NULL 会漏掉整组。
     if (!exec(check, QStringLiteral("SELECT category_id FROM memos GROUP BY category_id "
-                                   "HAVING COUNT(*) > COUNT(DISTINCT sort_order)"), nullptr)) {
-        *error = check.lastError().text();
+                                   "HAVING COUNT(*) > COUNT(DISTINCT sort_order)"), error)) {
         return false;
     }
     QVariantList categories;

@@ -424,20 +424,45 @@ ParseStatus decodeCursor(const QByteArray& bytes, const QString& expectedDevice,
     return ParseStatus::Ok;
 }
 
+qint64 changesEnvelopeMaxBytes(const QString& device, qint64 epoch)
+{
+    ChangeFile emptyFile;
+    // 用 12 位 seq 和 14 位 UTC 毫秒时间戳占位，覆盖未来数百年的实际信封长度且误差不超过十余字节。
+    emptyFile.seq = 999999999999LL;
+    emptyFile.writtenAtMs = 99999999999999LL;
+    emptyFile.batch.device = device;
+    emptyFile.batch.epoch = epoch;
+    return encodeChanges(emptyFile).size();
+}
+
 FileCategory classifyPath(const QString& relativePath)
 {
-    const QString fileName = QFileInfo(relativePath).fileName();
-    if (relativePath == markerFileName() || fileName == markerFileName()) {
-        return FileCategory::Marker;
+    // 严格按固定层级结构分类，拒绝包含反斜杠、首尾斜杠、空段或 ./.. 的异常路径，
+    // 且改动文件必须通过文件名格式校验，防止 /changes/ 下任意杂文件获得 8 MB 读取预算。
+    if (relativePath.isEmpty() || relativePath.contains(QLatin1Char('\\'))
+        || relativePath.startsWith(QLatin1Char('/')) || relativePath.endsWith(QLatin1Char('/'))) {
+        return FileCategory::Unknown;
     }
-    if (fileName == cursorFileName()) {
-        return FileCategory::Cursor;
+    const QStringList parts = relativePath.split(QLatin1Char('/'));
+    for (const QString& part : parts) {
+        if (part.isEmpty() || part == QLatin1String(".") || part == QLatin1String("..")) {
+            return FileCategory::Unknown;
+        }
     }
-    if (relativePath.contains(QStringLiteral("/changes/")) || parseChangeFileName(fileName, nullptr)) {
-        return FileCategory::Changes;
+    if (parts.size() == 1) {
+        return parts.at(0) == markerFileName() ? FileCategory::Marker : FileCategory::Unknown;
     }
-    if (parseSnapshotFileName(fileName, nullptr)) {
-        return FileCategory::Snapshot;
+    if (parts.size() == 3 && parts.at(0) == devicesDirectory()) {
+        if (parts.at(2) == cursorFileName()) {
+            return FileCategory::Cursor;
+        }
+        if (parseSnapshotFileName(parts.at(2), nullptr)) {
+            return FileCategory::Snapshot;
+        }
+        return FileCategory::Unknown;
+    }
+    if (parts.size() == 4 && parts.at(0) == devicesDirectory() && parts.at(2) == QLatin1String("changes")) {
+        return parseChangeFileName(parts.at(3), nullptr) ? FileCategory::Changes : FileCategory::Unknown;
     }
     return FileCategory::Unknown;
 }

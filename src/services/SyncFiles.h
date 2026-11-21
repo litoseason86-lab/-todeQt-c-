@@ -40,7 +40,14 @@ enum class ParseStatus {
 constexpr qint64 kMaxMarkerBytes = 64 * 1024; // 64 KB（实际标记文件约 200 B）
 constexpr qint64 kMaxCursorBytes = 128 * 1024; // 128 KB（实际游标文件 1-2 KB）
 constexpr qint64 kMaxChangesBytes = 8 * 1024 * 1024; // 8 MB
+// 拆分待发改动批次的软上限（4 MB）：普通多条积压按 4 MB 切批，给单文件 8 MB 硬限留出充足余量；
+// 单条超 4 MB 但不超过 8 MB 的大备忘录仍可独占一批发出。
+constexpr qint64 kSoftChangesBytes = 4 * 1024 * 1024;
 constexpr qint64 kMaxSnapshotBytes = 64 * 1024 * 1024; // 64 MB
+
+// 返回空改动批次外层信封（含最宽 seq / writtenAt 数字位宽）的 UTF-8 字节数上界，
+// 供 SyncStore 按字节预算精确拆分待发送改动，保证实际编码结果绝不超过 kMaxChangesBytes。
+qint64 changesEnvelopeMaxBytes(const QString& device, qint64 epoch);
 
 enum class FileCategory {
     Marker,

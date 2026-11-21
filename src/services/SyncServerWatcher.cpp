@@ -30,10 +30,11 @@ bool parseRevision(const QByteArray& body, qint64* revision)
     if (!value.isDouble()) {
         return false;
     }
+    // double(qint64::max()) 会向上舍入为 2^63，直接强转会触发有符号整型溢出 UB；统一限制在 2^53 精确整数范围内。
+    constexpr double kMaxExactInteger = 9007199254740992.0;
     const double number = value.toDouble();
-    if (number < 0
-        || number > static_cast<double>(std::numeric_limits<qint64>::max())
-        || std::floor(number) != number) {
+    if (!std::isfinite(number) || std::trunc(number) != number
+        || number < 0.0 || number > kMaxExactInteger) {
         return false;
     }
     *revision = static_cast<qint64>(number);
@@ -219,7 +220,8 @@ void SyncServerWatcher::run(std::uint64_t generation)
             continue;
         }
 
-        if (recoveryPending) {
+        const bool recovered = recoveryPending;
+        if (recovered) {
             qInfo().noquote() << QStringLiteral("同步服务器通知已恢复");
         }
         lastError.clear();
@@ -229,6 +231,10 @@ void SyncServerWatcher::run(std::uint64_t generation)
         if (!haveRevision) {
             haveRevision = true;
             knownRevision = result.rev;
+            if (recovered) {
+                // 断网启动导致首次 watch 失败、随后网络恢复时，立即唤醒 SyncEngine 跳出退避等待。
+                queueChanged(generation);
+            }
             continue;
         }
         if (result.rev != knownRevision) {
@@ -240,6 +246,9 @@ void SyncServerWatcher::run(std::uint64_t generation)
     if (m_generation.load() == generation) {
         m_running.store(false);
     }
-    m_threadFinished.store(true);
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_threadFinished.store(true);
+    }
     m_wake.notify_all();
 }

@@ -9,6 +9,7 @@
 #include <QJsonValue>
 #include <QStringList>
 
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -285,12 +286,16 @@ bool RemoteSyncFolder::open(Error* error)
             directories.insert(path);
         } else if (type == QStringLiteral("file")) {
             const QJsonValue sizeValue = entry.value(QStringLiteral("size"));
-            if (!sizeValue.isDouble() || sizeValue.toDouble() < 0) {
+            constexpr double kMaxExactInteger = 9007199254740992.0;
+            const double sizeNumber = sizeValue.toDouble(-1.0);
+            if (!sizeValue.isDouble() || !std::isfinite(sizeNumber)
+                || std::trunc(sizeNumber) != sizeNumber
+                || sizeNumber < 0.0 || sizeNumber > kMaxExactInteger) {
                 setError(error, ErrorKind::Io,
                          QStringLiteral("同步服务器返回的文件大小不合法"));
                 return false;
             }
-            files.insert(path, static_cast<qint64>(sizeValue.toDouble()));
+            files.insert(path, static_cast<qint64>(sizeNumber));
         } else {
             setError(error, ErrorKind::Io,
                      QStringLiteral("同步服务器返回了未知目录项类型"));
@@ -473,16 +478,19 @@ bool RemoteSyncFolder::remove(const QString& relativePath, Error* error)
          QByteArrayLiteral("PomodoroTodo-sync/1")},
     };
     const SyncHttpClient::Response response = m_http->send(request);
-    if (!classifyResponse(response, false, error)) {
-        // 服务器对不存在的文件通常返回 200；若未来改成 file_not_found，
-        // 删除的既有语义仍然是把“已经不在了”当作成功。
-        if (error && error->kind == ErrorKind::NotFound) {
+    Error localError;
+    if (!classifyResponse(response, true, &localError)) {
+        // 服务器对不存在的文件通常返回 200；若返回 404 file_not_found，
+        // 删除的既有语义仍然是把“已经不在了”当作成功（包括调用方传入 error == nullptr 时）。
+        if (localError.kind == ErrorKind::NotFound) {
             m_files.remove(relativePath);
             setError(error, ErrorKind::None);
             return true;
         }
+        setError(error, localError.kind, localError.message);
         return false;
     }
+    setError(error, ErrorKind::None);
     m_files.remove(relativePath);
     return true;
 }

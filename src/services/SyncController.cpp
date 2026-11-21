@@ -567,7 +567,7 @@ SyncController::SyncController(Platform platform, QObject* parent)
     }
     loadDisableIntent();
     // 本机改了跟着同步的设置（SyncSchema::syncedSettingKeys 与每一天的今日目标），记进库等着发出。
-    // 同步写回对方的改动时这些信号也会发出，那时值与库里记下的相同，不会再记一次。
+    // 对端写回也会发这些信号，只刷新本机基准值，防止不受本版本支持的远端值被间接反写。
     AppSettings* settings = AppSettings::instance();
     for (const auto signal : {&AppSettings::dayStartHourChanged, &AppSettings::workMinutesChanged,
                               &AppSettings::breakMinutesChanged, &AppSettings::longBreakEnabledChanged,
@@ -582,6 +582,14 @@ SyncController::SyncController(Platform platform, QObject* parent)
 
 SyncController::~SyncController()
 {
+    ++m_transportAttempt;
+    ++m_folderCheckAttempt;
+    if (auto cancel = std::exchange(m_cancelActiveTransportOp, nullptr)) {
+        cancel();
+    }
+    if (auto cancel = std::exchange(m_cancelActiveFolderCheck, nullptr)) {
+        cancel();
+    }
     stopServerWatcher();
     // 引擎的析构会等工作线程把手头的文件操作做完（最多几秒）；先于其它成员析构，
     // 免得工作线程回调时控制器已经只剩一半。
@@ -611,6 +619,10 @@ void SyncController::initialize()
     loadDisableIntent();
     m_initialized = true;
     m_journalCorrupted = false;
+    m_reconcileError.clear();
+    m_unrecordedSettingKeys.clear();
+    m_localSettingsReadRetryNeeded = false;
+    m_observedLocalSettings = SyncedSettings::currentValues();
 
     // 检查恢复日志（必须先于 reconcileSettings 和 startEngine 检查）
     const QString dbPath = currentDatabasePath();
@@ -658,8 +670,12 @@ void SyncController::initialize()
         }
     }
 
-    if (!reconcileSettings()) {
-        qWarning() << "Initial settings reconciliation failed:" << m_restoreError;
+    QString reconcileErr;
+    if (!reconcileSettings(&reconcileErr)) {
+        m_reconcileError = reconcileErr.isEmpty()
+            ? QStringLiteral("整理同步设置失败，同步已暂停以保护数据。")
+            : reconcileErr;
+        qWarning() << "Initial settings reconciliation failed:" << m_reconcileError;
     }
     refreshLog();
     SyncStore store;
@@ -687,10 +703,8 @@ void SyncController::loadDisableIntent()
     if (m_engine) m_engine->stop();
     if (state == DisableIntentState::Invalid) {
         m_settingsError = error;
-        m_settingsRetryNeeded = true;
     } else if (QSettings().value(kEnabledKey, false).toBool()) {
         m_settingsError = QStringLiteral("已保留上次关闭同步的意图，同步保持关闭；开关设置尚未保存，请修复存储后重试关闭");
-        m_settingsRetryNeeded = true;
     }
     if (wasEnabled) emit enabledChanged();
 }
@@ -734,6 +748,11 @@ bool SyncController::prepareForRestore(QString* error)
                 : QStringLiteral("数据库未打开");
         }
         return false;
+    }
+    // 恢复备份前先中止任何进行中的传输方式切换，防止切换回调在换库后误启引擎或改写偏好。
+    if (m_switchingTransport) {
+        m_resumeEngineOnSwitchAbort = false;
+        cancelTransportSwitch();
     }
     stopServerWatcher();
 
@@ -879,6 +898,8 @@ void SyncController::finishRestore(bool success, bool safeToResume)
                     m_restoreRetry.needsJournalWrite = true;
                     m_restoreRetry.needsEpoch = true;
                     m_restoreRetry.needsFolder = true;
+                    m_restoreRetry.needsSettings = true;
+                    m_restoreRetry.needsJournalDelete = true;
                 } else {
                     // previous 为 prepared 时继续阻断并要求重新恢复，不允许 syncNow 认作 installed
                     m_restoreRetry.phase = QStringLiteral("prepared");
@@ -892,6 +913,8 @@ void SyncController::finishRestore(bool success, bool safeToResume)
                     m_restoreRetry.needsJournalWrite = false;
                     m_restoreRetry.needsEpoch = true;
                     m_restoreRetry.needsFolder = true;
+                    m_restoreRetry.needsSettings = true;
+                    m_restoreRetry.needsJournalDelete = true;
                     m_restoreError = QStringLiteral("恢复备份后新纪元或文件夹尚未完成同步，同步已暂停以保护数据。");
                 } else {
                     m_restoreRetry.phase = QStringLiteral("prepared");
@@ -1013,7 +1036,8 @@ void SyncController::finishRestore(bool success, bool safeToResume)
         return;
     }
 
-    if (!reconcileSettings()) {
+    QString reconcileErr;
+    if (!reconcileSettings(&reconcileErr)) {
         qWarning() << "Failed to reconcile settings after restoring a backup";
         m_restoreRetry.phase = QStringLiteral("installed");
         m_restoreRetry.needsEpoch = false;
@@ -1023,9 +1047,9 @@ void SyncController::finishRestore(bool success, bool safeToResume)
         m_restoreRetry.deviceId = before.deviceId;
         m_restoreRetry.folderId = before.folderId;
         m_restoreRetry.operationId = before.operationId;
-        if (m_restoreError.isEmpty()) {
-            m_restoreError = QStringLiteral("恢复备份后整理同步设置失败，同步已暂停以保护数据。");
-        }
+        m_restoreError = reconcileErr.isEmpty()
+            ? QStringLiteral("恢复备份后整理同步设置失败，同步已暂停以保护数据。")
+            : reconcileErr;
         if (m_engine) {
             m_engine->stop();
         }
@@ -1034,6 +1058,7 @@ void SyncController::finishRestore(bool success, bool safeToResume)
         emit statusChanged();
         return;
     }
+    m_reconcileError.clear();
 
     QString deleteErr;
     if (!deleteJournalFileSafely(journalPath, dbPath, before.operationId, &deleteErr)) {
@@ -1071,6 +1096,15 @@ void SyncController::finishRestore(bool success, bool safeToResume)
 
 void SyncController::shutdown(int timeoutMs)
 {
+    ++m_transportAttempt;
+    ++m_folderCheckAttempt;
+    if (auto cancel = std::exchange(m_cancelActiveTransportOp, nullptr)) {
+        cancel();
+    }
+    if (auto cancel = std::exchange(m_cancelActiveFolderCheck, nullptr)) {
+        cancel();
+    }
+    flushPendingLocalSettings();
     stopServerWatcher();
     // flushBeforeExit 先停下引擎，再同步写出最后一批；写不完的改动还留在本机，下次启动再写。
     if (m_engine && !m_engine->flushBeforeExit(timeoutMs)) {
@@ -1083,7 +1117,7 @@ QString SyncController::statusKey() const
     if (m_journalCorrupted || m_restoreRetry.hasPending() || !m_restoreError.isEmpty()) {
         return QStringLiteral("error");
     }
-    if (!m_settingsError.isEmpty()) {
+    if (!m_settingsError.isEmpty() || !m_reconcileError.isEmpty()) {
         return QStringLiteral("error");
     }
     if (!m_engine) {
@@ -1123,7 +1157,7 @@ QString SyncController::statusKey() const
 bool SyncController::hasProblem() const
 {
     return m_journalCorrupted || m_restoreRetry.hasPending() || !m_restoreError.isEmpty()
-        || !m_settingsError.isEmpty()
+        || !m_settingsError.isEmpty() || !m_reconcileError.isEmpty()
         || (m_engine && isProblem(m_engine->status()));
 }
 
@@ -1152,6 +1186,9 @@ QString SyncController::summaryText() const
     }
     if (!m_settingsError.isEmpty()) {
         return QStringLiteral("偏好设置保存失败");
+    }
+    if (!m_reconcileError.isEmpty()) {
+        return QStringLiteral("同步设置整理失败");
     }
     if (!m_enabled) {
         return QStringLiteral("已关闭");
@@ -1228,6 +1265,9 @@ QString SyncController::statusText() const
     }
     if (!m_settingsError.isEmpty()) {
         return m_settingsError;
+    }
+    if (!m_reconcileError.isEmpty()) {
+        return m_reconcileError;
     }
     // 设置行里已经有一句「发生了什么」（summaryText），这里只写为什么、下一步怎么办，不把同一句话再说一遍。
     if (!m_engine) {
@@ -1311,6 +1351,9 @@ QString SyncController::statusDetail() const
     if (!m_settingsError.isEmpty()) {
         return m_settingsError;
     }
+    if (!m_reconcileError.isEmpty()) {
+        return m_reconcileError;
+    }
     // 选错文件夹时，引擎把「选错了哪一层」直接写进了状态说明，这里不再重复。
     if (!m_engine
         || (m_engine->status() == SyncEngine::Status::WrongFolder
@@ -1391,6 +1434,12 @@ ServiceReadResult<int> SyncController::readLogCount() const
 void SyncController::setEnabled(bool enabled)
 {
     if (!enabled) {
+        // 关闭同步时一并中止在途传输切换（例如正在等一轮同步完成的 waitForOneSyncThen），
+        // 避免停机后永远收不到 cycleFinished 而卡死 m_switchingTransport。
+        if (m_switchingTransport) {
+            m_resumeEngineOnSwitchAbort = false;
+            cancelTransportSwitch();
+        }
         setEnabledState(false);
         m_joinRequested = false;
         emit statusChanged();
@@ -1403,6 +1452,20 @@ void SyncController::setEnabled(bool enabled)
         return;
     }
     if (setEnabledState(true)) {
+        if (!m_reconcileError.isEmpty() && DatabaseManager::instance()->isOpen()) {
+            QString reconcileErr;
+            if (reconcileSettings(&reconcileErr)) {
+                m_reconcileError.clear();
+                SyncStore store;
+                m_knownEpoch = store.epoch();
+                m_knownFolderId = store.folderId();
+                refreshLog();
+            } else {
+                m_reconcileError = reconcileErr.isEmpty()
+                    ? QStringLiteral("整理同步设置失败，同步已暂停以保护数据。")
+                    : reconcileErr;
+            }
+        }
         startEngine();
     }
     emit statusChanged();
@@ -1458,7 +1521,6 @@ bool SyncController::persistServerSettings(
         settings.sync();
         m_settingsError = QStringLiteral(
             "同步方式设置保存失败，无法切换同步方式。");
-        m_settingsRetryNeeded = true;
         if (error) {
             *error = m_settingsError;
         }
@@ -1471,7 +1533,6 @@ bool SyncController::persistServerSettings(
     m_serverSpaceId = spaceId;
     m_serverSecret = secret;
     m_settingsError.clear();
-    m_settingsRetryNeeded = false;
     return true;
 }
 
@@ -1508,7 +1569,6 @@ bool SyncController::persistICloudSettings(QString* error)
         settings.sync();
         m_settingsError = QStringLiteral(
             "同步方式设置保存失败，无法切换同步方式。");
-        m_settingsRetryNeeded = true;
         if (error) {
             *error = m_settingsError;
         }
@@ -1521,7 +1581,6 @@ bool SyncController::persistICloudSettings(QString* error)
     m_serverSpaceId.clear();
     m_serverSecret.clear();
     m_settingsError.clear();
-    m_settingsRetryNeeded = false;
     return true;
 }
 
@@ -1557,6 +1616,11 @@ void SyncController::waitForOneSyncThen(
     const QPointer<SyncController> self(this);
     const std::shared_ptr<QMetaObject::Connection> connection
         = std::make_shared<QMetaObject::Connection>();
+    m_cancelActiveTransportOp = [connection] {
+        if (*connection) {
+            QObject::disconnect(*connection);
+        }
+    };
     *connection = connect(
         m_engine.get(), &SyncEngine::cycleFinished, this,
         [this, self, connection, continuation, failureMessage, attempt] {
@@ -1569,6 +1633,7 @@ void SyncController::waitForOneSyncThen(
                 return;
             }
             QObject::disconnect(*connection);
+            m_cancelActiveTransportOp = nullptr;
             if (!failureMessage.isEmpty()
                 && (!m_engine
                     || m_engine->status() != SyncEngine::Status::UpToDate)) {
@@ -1628,6 +1693,13 @@ void SyncController::beginCreateServerNetwork(
     const QUrl& url, const QString& enrollKey, bool wasICloud,
     bool hadJoinedFolder)
 {
+    // 发起建空间请求前先停下旧引擎与监听，维持“切换期间无旧引擎并发写远端”的单引擎不变量；
+    // 若中途失败则由 finishTransportProblem 按切换前运行状态恢复。
+    stopServerWatcher();
+    m_resumeEngineOnSwitchAbort = m_enabled && m_engine && m_engine->isRunning();
+    if (m_engine) {
+        m_engine->stop();
+    }
     if (!m_platform.makeHttpClient) {
         finishTransportProblem(
             QStringLiteral("服务器同步的 HTTP 组件没有配置"));
@@ -1640,6 +1712,11 @@ void SyncController::beginCreateServerNetwork(
             QStringLiteral("服务器同步的 HTTP 组件创建失败"));
         return;
     }
+    m_cancelActiveTransportOp = [http] {
+        if (http) {
+            http->cancelAll();
+        }
+    };
     auto* watcher = new QFutureWatcher<ServerCreateResult>(this);
     const QPointer<SyncController> self(this);
     connect(watcher, &QFutureWatcherBase::finished, this,
@@ -1650,6 +1727,7 @@ void SyncController::beginCreateServerNetwork(
             || !m_switchingTransport) {
             return;
         }
+        m_cancelActiveTransportOp = nullptr;
         const ServerCreateResult result = watcher->result();
         if (!result.ok) {
             finishTransportProblem(result.problem);
@@ -1663,6 +1741,7 @@ void SyncController::beginCreateServerNetwork(
             return;
         }
         ++m_transportAttempt;
+        m_cancelActiveTransportOp = nullptr;
         if (http) {
             http->cancelAll();
         }
@@ -1744,30 +1823,37 @@ void SyncController::completeCreateServer(
     const QUrl& url, const QString& spaceId, const QByteArray& secret,
     bool wasICloud, bool hadJoinedFolder)
 {
+    stopServerWatcher();
+    if (m_engine) {
+        m_engine->stop();
+    }
+    const bool dbOpen = DatabaseManager::instance()->isOpen();
+    const QString oldFolderId = dbOpen ? SyncStore().folderId() : QString();
+    // 先清理库里的旧 folderId 再写 QSettings：若写库失败，不提前污染持久化偏好与内存中的 m_transport。
+    if (dbOpen && !SyncStore().setFolderId(QString())) {
+        finishTransportProblem(
+            QStringLiteral("没能清除旧同步文件夹记录"));
+        return;
+    }
     QString error;
     if (!persistServerSettings(url, spaceId, secret, false, &error)) {
+        if (dbOpen && !oldFolderId.isEmpty()) {
+            SyncStore().setFolderId(oldFolderId);
+        }
         finishTransportProblem(error);
         return;
     }
     if (wasICloud && hadJoinedFolder && m_platform.retireICloudFolder) {
-        // 先停掉仍在写 iCloud 的旧引擎，再把目录改名；改名失败不中止切换，
+        // 切换已提交后再把旧 iCloud 目录改名退休；改名失败不中止切换，
         // 但 iPad 可能还会往旧目录写，所以必须明确提示用户手动移走。
-        stopServerWatcher();
-        if (m_engine) {
-            m_engine->stop();
-        }
         QString retireError;
         if (!m_platform.retireICloudFolder(&retireError)) {
             emit notice(QStringLiteral(
                 "iCloud 里的旧同步文件夹没能改名，iPad 可能还会往里写，请手动把它移走"));
         }
     }
-    if (DatabaseManager::instance()->isOpen()
-        && !SyncStore().setFolderId(QString())) {
-        finishTransportProblem(
-            QStringLiteral("没能清除旧同步文件夹记录"));
-        return;
-    }
+    m_cancelActiveTransportOp = nullptr;
+    m_resumeEngineOnSwitchAbort = false;
     m_knownFolderId.clear();
     applyServerEngine(true);
     emit transportChanged();
@@ -1796,6 +1882,10 @@ void SyncController::joinWithPairingCode(const QString& code)
     ++m_transportAttempt;
     setTransportSwitching(true);
     stopServerWatcher();
+    m_resumeEngineOnSwitchAbort = m_enabled && m_engine && m_engine->isRunning();
+    if (m_engine) {
+        m_engine->stop();
+    }
     const quint64 attempt = m_transportAttempt;
     const auto http = m_platform.makeHttpClient();
     const auto cipher = m_platform.makeBlockCipher();
@@ -1808,6 +1898,11 @@ void SyncController::joinWithPairingCode(const QString& code)
         RemoteSyncFolder::Config{info.baseUrl, info.spaceId, info.secret},
         http, cipher);
     const auto worker = std::make_shared<SyncWorker>(std::move(folder));
+    m_cancelActiveTransportOp = [worker] {
+        if (worker) {
+            worker->cancelPendingIo();
+        }
+    };
     auto* watcher = new QFutureWatcher<SyncWorker::OpenResult>(this);
     const QPointer<SyncController> self(this);
     connect(watcher, &QFutureWatcherBase::finished, this,
@@ -1817,6 +1912,7 @@ void SyncController::joinWithPairingCode(const QString& code)
             || !m_switchingTransport) {
             return;
         }
+        m_cancelActiveTransportOp = nullptr;
         const SyncWorker::OpenResult result = watcher->result();
         if (!result.error.ok()) {
             finishTransportProblem(result.error.message);
@@ -1847,6 +1943,7 @@ void SyncController::joinWithPairingCode(const QString& code)
             finishTransportProblem(error);
             return;
         }
+        m_resumeEngineOnSwitchAbort = false;
         applyServerEngine(true);
         emit transportChanged();
         emit folderChanged();
@@ -1858,6 +1955,7 @@ void SyncController::joinWithPairingCode(const QString& code)
             return;
         }
         ++m_transportAttempt;
+        m_cancelActiveTransportOp = nullptr;
         worker->cancelPendingIo();
         finishTransportProblem(
             QStringLiteral("检查配对码超过 30 秒没有响应"));
@@ -1871,6 +1969,11 @@ void SyncController::finishSwitchToICloud()
     if (!m_switchingTransport) {
         return;
     }
+    stopServerWatcher();
+    m_resumeEngineOnSwitchAbort = m_enabled && m_engine && m_engine->isRunning();
+    if (m_engine) {
+        m_engine->stop();
+    }
     QString error;
     if (!choosesFolder()) {
         // Mac 切回时先让旧服务器目录彻底退休；失败就留在服务器方式，
@@ -1882,18 +1985,25 @@ void SyncController::finishSwitchToICloud()
             return;
         }
     }
+    // Mac 与 iPad 切回 iCloud 都必须先清掉旧服务器空间的 folderId，再落盘 QSettings；
+    // 否则写库失败会留下新偏好配旧空间身份，或 iPad 取消选目录后仍残留旧服务器 folderId。
+    const bool dbOpen = DatabaseManager::instance()->isOpen();
+    const QString oldFolderId = dbOpen ? SyncStore().folderId() : QString();
+    if (dbOpen && !SyncStore().setFolderId(QString())) {
+        finishTransportProblem(
+            QStringLiteral("没能清除旧同步空间记录"));
+        return;
+    }
     if (!persistICloudSettings(&error)) {
+        if (dbOpen && !oldFolderId.isEmpty()) {
+            SyncStore().setFolderId(oldFolderId);
+        }
         finishTransportProblem(error);
         return;
     }
+    m_resumeEngineOnSwitchAbort = false;
+    m_knownFolderId.clear();
     if (!choosesFolder()) {
-        if (DatabaseManager::instance()->isOpen()
-            && !SyncStore().setFolderId(QString())) {
-            finishTransportProblem(
-                QStringLiteral("没能清除旧同步空间记录"));
-            return;
-        }
-        m_knownFolderId.clear();
         applyICloudEngine(m_enabled);
         emit transportChanged();
         emit folderChanged();
@@ -2055,16 +2165,18 @@ void SyncController::syncNow()
         }
 
         if (m_restoreRetry.needsSettings || (!m_restoreRetry.needsEpoch && !m_restoreRetry.needsFolder)) {
-            if (!reconcileSettings()) {
+            QString reconcileErr;
+            if (!reconcileSettings(&reconcileErr)) {
                 qWarning() << "Retry to reconcile settings after restore failed";
                 m_restoreRetry.needsSettings = true;
-                if (m_restoreError.isEmpty()) {
-                    m_restoreError = QStringLiteral("恢复备份后整理同步设置失败，同步已暂停以保护数据。");
-                }
+                m_restoreError = reconcileErr.isEmpty()
+                    ? QStringLiteral("恢复备份后整理同步设置失败，同步已暂停以保护数据。")
+                    : reconcileErr;
                 emit statusChanged();
                 return;
             }
             m_restoreRetry.needsSettings = false;
+            m_reconcileError.clear();
         }
 
         if (m_restoreRetry.needsJournalDelete || QFileInfo::exists(journalPath)) {
@@ -2088,6 +2200,25 @@ void SyncController::syncNow()
         startEngine();
         emit statusChanged();
     }
+    // 普通启动对账同步设置曾因偏好后端故障受阻时，存储恢复后点击立即同步即可重试自愈。
+    if (!m_reconcileError.isEmpty() && DatabaseManager::instance()->isOpen()) {
+        QString reconcileErr;
+        if (!reconcileSettings(&reconcileErr)) {
+            m_reconcileError = reconcileErr.isEmpty()
+                ? QStringLiteral("整理同步设置失败，同步已暂停以保护数据。")
+                : reconcileErr;
+            emit statusChanged();
+            return;
+        }
+        m_reconcileError.clear();
+        SyncStore store;
+        m_knownEpoch = store.epoch();
+        m_knownFolderId = store.folderId();
+        refreshLog();
+        startEngine();
+        emit statusChanged();
+    }
+    flushPendingLocalSettings();
     if (m_engine) {
         m_engine->syncNow();
     }
@@ -2265,6 +2396,7 @@ void SyncController::ensureEngine()
         m_engine->setBackgroundTaskProvider(m_platform.backgroundTask);
     }
     connect(m_engine.get(), &SyncEngine::statusChanged, this, &SyncController::statusChanged);
+    connect(m_engine.get(), &SyncEngine::snapshotReplaced, this, &SyncController::snapshotReplaced);
     connect(m_engine.get(), &SyncEngine::cycleFinished, this, &SyncController::onCycleFinished);
 }
 
@@ -2284,7 +2416,8 @@ void SyncController::startEngine()
     // 偏好设置持久化错误存在时也禁止开始同步。
     if (!DatabaseManager::instance()->isOpen() || !m_initialized || m_restore.pending
         || m_restoreRetry.hasPending() || m_journalCorrupted || !m_restoreError.isEmpty()
-        || !m_settingsError.isEmpty() || m_disableIntentBlocked || !m_enabled) {
+        || !m_settingsError.isEmpty() || !m_reconcileError.isEmpty()
+        || m_disableIntentBlocked || !m_enabled) {
         stopServerWatcher();
         return;
     }
@@ -2358,10 +2491,31 @@ void SyncController::clearTransportProblem()
     setTransportSwitching(false, {});
 }
 
+void SyncController::cancelTransportSwitch()
+{
+    if (!m_switchingTransport) {
+        return;
+    }
+    // 先递增代次使迟到回调与超时定时器全部失效，再打断在途 HTTP / 文件操作，
+    // 最后以空错误文案结束切换并按原运行态恢复旧引擎，原书签与服务器配置保持不变。
+    ++m_transportAttempt;
+    if (auto cancel = std::exchange(m_cancelActiveTransportOp, nullptr)) {
+        cancel();
+    }
+    finishTransportProblem(QString());
+}
+
 void SyncController::finishTransportProblem(const QString& problem)
 {
+    m_cancelActiveTransportOp = nullptr;
+    const bool resumeOld = m_resumeEngineOnSwitchAbort;
+    m_resumeEngineOnSwitchAbort = false;
     setTransportSwitching(false, problem);
-    startServerWatcher();
+    if (resumeOld) {
+        startEngine();
+    } else {
+        startServerWatcher();
+    }
     emit statusChanged();
 }
 
@@ -2396,11 +2550,9 @@ bool SyncController::setEnabledState(bool enabled)
             } else {
                 m_settingsError = QStringLiteral("同步已关闭且开关已保存，但关闭保护记录异常：") + intentError;
             }
-            m_settingsRetryNeeded = true;
             return false;
         }
         m_settingsError.clear();
-        m_settingsRetryNeeded = false;
         return true;
     } else {
         QString intentError;
@@ -2412,7 +2564,6 @@ bool SyncController::setEnabledState(bool enabled)
             stopServerWatcher();
             if (m_engine) m_engine->stop();
             m_settingsError = intentError;
-            m_settingsRetryNeeded = true;
             return false;
         }
         // 先保存开启偏好，再解除关闭记录；若中途退出，记录仍在，启动采取关闭状态。
@@ -2424,7 +2575,6 @@ bool SyncController::setEnabledState(bool enabled)
             stopServerWatcher();
             if (m_engine) m_engine->stop();
             m_settingsError = QStringLiteral("同步开关状态保存失败，无法开启同步。");
-            m_settingsRetryNeeded = true;
             return false;
         }
         if (!removeDisableIntent(path, &intentError)) {
@@ -2433,11 +2583,9 @@ bool SyncController::setEnabledState(bool enabled)
             stopServerWatcher();
             if (m_engine) m_engine->stop();
             m_settingsError = intentError;
-            m_settingsRetryNeeded = true;
             return false;
         }
         m_settingsError.clear();
-        m_settingsRetryNeeded = false;
         m_disableIntentBlocked = false;
         m_enabled = true;
         return true;
@@ -2466,12 +2614,18 @@ void SyncController::checkChosenFolder(const QByteArray& bookmark, const QString
     const auto worker = std::make_shared<SyncWorker>(m_platform.makeFolder(bookmark, [](const QByteArray&) {}));
     auto* watcher = new QFutureWatcher<SyncWorker::OpenResult>(this);
     const quint64 attempt = ++m_folderCheckAttempt;
+    m_cancelActiveFolderCheck = [worker] {
+        if (worker) {
+            worker->cancelPendingIo();
+        }
+    };
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, bookmark, displayPath, attempt] {
         watcher->deleteLater();
         // 超时作废之后才回来的结果：那一次已经告诉你没响应了，你可能已经重新选了别的，不再用它。
         if (attempt != m_folderCheckAttempt || !m_choosingFolder) {
             return;
         }
+        m_cancelActiveFolderCheck = nullptr;
         const SyncWorker::OpenResult result = watcher->result();
         if (!result.error.ok()) {
             setChoosingFolder(false, QStringLiteral("打不开选中的文件夹：%1").arg(result.error.message));
@@ -2503,6 +2657,7 @@ void SyncController::checkChosenFolder(const QByteArray& bookmark, const QString
             return;
         }
         ++m_folderCheckAttempt;
+        m_cancelActiveFolderCheck = nullptr;
         worker->cancelPendingIo();
         setChoosingFolder(false, QStringLiteral("读选中的文件夹超过 %1 秒没有响应（可能在等 iCloud 下载，或者网络不通），"
                                                 "请稍后再选一次。原来的文件夹照常使用。")
@@ -2559,13 +2714,11 @@ void SyncController::acceptFolder(const QByteArray& bookmark, const QString& dis
         settings.sync();
 
         m_settingsError = QStringLiteral("同步文件夹信息保存失败，无法切换文件夹。");
-        m_settingsRetryNeeded = true;
         emit statusChanged();
         return;
     }
 
     m_settingsError.clear();
-    m_settingsRetryNeeded = false;
 
     // 只有两项持久化成功，才切换 m_engine->setFolder、发 folderChanged、setEnabledState(true)、startEngine
     if (m_engine) {
@@ -2573,6 +2726,20 @@ void SyncController::acceptFolder(const QByteArray& bookmark, const QString& dis
     }
     emit folderChanged();
     if (setEnabledState(true)) {
+        if (!m_reconcileError.isEmpty() && DatabaseManager::instance()->isOpen()) {
+            QString reconcileErr;
+            if (reconcileSettings(&reconcileErr)) {
+                m_reconcileError.clear();
+                SyncStore store;
+                m_knownEpoch = store.epoch();
+                m_knownFolderId = store.folderId();
+                refreshLog();
+            } else {
+                m_reconcileError = reconcileErr.isEmpty()
+                    ? QStringLiteral("整理同步设置失败，同步已暂停以保护数据。")
+                    : reconcileErr;
+            }
+        }
         startEngine();
     }
     emit statusChanged();
@@ -2585,13 +2752,15 @@ void SyncController::onBookmarkRefreshed(quint64 folderGeneration, const QByteAr
         || folderGeneration != m_folderGeneration || bookmark.isEmpty()) {
         return;
     }
+    const QString bookmarkSaveError = QStringLiteral("同步文件夹书签更新保存失败。");
     QSettings settings;
     settings.setValue(kBookmarkKey, bookmark);
     settings.sync();
     if (settings.status() != QSettings::NoError) {
-        m_settingsError = QStringLiteral("同步文件夹书签更新保存失败。");
+        m_settingsError = bookmarkSaveError;
         emit statusChanged();
-    } else if (!m_settingsError.isEmpty()) {
+    } else if (m_settingsError == bookmarkSaveError) {
+        // 仅清理书签刷新自身报出的保存错误，避免把开关或文件夹切换留下的其它设置错误静默冲掉。
         m_settingsError.clear();
         emit statusChanged();
     }
@@ -2616,6 +2785,9 @@ void SyncController::onCycleFinished()
     }
     m_knownEpoch = epoch;
     m_knownFolderId = folderId;
+    if (!m_unrecordedSettingKeys.isEmpty() || m_localSettingsReadRetryNeeded) {
+        flushPendingLocalSettings();
+    }
     refreshLog();
 }
 
@@ -2635,52 +2807,118 @@ void SyncController::refreshLog()
 
 void SyncController::recordSettings()
 {
-    // 启动核对之前不记：initialize 会按库里记下的和本机设置一起核对一遍。
-    // 同步正在把对方的值写回本机时也不记：那时的变更信号不是本机改动（见 SyncedSettings::WriteBackScope）。
-    if (!m_initialized || SyncedSettings::isWritingBack() || !DatabaseManager::instance()->isOpen()) {
+    // 启动核对未完成、恢复状态不确定或有待决恢复收尾时，不写本地设置版本，交由对账流程统一收敛。
+    if (!m_initialized || !m_reconcileError.isEmpty() || isRestoreStateUncertain()
+        || m_restoreRetry.hasPending() || !DatabaseManager::instance()->isOpen()) {
         return;
     }
-    SyncStore store;
-    const QHash<QString, QString> synced = store.syncedSettings();
-    const QHash<QString, QString> local = SyncedSettings::currentValues();
+    bool localOk = false;
+    const QHash<QString, QString> local = SyncedSettings::currentValues(&localOk);
+    if (!localOk) {
+        // 本机编辑阶段偏好临时不可读：保留旧观测快照并置位重试标记，待下次可读取时按 diff 找回变动键。
+        if (!SyncedSettings::isWritingBack()) {
+            m_localSettingsReadRetryNeeded = true;
+        }
+        return;
+    }
+    // 信号可能代表多条数据（如今日目标），比较本机前后值才能定位真正改动的键。
+    // 远端值被本机归一时也更新基准，用户编辑其他设置不会顺便发送这个归一值。
+    const auto previous = std::exchange(m_observedLocalSettings, local);
+    if (SyncedSettings::isWritingBack()) {
+        // 远端写回只移除确实被本次写回改写或删除的键，避免连带丢掉其它无关本机失败键。
+        const QList<QString> tracked = m_unrecordedSettingKeys.values();
+        for (const QString& key : tracked) {
+            const auto after = local.constFind(key);
+            const auto before = previous.constFind(key);
+            if (after == local.constEnd()
+                || before == previous.constEnd()
+                || after.value() != before.value()) {
+                m_unrecordedSettingKeys.remove(key);
+            }
+        }
+        return;
+    }
+    m_localSettingsReadRetryNeeded = false;
     for (auto it = local.cbegin(); it != local.cend(); ++it) {
-        // 先和库里的比：今日目标一天一项，每次都逐项开事务去比太浪费。值没变的不是本机改动。
-        const auto known = synced.constFind(it.key());
-        if (known != synced.constEnd() && known.value() == it.value()) {
+        const auto known = previous.constFind(it.key());
+        if (known != previous.constEnd() && known.value() == it.value()) {
             continue;
         }
-        if (!store.recordLocalSetting(it.key(), it.value(), SyncedSettings::isFactoryDefault(it.key(), it.value()))) {
-            qWarning() << "Failed to record a synced setting:" << it.key();
+        m_unrecordedSettingKeys.insert(it.key());
+    }
+    flushPendingLocalSettings();
+}
+
+void SyncController::flushPendingLocalSettings()
+{
+    if (!m_initialized || !m_reconcileError.isEmpty() || isRestoreStateUncertain()
+        || m_restoreRetry.hasPending() || !DatabaseManager::instance()->isOpen()) {
+        return;
+    }
+    if (m_unrecordedSettingKeys.isEmpty() && !m_localSettingsReadRetryNeeded) {
+        return;
+    }
+    bool localOk = false;
+    const QHash<QString, QString> local = SyncedSettings::currentValues(&localOk);
+    if (!localOk) {
+        return;
+    }
+    if (m_localSettingsReadRetryNeeded) {
+        const auto previous = std::exchange(m_observedLocalSettings, local);
+        for (auto it = local.cbegin(); it != local.cend(); ++it) {
+            const auto known = previous.constFind(it.key());
+            if (known != previous.constEnd() && known.value() == it.value()) {
+                continue;
+            }
+            m_unrecordedSettingKeys.insert(it.key());
+        }
+        m_localSettingsReadRetryNeeded = false;
+    }
+    SyncStore store;
+    const QList<QString> pendingKeys = m_unrecordedSettingKeys.values();
+    for (const QString& key : pendingKeys) {
+        const auto it = local.constFind(key);
+        if (it == local.constEnd()) {
+            m_unrecordedSettingKeys.remove(key);
+            continue;
+        }
+        if (store.recordLocalSetting(key, it.value(), SyncedSettings::isFactoryDefault(key, it.value()))) {
+            m_unrecordedSettingKeys.remove(key);
+        } else {
+            qWarning() << "Failed to record a synced setting (will retry):" << key;
         }
     }
 }
 
-bool SyncController::reconcileSettings()
+bool SyncController::reconcileSettings(QString* errorMessage)
 {
-    if (!DatabaseManager::instance()->isOpen()) {
-        m_restoreError = QStringLiteral("数据库未打开，无法整理同步设置。");
+    const auto fail = [errorMessage](const QString& message) {
+        if (errorMessage) {
+            *errorMessage = message;
+        }
         return false;
+    };
+
+    if (!DatabaseManager::instance()->isOpen()) {
+        return fail(QStringLiteral("数据库未打开，无法整理同步设置。"));
     }
     SyncStore store;
     bool syncedOk = false;
     const QHash<QString, QString> synced = store.syncedSettings(&syncedOk);
     if (!syncedOk) {
-        m_restoreError = QStringLiteral("读取已同步设置失败，同步已暂停以保护数据。");
-        return false;
+        return fail(QStringLiteral("读取已同步设置失败，同步已暂停以保护数据。"));
     }
 
     bool pendingOk = false;
     const QHash<QString, QString> pending = store.pendingSettingWriteBacks(&pendingOk);
     if (!pendingOk) {
-        m_restoreError = QStringLiteral("读取待写回设置标记失败，同步已暂停以保护数据。");
-        return false;
+        return fail(QStringLiteral("读取待写回设置标记失败，同步已暂停以保护数据。"));
     }
 
     bool localOk = false;
     QHash<QString, QString> local = SyncedSettings::currentValues(&localOk);
     if (!localOk) {
-        m_restoreError = QStringLiteral("读取本地设置失败，同步已暂停以保护数据。");
-        return false;
+        return fail(QStringLiteral("读取本地设置失败，同步已暂停以保护数据。"));
     }
 
     const auto isRemoval = [](const QString& kind) { return kind == QLatin1String("remove"); };
@@ -2689,61 +2927,45 @@ bool SyncController::reconcileSettings()
     // - 没有标记：本机改了设置，却没记进库（记录失败：库被别的连接长时间占着而等待超时、磁盘满……）。
     //   这时以本机为准，下面补记一个新版本；以前一律以库为准，会把你的改动在下次启动时悄悄改回去。
     // 库里有、本机却没有的项（例如某一天的今日目标）没有本机的值可留，同样以库为准。
-    bool writeBackFailed = false;
+    bool writeBackIoFailed = false;
     QString writeBackErrMsg;
     QSet<QString> failedKeys;
 
-    struct ScopedConnection {
-        QMetaObject::Connection conn;
-        ~ScopedConnection() {
-            if (conn) {
-                QObject::disconnect(conn);
-            }
-        }
-    };
-
     {
-        ScopedConnection connGuard;
-        auto* appSettings = AppSettings::instance();
-        if (appSettings) {
-            connGuard.conn = QObject::connect(appSettings, &AppSettings::settingsWriteFailed,
-                                             [&writeBackFailed, &failedKeys, &writeBackErrMsg](const QString& key, const QString& msg) {
-                                                 writeBackFailed = true;
-                                                 if (key == QLatin1String("schedule")) {
-                                                     failedKeys.insert(QStringLiteral("schedule/periods"));
-                                                     failedKeys.insert(QStringLiteral("schedule/semesterStartDate"));
-                                                     failedKeys.insert(QStringLiteral("schedule/semesterWeeks"));
-                                                 } else if (!key.isEmpty()) {
-                                                     failedKeys.insert(key);
-                                                 }
-                                                 if (writeBackErrMsg.isEmpty()) {
-                                                     writeBackErrMsg = msg;
-                                                 }
-                                             });
-        }
         const SyncedSettings::WriteBackScope writingBack;
         for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
             const QString& key = it.key();
             const QString& kind = it.value();
-            bool stepOk = true;
+            QString stepErr;
+            SyncedSettings::ApplyStatus stepStatus = SyncedSettings::ApplyStatus::Applied;
             if (isRemoval(kind)) {
-                stepOk = SyncedSettings::remove(key);
-            } else if (synced.contains(key) && local.value(key) != synced.value(key)) {
-                stepOk = SyncedSettings::apply(key, synced.value(key));
+                stepStatus = SyncedSettings::removeWithStatus(key, &stepErr);
+            } else if (synced.contains(key)
+                       && (!local.contains(key) || local.value(key) != synced.value(key))) {
+                stepStatus = SyncedSettings::applyWithStatus(key, synced.value(key), &stepErr);
             }
-            if (!stepOk || failedKeys.contains(key)) {
-                writeBackFailed = true;
+            if (stepStatus == SyncedSettings::ApplyStatus::StorageFailure) {
+                writeBackIoFailed = true;
                 failedKeys.insert(key);
-                qWarning() << "Failed to write back a synced setting:" << key;
+                if (writeBackErrMsg.isEmpty() && !stepErr.isEmpty()) {
+                    writeBackErrMsg = stepErr;
+                }
+                qWarning() << "Failed to write back a synced setting:" << key << stepErr;
             }
         }
         for (auto it = synced.cbegin(); it != synced.cend(); ++it) {
             const QString& key = it.key();
             if (!pending.contains(key) && SyncSchema::isSyncedSettingKey(key) && !local.contains(key)) {
-                if (!SyncedSettings::apply(key, it.value()) || failedKeys.contains(key)) {
-                    writeBackFailed = true;
+                QString stepErr;
+                const SyncedSettings::ApplyStatus stepStatus =
+                    SyncedSettings::applyWithStatus(key, it.value(), &stepErr);
+                if (stepStatus == SyncedSettings::ApplyStatus::StorageFailure) {
+                    writeBackIoFailed = true;
                     failedKeys.insert(key);
-                    qWarning() << "Failed to write back a synced setting:" << key;
+                    if (writeBackErrMsg.isEmpty() && !stepErr.isEmpty()) {
+                        writeBackErrMsg = stepErr;
+                    }
+                    qWarning() << "Failed to write back a synced setting:" << key << stepErr;
                 }
             }
         }
@@ -2752,12 +2974,11 @@ bool SyncController::reconcileSettings()
     bool recheckOk = false;
     local = SyncedSettings::currentValues(&recheckOk);
     if (!recheckOk) {
-        m_restoreError = QStringLiteral("写回设置后重新读取本地设置失败，同步已暂停以保护数据。");
-        return false;
+        return fail(QStringLiteral("写回设置后重新读取本地设置失败，同步已暂停以保护数据。"));
     }
 
-    // 写回真的成了的，清掉标记；没成的（取值写不回本机、偏好文件写不进去）留着，下次启动再试，
-    // 也不拿本机的值去盖它——那多半是对方的取值本机认不得（例如更新版本的写法），不能反过来把它改掉。
+    // 写回真的成了的，清掉标记；没成的（更新版本的未知键、超出本版本范围被夹紧的值、或偏好文件写不进去）留着，
+    // 下次启动再试，也不拿本机的值去盖它——远端来自更新版本的键值不能反过来被本机改掉。
     QSet<QString> unresolved;
     bool finishMarkFailed = false;
     for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
@@ -2770,7 +2991,8 @@ bool SyncController::reconcileSettings()
         const bool done = isRemoval(it.value())
             // 固定的几项不删（保留本机的值，下面按本机的记进库）；今日目标要确认真的删掉了。
             ? (SyncSchema::dailyGoalDateOf(it.key()).isEmpty() || !local.contains(it.key()))
-            : (!synced.contains(it.key()) || local.value(it.key()) == synced.value(it.key()));
+            : (!synced.contains(it.key())
+               || (local.contains(it.key()) && local.value(it.key()) == synced.value(it.key())));
         if (done) {
             if (!store.finishSettingWriteBack(it.key())) {
                 qWarning() << "Failed to finish setting writeback marker:" << it.key();
@@ -2782,23 +3004,14 @@ bool SyncController::reconcileSettings()
         }
     }
 
-    if (writeBackFailed) {
-        m_restoreError = writeBackErrMsg.isEmpty()
+    if (writeBackIoFailed) {
+        return fail(writeBackErrMsg.isEmpty()
             ? QStringLiteral("写回同步设置失败，同步已暂停以保护数据。")
-            : QStringLiteral("写回同步设置失败：%1").arg(writeBackErrMsg);
-        return false;
+            : QStringLiteral("写回同步设置失败：%1").arg(writeBackErrMsg));
     }
 
     if (finishMarkFailed) {
-        m_restoreError = QStringLiteral("更新设置写回标记失败，同步已暂停以保护数据。");
-        return false;
-    }
-
-    if (!unresolved.isEmpty()) {
-        if (m_restoreError.isEmpty()) {
-            m_restoreError = QStringLiteral("存在未解决的同步设置待写回项，同步已暂停以保护数据。");
-        }
-        return false;
+        return fail(QStringLiteral("更新设置写回标记失败，同步已暂停以保护数据。"));
     }
 
     // 本机的值库里没记、或记的不一样（又不是在等写回的）：以本机为准记一个新版本、等着发出。
@@ -2811,11 +3024,13 @@ bool SyncController::reconcileSettings()
         }
         if (!store.recordLocalSetting(it.key(), it.value(), SyncedSettings::isFactoryDefault(it.key(), it.value()))) {
             qWarning() << "Failed to record a synced setting:" << it.key();
-            m_restoreError = QStringLiteral("记录本地设置失败，同步已暂停以保护数据。");
-            return false;
+            return fail(QStringLiteral("记录本地设置失败，同步已暂停以保护数据。"));
         }
     }
 
+    m_observedLocalSettings = local;
+    m_unrecordedSettingKeys.clear();
+    m_localSettingsReadRetryNeeded = false;
     return true;
 }
 

@@ -294,6 +294,7 @@ private slots:
     void watcherRecoversAfterServerRestart();
     void watcherStopIsPromptAndSilencesChanges();
     void watcherStopClosesPreRegistrationRace();
+    void watcherEmitsChangedOnInitialRecoveryFromStartupFailure();
 
 private:
     Device openDevice(const QString& name);
@@ -1115,6 +1116,64 @@ void RemoteSyncTransportTests::watcherStopClosesPreRegistrationRace()
     stopper.join();
     QVERIFY(timer.elapsed() < 1000);
     QCOMPARE(changes.count(), 0);
+}
+
+namespace {
+
+class RecoveringInitialWatchHttp final : public SyncHttpClient
+{
+public:
+    Response send(const Request&) override
+    {
+        const int index = calls.fetch_add(1);
+        if (index == 0) {
+            Response r;
+            r.failure = Failure::Network;
+            r.message = QStringLiteral("启动阶段断网");
+            return r;
+        }
+        if (index == 1) {
+            Response r;
+            r.status = 200;
+            r.body = QByteArrayLiteral("{\"rev\":5}");
+            return r;
+        }
+        std::unique_lock<std::mutex> lock(mutex);
+        cond.wait(lock, [this] { return cancelled; });
+        Response r;
+        r.failure = Failure::Cancelled;
+        return r;
+    }
+
+    void cancelAll() override
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            cancelled = true;
+        }
+        cond.notify_all();
+    }
+
+    std::atomic<int> calls{0};
+    std::mutex mutex;
+    std::condition_variable cond;
+    bool cancelled = false;
+};
+
+} // namespace
+
+void RemoteSyncTransportTests::watcherEmitsChangedOnInitialRecoveryFromStartupFailure()
+{
+    // 产品保证：SyncServerWatcher 在启动阶段尚未拿到首版修订号即遭遇断网、随后恢复成功拿到首版修订号时，
+    // 必须立即发出 changed() 唤醒同步引擎跳出长退避等待。
+    auto http = std::make_shared<RecoveringInitialWatchHttp>();
+    SyncServerWatcher recoveringWatcher(
+        {baseUrl(), kSpace, QStringLiteral("test-token"), 25, 20, 100},
+        http);
+    QSignalSpy changes(&recoveringWatcher, &SyncServerWatcher::changed);
+    recoveringWatcher.start();
+    QTRY_VERIFY_WITH_TIMEOUT(changes.count() >= 1, 3000);
+    recoveringWatcher.stop();
 }
 
 QTEST_GUILESS_MAIN(RemoteSyncTransportTests)

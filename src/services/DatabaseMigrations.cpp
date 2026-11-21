@@ -23,6 +23,15 @@
 
 bool DatabaseManager::setDatabaseVersion(int version)
 {
+    // 高版本数据库触发局部自愈时不能把磁盘上的 user_version 降级写回旧版本号，否则中途失败会让库永久降级。
+    const int current = getDatabaseVersion();
+    if (current < 0) {
+        return false;
+    }
+    if (current >= version) {
+        return true;
+    }
+
     QSqlQuery query(m_db);
     if (!query.exec(QStringLiteral("PRAGMA user_version = %1").arg(version))) {
         qWarning() << "Failed to set database version:" << query.lastError().text();
@@ -1045,7 +1054,9 @@ bool DatabaseManager::migrateToVersion18()
     // 升到 v18 之后，旧版本应用打不开这个库（createTables 开头拒绝未来版本），所以升级前留一份迁移快照。
     // 同步结构已经完整、只是版本号偏低（重跑、外部改过版本号）时不再建：这个库早就是 v18，
     // 没有新的不可回退；多建一份反而会把更早、更有用的快照挤掉（只保留最近三份）。
-    if (!syncSchemaIsComplete() && !backupDatabaseBeforeMigration()) {
+    bool syncQueryOk = false;
+    const bool syncComplete = syncSchemaIsComplete(&syncQueryOk);
+    if (!syncQueryOk || (!syncComplete && !backupDatabaseBeforeMigration())) {
         return false;
     }
     if (!m_db.transaction()) {
@@ -1233,7 +1244,9 @@ bool DatabaseManager::migrateToVersion22()
     // 迁移快照先于 DDL（表结构变更）；建表、继承活动期计数及版本推进必须一起提交。
     // 旧版空档已丢失的计数无法重建，不从历史总数推断用户上次结束循环的时间。
     // 防御性重跑可能只需推进版本；已有表不重建、不覆盖事实，也不额外消耗快照名额。
-    if ((!tableExists(QStringLiteral("pomodoro_cycle_state")) && !backupDatabaseBeforeMigration())
+    bool tableQueryOk = false;
+    const bool hasCycleTable = tableExists(QStringLiteral("pomodoro_cycle_state"), &tableQueryOk);
+    if (!tableQueryOk || (!hasCycleTable && !backupDatabaseBeforeMigration())
         || !m_db.transaction()) return false;
     QSqlQuery query(m_db);
     bool ok = query.exec(pomodoroCycleStateTableSql())

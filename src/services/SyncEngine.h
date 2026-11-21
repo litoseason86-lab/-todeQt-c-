@@ -135,8 +135,8 @@ public:
 
     bool isRunning() const { return m_running; }
     bool isBusy() const { return m_inCycle; }
-    // 这一轮做完了，也没有排着要紧接着做的下一轮。
-    bool isIdle() const { return !m_inCycle && !m_cycleRequested; }
+    // 这一轮做完了，也没有排着要紧接着做的下一轮（含拆批/分页续跑）。
+    bool isIdle() const { return !m_inCycle && !m_cycleRequested && !m_continueRequested; }
     Status status() const { return m_status; }
     QString statusText() const;
     QString statusDetail() const { return m_detail; }
@@ -145,6 +145,8 @@ public:
 
 signals:
     void statusChanged();
+    // 首次加入或远端发布更高纪元后用整库快照替换了本机数据。
+    void snapshotReplaced();
     // 一轮同步做完（不论成败）。测试据此等待。
     void cycleFinished();
 
@@ -168,8 +170,9 @@ private:
     void cleanupStep(const SyncWorker::Survey& survey);
     void finishCycle(Status failure = Status::UpToDate, const QString& detail = QString());
 
-    // 用一份快照整体换掉本机数据：先自动备份，再替换，再按快照里记的进度重设游标。
-    bool replaceFromSnapshot(const QString& source, const SyncFiles::SnapshotFile& snapshot, Status* failure,
+    // 用一份快照整体换掉本机数据：先自动备份，再在单一事务内替换并同步落盘 folder_id/游标/传输状态。
+    bool replaceFromSnapshot(const QString& source, const SyncFiles::SnapshotFile& snapshot,
+                             const QString& folderIdToSet, bool resetFolderTransportState, Status* failure,
                              QString* error);
     void notify(const SyncStore::ApplyResult& result);
     void warn(Status status, const QString& detail);
@@ -209,6 +212,8 @@ private:
     bool m_foreground = true;
     bool m_inCycle = false;
     bool m_cycleRequested = false;
+    // 本轮成功完成后的内部续跑标记（拆批续发、扫描分页、换纪元后刷新游标）；失败时清零以遵守指数退避。
+    bool m_continueRequested = false;
     // 每次停下、换文件夹都加一：还在路上的旧结果据此认出来丢掉。
     quint64 m_generation = 0;
     bool m_joinConfirmed = false;
