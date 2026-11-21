@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
     var body: some View {
         SettingsForm {
             Section {
-                Toggle("启用同步", isOn: Binding(get: { store.snapshot.enabled }, set: store.setEnabled))
+                Toggle("启用同步", isOn: Binding(get: { store.snapshot.enabled }, set: { store.setEnabled($0) }))
                     .disabled(store.snapshot.busy || store.snapshot.switchingTransport)
                 Picker("同步方式", selection: Binding(
                     get: { store.snapshot.transport },
@@ -214,7 +214,7 @@ import UniformTypeIdentifiers
     var body: some View {
         SettingsForm {
             Section {
-                Toggle("自动备份", isOn: Binding(get: { store.autoBackupEnabled }, set: store.setAutoBackupEnabled))
+                Toggle("自动备份", isOn: Binding(get: { store.autoBackupEnabled }, set: { store.setAutoBackupEnabled($0) }))
                 LabeledContent("上次备份", value: store.snapshot.lastBackupTimeIso.isEmpty ? "尚未备份" : BackupTimeText.display(store.snapshot.lastBackupTimeIso))
                 Button("创建备份", systemImage: "externaldrive") { store.createBackup() }
                     .disabled(store.working || store.snapshot.busy || store.exportURL != nil)

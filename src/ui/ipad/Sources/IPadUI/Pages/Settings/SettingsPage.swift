@@ -81,21 +81,21 @@ import SwiftUI
         SettingsForm {
             Section("专注") {
                 // 定稿：左边名称，右边数值紧挨步进器。
-                valueStepper("专注时长", "\(store.snapshot.workMinutes) 分钟", value: Binding(get: { store.snapshot.workMinutes }, set: store.setWorkMinutes), in: 5...180)
-                valueStepper("休息时长", "\(store.snapshot.breakMinutes) 分钟", value: Binding(get: { store.snapshot.breakMinutes }, set: store.setBreakMinutes), in: 1...60)
+                valueStepper("专注时长", "\(store.snapshot.workMinutes) 分钟", value: Binding(get: { store.snapshot.workMinutes }, set: { store.setWorkMinutes($0) }), in: 5...180)
+                valueStepper("休息时长", "\(store.snapshot.breakMinutes) 分钟", value: Binding(get: { store.snapshot.breakMinutes }, set: { store.setBreakMinutes($0) }), in: 1...60)
                 NavigationLink {
                     longBreakForm
                 } label: { LabeledContent("长休息", value: store.longBreakSummary) }
-                Toggle("自动开始休息", isOn: Binding(get: { store.snapshot.autoStartBreak }, set: store.setAutoStartBreak))
-                Toggle("自动开始下个番茄", isOn: Binding(get: { store.snapshot.autoStartNextPomodoro }, set: store.setAutoStartNextPomodoro))
-                Toggle("快速开始", isOn: Binding(get: { store.snapshot.quickStartEnabled }, set: store.setQuickStartEnabled))
-                Picker("自由计时超时确认", selection: Binding(get: { store.snapshot.freeTimerWarningHours }, set: store.setFreeTimerWarningHours)) {
+                Toggle("自动开始休息", isOn: Binding(get: { store.snapshot.autoStartBreak }, set: { store.setAutoStartBreak($0) }))
+                Toggle("自动开始下个番茄", isOn: Binding(get: { store.snapshot.autoStartNextPomodoro }, set: { store.setAutoStartNextPomodoro($0) }))
+                Toggle("快速开始", isOn: Binding(get: { store.snapshot.quickStartEnabled }, set: { store.setQuickStartEnabled($0) }))
+                Picker("自由计时超时确认", selection: Binding(get: { store.snapshot.freeTimerWarningHours }, set: { store.setFreeTimerWarningHours($0) })) {
                     ForEach(1...24, id: \.self) { Text("\($0) 小时").tag($0) }
                 }.pickerStyle(.menu)
             }
             Section("提示、日期与个人") {
-                Toggle("阶段结束提示音", isOn: Binding(get: { store.snapshot.soundEnabled }, set: store.setSoundEnabled))
-                Picker("一天从几点开始", selection: Binding(get: { store.snapshot.dayStartHour }, set: store.setDayStartHour)) {
+                Toggle("阶段结束提示音", isOn: Binding(get: { store.snapshot.soundEnabled }, set: { store.setSoundEnabled($0) }))
+                Picker("一天从几点开始", selection: Binding(get: { store.snapshot.dayStartHour }, set: { store.setDayStartHour($0) })) {
                     ForEach(0...23, id: \.self) { Text("\($0):00").tag($0) }
                 }.pickerStyle(.menu)
                 // 昵称使用本地草稿并在回车、失焦或离页时提交，避免逐键写库刷新快照打断中文输入法选字。
@@ -127,10 +127,10 @@ import SwiftUI
     private var longBreakForm: some View {
         SettingsForm {
             Section {
-                Toggle("长休息", isOn: Binding(get: { store.snapshot.longBreakEnabled }, set: store.setLongBreakEnabled))
-                valueStepper("长休息时长", "\(store.snapshot.longBreakMinutes) 分钟", value: Binding(get: { store.snapshot.longBreakMinutes }, set: store.setLongBreakMinutes), in: 5...60)
+                Toggle("长休息", isOn: Binding(get: { store.snapshot.longBreakEnabled }, set: { store.setLongBreakEnabled($0) }))
+                valueStepper("长休息时长", "\(store.snapshot.longBreakMinutes) 分钟", value: Binding(get: { store.snapshot.longBreakMinutes }, set: { store.setLongBreakMinutes($0) }), in: 5...60)
                     .disabled(!store.snapshot.longBreakEnabled)
-                valueStepper("间隔", "每 \(store.snapshot.longBreakInterval) 个番茄", value: Binding(get: { store.snapshot.longBreakInterval }, set: store.setLongBreakInterval), in: 2...8)
+                valueStepper("间隔", "每 \(store.snapshot.longBreakInterval) 个番茄", value: Binding(get: { store.snapshot.longBreakInterval }, set: { store.setLongBreakInterval($0) }), in: 2...8)
                     .disabled(!store.snapshot.longBreakEnabled)
             }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
@@ -190,7 +190,7 @@ import SwiftUI
                 .disabled(!shell.wallpaperAvailable || shell.operationBlocksUI)
             }
             Section {
-                Toggle("纤细时钟字体", isOn: Binding(get: { store.snapshot.slimClockFont }, set: store.setSlimClockFont))
+                Toggle("纤细时钟字体", isOn: Binding(get: { store.snapshot.slimClockFont }, set: { store.setSlimClockFont($0) }))
                 Button("使用旧版界面（下次启动生效）") { shell.useLegacyUIOnNextLaunch() }
                     .foregroundStyle(ThemeColors.accentInk)
                     .disabled(shell.operationBlocksUI)
