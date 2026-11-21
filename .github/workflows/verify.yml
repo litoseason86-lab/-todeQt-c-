@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   macos-verify:
-    name: macOS 构建与全量回归
+    name: macOS 构建与回归
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -36,7 +36,7 @@ jobs:
           cache: true
 
       - name: 缓存固定 Qt SQLite 驱动官方源码包
-        uses: actions/cache@d4323d4df104b026c6a166049fb557cb5d0bedfc # v4.2.0
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: .cache/qt-sqlite-6.10.3/qtbase.tar.xz
           key: qt-sqlite-6.10.3-383dc907816338f0cba72088a524c07458dfc69ce684ca9132fcc4fe91c24b0b
@@ -97,7 +97,7 @@ jobs:
           cache: true
 
       - name: 缓存固定 Qt SQLite 驱动官方源码包
-        uses: actions/cache@d4323d4df104b026c6a166049fb557cb5d0bedfc # v4.2.0
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: .cache/qt-sqlite-6.10.3/qtbase.tar.xz
           key: qt-sqlite-6.10.3-383dc907816338f0cba72088a524c07458dfc69ce684ca9132fcc4fe91c24b0b
@@ -162,7 +162,7 @@ jobs:
 
       - name: 配置并执行 iOS 不签名编译
         run: |
-          HOST_CFG="$(find "${{ runner.temp }}/qt-host" -maxdepth 6 -path '*/lib/cmake/Qt6/Qt6Config.cmake' -print -quit)"
+          HOST_CFG="$(find "${{ runner.temp }}/qt-host" -maxdepth 8 -path '*/lib/cmake/Qt6/Qt6Config.cmake' -print -quit)"
           if [ -z "$HOST_CFG" ]; then
             echo "未在 ${{ runner.temp }}/qt-host 下找到主机 Qt6Config.cmake" >&2
             exit 1
