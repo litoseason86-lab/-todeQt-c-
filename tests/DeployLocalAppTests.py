@@ -19,8 +19,10 @@ class DeployLocalAppTests(unittest.TestCase):
         self.write_binary(self.destination, "PomodoroTodo", b"old-main")
         self.write_binary(self.destination, "PomodoroTodoMcp", b"old-helper")
         self.write_binary(self.destination, "PomodoroTodoBackupExecutor", b"old-backup-executor")
+        self.write_sqlite_plugin(self.destination, b"old-sqlite-plugin")
         self.write_binary(self.source, "PomodoroTodo", b"new-main")
         self.write_binary(self.source, "PomodoroTodoBackupExecutor", b"new-backup-executor")
+        self.write_sqlite_plugin(self.source, b"new-sqlite-plugin")
         self.write_identity(self.source)
         self.write_identity(self.destination)
 
@@ -33,16 +35,24 @@ class DeployLocalAppTests(unittest.TestCase):
         path.write_bytes(data)
         path.chmod(mode)
 
-    def deploy(self):
+    def write_sqlite_plugin(self, bundle, data=b"sqlite-driver", mode=0o755):
+        path = bundle / "Contents" / "PlugIns" / "sqldrivers" / "libptqsqlite.dylib"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        path.chmod(mode)
+
+    def deploy(self, *extra_args):
         return subprocess.run(["cmake", f"-DSOURCE_APP={self.source}", f"-DDESTINATION_APP={self.destination}",
                                "-DBUNDLE_EXECUTABLE=PomodoroTodo", "-DHELPER_EXECUTABLE=PomodoroTodoMcp",
                                "-DBACKUP_EXECUTOR=PomodoroTodoBackupExecutor",
+                               *extra_args,
                                "-P", str(SCRIPT)], capture_output=True, text=True, timeout=15)
 
     def assert_old_preserved(self):
         self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodo").read_bytes(), b"old-main")
         self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodoMcp").read_bytes(), b"old-helper")
         self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodoBackupExecutor").read_bytes(), b"old-backup-executor")
+        self.assertEqual((self.destination / "Contents/PlugIns/sqldrivers/libptqsqlite.dylib").read_bytes(), b"old-sqlite-plugin")
         self.assertFalse(list(self.root.glob("target.app.*")))
 
     def test_missing_helper_keeps_old_package(self):
@@ -148,6 +158,53 @@ class DeployLocalAppTests(unittest.TestCase):
     def test_both_binaries_replaced_together(self):
         self.write_binary(self.source, "PomodoroTodoMcp", b"new-helper")
         result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodo").read_bytes(), b"new-main")
+        self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodoMcp").read_bytes(), b"new-helper")
+        self.assertFalse(list(self.root.glob("target.app.*")))
+
+    # 保证缺少内置 SQLite 驱动插件的新包拒绝部署，旧包完整保留。
+    def test_missing_sqlite_plugin_keeps_old_package(self):
+        self.write_binary(self.source, "PomodoroTodoMcp", b"new-helper")
+        plugin = self.source / "Contents/PlugIns/sqldrivers/libptqsqlite.dylib"
+        self.assertTrue(plugin.is_file())
+        plugin.unlink()
+        result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("libptqsqlite.dylib", result.stderr)
+        self.assert_old_preserved()
+
+    # 保证原子替换完成后若 lsregister 索引刷新失败，只输出告警而不报错破坏已成功部署的状态。
+    def test_lsregister_failure_warns_after_atomic_deploy(self):
+        self.write_binary(self.source, "PomodoroTodoMcp", b"new-helper")
+        result = self.deploy("-DLSREGISTER=/usr/bin/false")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodo").read_bytes(), b"new-main")
+        self.assertEqual((self.destination / "Contents/PlugIns/sqldrivers/libptqsqlite.dylib").read_bytes(), b"new-sqlite-plugin")
+        self.assertFalse(list(self.root.glob("target.app.*")))
+        self.assertIn("LaunchServices", result.stderr)
+
+    # 保证两步回退模式在中途中断留下 .previous-* 且目标入口缺失时，下次部署即使新包不完整也会先把旧包恢复回固定入口。
+    def test_interrupted_previous_backup_recovered_even_when_new_source_invalid(self):
+        interrupted_prev = self.root / "target.app.previous-deadbeef0123"
+        self.destination.rename(interrupted_prev)
+        self.assertFalse(self.destination.exists())
+        self.assertTrue(interrupted_prev.is_dir())
+        # source 此时缺少 PomodoroTodoMcp，本次部署应当失败，但中断遗留的旧包必须已恢复到 destination
+        result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.destination.is_dir())
+        self.assert_old_preserved()
+
+    # 保证两步回退模式中断后重新部署合法新包时，先恢复再原子升级为新包并清理全部临时目录。
+    def test_interrupted_previous_backup_and_stale_staging_cleaned_on_upgrade(self):
+        self.write_binary(self.source, "PomodoroTodoMcp", b"new-helper")
+        interrupted_prev = self.root / "target.app.previous-deadbeef0123"
+        self.destination.rename(interrupted_prev)
+        stale_staging = self.root / "target.app.staging-cafebabe0123"
+        self.write_binary(stale_staging, "PomodoroTodo", b"stale-main")
+        self.write_identity(stale_staging)
+        result = self.deploy("-DPOMODORO_DEPLOY_FORCE_TWO_STEP=ON")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodo").read_bytes(), b"new-main")
         self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodoMcp").read_bytes(), b"new-helper")

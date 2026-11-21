@@ -28,23 +28,86 @@ ALLOWED_QML_LINKS = ALLOWED_QT_LINKS | {
     "Qt6::Quick",
     "Qt6::QuickControls2",
 }
-SYNC_FILES = {"SyncEngine", "SyncStore", "SyncApplier", "SyncWorker", "SyncFiles", "SyncRecord"}
+SYNC_CORE_FILES = frozenset({
+    "LocalSyncFolder",
+    "RemoteSyncFolder",
+    "SyncApplier",
+    "SyncCrypto",
+    "SyncEngine",
+    "SyncFiles",
+    "SyncFolder",
+    "SyncHttpClient",
+    "SyncPairing",
+    "SyncRecord",
+    "SyncSchema",
+    "SyncServerWatcher",
+    "SyncStore",
+    "SyncWorker",
+})
+SYNC_COORDINATOR_FILES = frozenset({
+    "SyncController",
+    "SyncNotifier",
+    "SyncedSettings",
+})
+# 覆盖全部 071 同步核心文件与协同适配器，避免新增 Sync* 模块漏出 R4 边界。
+SYNC_FILES = set(SYNC_CORE_FILES | SYNC_COORDINATOR_FILES)
 SYNC_INCLUDE_ALLOWLIST = {
-    "SyncEngine.h",
-    "SyncStore.h",
+    "LocalSyncFolder.h",
+    "RemoteSyncFolder.h",
     "SyncApplier.h",
-    "SyncWorker.h",
+    "SyncCrypto.h",
+    "SyncEngine.h",
     "SyncFiles.h",
-    "SyncRecord.h",
     "SyncFolder.h",
+    "SyncHttpClient.h",
+    "SyncPairing.h",
+    "SyncRecord.h",
     "SyncSchema.h",
+    "SyncServerWatcher.h",
+    "SyncStore.h",
+    "SyncWorker.h",
     "DatabaseManager.h",
     "ServiceReadResult.h",
     "FocusSessionRules.h",
     "RoutineRules.h",
 }
+SYNC_COORDINATOR_HEADER_ALLOWLIST = set(SYNC_INCLUDE_ALLOWLIST) | {
+    "SyncController.h",
+    "SyncNotifier.h",
+    "SyncedSettings.h",
+}
+SYNC_COORDINATOR_CPP_ALLOWLIST = {
+    "SyncedSettings": SYNC_INCLUDE_ALLOWLIST | {
+        "SyncedSettings.h",
+        "AppSettings.h",
+        "ScheduleService.h",
+    },
+    "SyncController": SYNC_INCLUDE_ALLOWLIST | {
+        "SyncController.h",
+        "SyncNotifier.h",
+        "SyncedSettings.h",
+        "AppSettings.h",
+        "ScheduleService.h",
+    },
+    "SyncNotifier": SYNC_INCLUDE_ALLOWLIST | {
+        "SyncNotifier.h",
+        "SyncedSettings.h",
+        "AppSettings.h",
+        "CategoryManager.h",
+        "CountdownService.h",
+        "FocusHistoryService.h",
+        "KnowledgeGapService.h",
+        "MemoService.h",
+        "RoutineManager.h",
+        "ScheduleService.h",
+        "TaskManager.h",
+        "TrashStore.h",
+    },
+}
 INCLUDE_RE = re.compile(r"^\s*#\s*include\s*[<\"]([^>\"]+)[>\"]")
 QML_INCLUDE_RE = re.compile(r"^(?:QQml|QQuick|QJS|QtQml/|QtQuick/)")
+PLATFORM_MACRO_RE = re.compile(r"\b(?:Q_OS_[A-Za-z0-9_]*|__APPLE__|TARGET_OS_[A-Za-z0-9_]*)\b")
+APPLE_ONLY_MACRO_RE = re.compile(r"\b(?:__APPLE__|TARGET_OS_[A-Za-z0-9_]*)\b")
 
 # R9：服务单例只减不增（062 A057）。存量约 569 处 ::instance() 调用不一次性迁移，迁移顺序见
 # docs/062-服务单例迁移设计.md；新服务由 SharedApp 构造、经 AppServices 注入。名单按 instance()
@@ -72,9 +135,17 @@ SINGLETON_ALLOWLIST = frozenset({
     "TrashNotifier",
     "TrashService",
 })
-# 只认类内的静态声明（out-of-line 定义不带 static，不会重复计数）；允许 const、命名空间限定和任意空白。
+# 只认类内的静态声明（out-of-line 定义如 Kept::instance 不计入）；支持指针、引用、east-const、instance(void)、属性、inline 与尾置返回类型。
+SINGLETON_PREFIX = r"(?:(?:inline|static|\[\[[^\]]*\]\])\s+)*\bstatic\s+(?:(?:inline|const|\[\[[^\]]*\]\])\s+)*"
+SINGLETON_TYPE = r"((?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)"
 SINGLETON_DECL_RE = re.compile(
-    r"\bstatic\s+(?:const\s+)?((?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)\s*\*\s*instance\s*\(\s*\)"
+    SINGLETON_PREFIX + SINGLETON_TYPE + r"(?:\s+const)?\s*[*&]\s*(?:\bconst\s+)?(?<!::)\binstance\s*\(\s*(?:void\s*)?\)"
+)
+SINGLETON_TRAILING_RE = re.compile(
+    SINGLETON_PREFIX
+    + r"auto\s+(?<!::)\binstance\s*\(\s*(?:void\s*)?\)\s*(?:const\s+|noexcept(?:\s*\([^)]*\))?\s*)*->\s*(?:const\s+)?"
+    + SINGLETON_TYPE
+    + r"(?:\s+const)?\s*[*&]"
 )
 
 
@@ -114,17 +185,20 @@ def link_items(value: object, target: str, attribute: str) -> tuple[list[str], b
     return result, valid
 
 
-def strip_comments_and_strings(code: str) -> str:
-    """移除 C++ 源码中的注释和字符串字面量，保留其余代码结构与必要词法分隔。"""
-    result = []
+def strip_comments_and_continuations(code: str) -> str:
+    """移除反斜杠续行、行注释与块注释，但保留引号/尖括号文本，专用于精准扫描 #include 指令。"""
+    code = code.replace("\r\n", "\n")
+    while "\\\n" in code:
+        code = code.replace("\\\n", "")
+    result: list[str] = []
     i = 0
     n = len(code)
     while i < n:
+        c = code[i]
         if i + 1 < n and code[i : i + 2] == "//":
             i += 2
             while i < n and code[i] != "\n":
                 i += 1
-            # 换行符在循环下一步处理，保留换行结构
         elif i + 1 < n and code[i : i + 2] == "/*":
             i += 2
             has_newline = False
@@ -133,9 +207,92 @@ def strip_comments_and_strings(code: str) -> str:
                     has_newline = True
                 i += 1
             i += 2
-            # 块注释用一个空格（或换行）替代，保留词法分隔，防止前后 token 拼接
             result.append("\n" if has_newline else " ")
-        elif code[i] == '"':
+        elif c in ('"', "'"):
+            q = c
+            result.append(c)
+            i += 1
+            while i < n:
+                ch = code[i]
+                result.append(ch)
+                if ch == "\\" and i + 1 < n:
+                    result.append(code[i + 1])
+                    i += 2
+                    continue
+                i += 1
+                if ch == q:
+                    break
+        else:
+            result.append(c)
+            i += 1
+    return "".join(result)
+
+
+def strip_comments_and_strings(code: str) -> str:
+    """按 C++ 词法移除注释与字符串内容，正确处理反斜杠续行、Raw String 与 C++14 数字分隔符。"""
+    code = code.replace("\r\n", "\n")
+    while "\\\n" in code:
+        code = code.replace("\\\n", "")
+
+    result: list[str] = []
+    i = 0
+    n = len(code)
+    while i < n:
+        c = code[i]
+        if i + 1 < n and code[i : i + 2] == "//":
+            i += 2
+            while i < n and code[i] != "\n":
+                i += 1
+        elif i + 1 < n and code[i : i + 2] == "/*":
+            i += 2
+            has_newline = False
+            while i + 1 < n and code[i : i + 2] != "*/":
+                if code[i] == "\n":
+                    has_newline = True
+                i += 1
+            i += 2
+            result.append("\n" if has_newline else " ")
+        elif c.isdigit() or (c == "." and i + 1 < n and code[i + 1].isdigit()):
+            # 扫描完整数字字面量，跳过内部的 C++14 单引号数字分隔符，避免把 40'000 当成字符字面量起点。
+            num_buf: list[str] = [c]
+            i += 1
+            while i < n:
+                ch = code[i]
+                if ch in "eEpP" and i + 1 < n and code[i + 1] in "+-":
+                    num_buf.append(ch)
+                    num_buf.append(code[i + 1])
+                    i += 2
+                elif ch == "'" and i + 1 < n and (code[i + 1].isalnum() or code[i + 1] == "_"):
+                    i += 1
+                elif ch.isalnum() or ch in "._":
+                    num_buf.append(ch)
+                    i += 1
+                else:
+                    break
+            result.append("".join(num_buf))
+        elif c.isalpha() or c == "_":
+            # 先读出完整标识符，再判断是否属于 u8/u/U/L/R 字符串前缀（避免 myR"..." 误判）。
+            j = i + 1
+            while j < n and (code[j].isalnum() or code[j] == "_"):
+                j += 1
+            ident = code[i:j]
+            if ident in {"R", "u8R", "uR", "UR", "LR"} and j < n and code[j] == '"':
+                raw_m = re.match(r'"([^\s()\\]{0,16})\(', code[j:])
+                if raw_m:
+                    delim = ")" + raw_m.group(1) + '"'
+                    end_pos = code.find(delim, j + raw_m.end())
+                    i = (end_pos + len(delim)) if end_pos >= 0 else n
+                    result.append('""')
+                    continue
+            if ident in {"u8", "u", "U", "L"} and j < n and code[j] == '"':
+                i = j
+                continue
+            if ident in {"u8", "u", "U", "L"} and j < n and code[j] == "'":
+                i = j
+                continue
+            result.append(ident)
+            i = j
+        elif c == '"':
             i += 1
             while i < n:
                 if code[i] == "\\" and i + 1 < n:
@@ -146,7 +303,7 @@ def strip_comments_and_strings(code: str) -> str:
                 else:
                     i += 1
             result.append('""')
-        elif code[i] == "'":
+        elif c == "'":
             i += 1
             while i < n:
                 if code[i] == "\\" and i + 1 < n:
@@ -158,25 +315,80 @@ def strip_comments_and_strings(code: str) -> str:
                     i += 1
             result.append("''")
         else:
-            result.append(code[i])
+            result.append(c)
             i += 1
     return "".join(result)
 
 
-def parse_scope_declarations(
-    code: str, current_ns: list[str]
-) -> tuple[list[dict], list[str]]:
-    """递归解析 code 文本中的命名空间与函数定义，并收集不支持解析的语法错误。
+def _match_function_header(header: str) -> tuple[str, str] | None:
+    """用括号配对解析 C++ 函数定义头，支持参数默认值中的嵌套括号、尾置返回与成员初始化列表。"""
+    # 顶层出现 `=`（在括号外），说明是变量/lambda 初始化而非函数签名。
+    pdepth = 0
+    adepth = 0
+    top_parens: list[tuple[int, int]] = []
+    paren_start = -1
+    limit_idx = len(header)
+    i = 0
+    while i < len(header):
+        ch = header[i]
+        if ch == "<":
+            adepth += 1
+        elif ch == ">" and adepth > 0:
+            adepth -= 1
+        elif ch == "(":
+            if pdepth == 0:
+                paren_start = i
+            pdepth += 1
+        elif ch == ")" and pdepth > 0:
+            pdepth -= 1
+            if pdepth == 0 and paren_start >= 0:
+                top_parens.append((paren_start, i))
+                paren_start = -1
+        elif pdepth == 0:
+            if ch == "=":
+                return None
+            if ch == "-" and i + 1 < len(header) and header[i + 1] == ">":
+                limit_idx = i
+                break
+            if ch == ":" and not (i + 1 < len(header) and header[i + 1] == ":") and not (i > 0 and header[i - 1] == ":"):
+                limit_idx = i
+                break
+        i += 1
 
-    返回 (functions, unsupported_errors)。
-    functions 列表中每项表示一个函数定义：
-      name: 函数简单名称，如 'loadSettings'
-      namespace: 当前所在的命名空间路径列表，如 ['startup'] 或 ['']（匿名）或 []（全局）
-      body: 函数体文本（不含外层大括号）
-      is_main: bool，是否为 main 函数
-    """
+    candidates = [pair for pair in top_parens if pair[1] < limit_idx]
+    if not candidates:
+        return None
+    ps, pe = candidates[-1]
+    suffix = header[pe + 1 : limit_idx].strip()
+    # 仅允许 noexcept / const / override / final / 空格作为签名后修饰符。
+    cleaned_suffix = re.sub(r"\bnoexcept\s*(?:\([^)]*\))?", "", suffix)
+    for kw in ("const", "override", "final", "volatile", "&", "&&"):
+        cleaned_suffix = re.sub(r"(?<!\w)" + re.escape(kw) + r"(?!\w)" if kw.isalpha() else re.escape(kw), "", cleaned_suffix)
+    if cleaned_suffix.strip():
+        return None
+
+    before = header[:ps].strip()
+    name_m = re.search(r"([A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*)$", before)
+    if not name_m:
+        return None
+    full_name = name_m.group(1)
+    simple = full_name.split("::")[-1].strip()
+    if simple in {"if", "while", "for", "switch", "catch", "decltype", "alignas"}:
+        return None
+    return full_name, header[ps + 1 : pe]
+
+
+def parse_scope_declarations(
+    code: str,
+    current_ns: list[str],
+    declared_classes: set[str] | None = None,
+) -> tuple[list[dict], list[str], list[tuple[tuple[str, ...], str]]]:
+    """递归解析命名空间、函数定义与作用域外顶层语句。"""
+    if declared_classes is None:
+        declared_classes = set()
     functions: list[dict] = []
     unsupported_errors: list[str] = []
+    top_statements: list[tuple[tuple[str, ...], str]] = []
     i = 0
     n = len(code)
     last_stmt_end = 0
@@ -184,12 +396,14 @@ def parse_scope_declarations(
     while i < n:
         char = code[i]
         if char == ";":
+            stmt = code[last_stmt_end:i].strip()
+            if stmt:
+                top_statements.append((tuple(current_ns), stmt))
             last_stmt_end = i + 1
             i += 1
         elif char == "{":
             header = code[last_stmt_end:i].strip()
 
-            # 寻找配对的闭合大括号
             depth = 1
             j = i + 1
             while j < n and depth > 0:
@@ -202,7 +416,7 @@ def parse_scope_declarations(
             if depth == 0:
                 block_body = code[i + 1 : j - 1]
 
-                # 1. 检查是否为命名空间：namespace [name] {
+                # 1. namespace [name] { ... }
                 ns_match = re.search(
                     r"\bnamespace(?:\s+([A-Za-z_][\w:]*))?\s*$", header, re.DOTALL
                 )
@@ -213,40 +427,51 @@ def parse_scope_declarations(
                         sub_ns = current_ns + parts
                     else:
                         sub_ns = current_ns + [""]
-                    sub_funcs, sub_errs = parse_scope_declarations(block_body, sub_ns)
+                    sub_funcs, sub_errs, sub_tops = parse_scope_declarations(
+                        block_body, sub_ns, declared_classes
+                    )
                     functions.extend(sub_funcs)
                     unsupported_errors.extend(sub_errs)
+                    top_statements.extend(sub_tops)
+                    last_stmt_end = j
+                    i = j
+                    continue
+
+                # 2. class / struct 定义（注意避免误伤返回值含 struct Foo* 的函数定义）
+                struct_head_m = re.match(
+                    r"^(?:template\s*<[^>]*>\s*)?(class|struct)\s+([A-Za-z_]\w*)", header
+                )
+                parsed_fn = _match_function_header(header)
+                if struct_head_m or (re.search(r"\b(?:class|struct)\b", header) and parsed_fn is None):
+                    if struct_head_m:
+                        declared_classes.add(struct_head_m.group(2))
+                    if re.search(r"\([^)]*\)[^;{]*\{", block_body):
+                        unsupported_errors.append("class/struct 内包含成员函数实现")
+                    top_statements.append((tuple(current_ns), header + "{" + block_body + "}"))
+                    last_stmt_end = j
+                    i = j
+                    continue
+
+                # 3. 命名函数定义
+                if parsed_fn is not None:
+                    full_fn_name, params_str = parsed_fn
+                    fn_parts = [p.strip() for p in full_fn_name.split("::") if p.strip()]
+                    func_name = fn_parts[-1]
+                    extra_ns = fn_parts[:-1]
+                    if any(part in declared_classes for part in extra_ns):
+                        unsupported_errors.append(f"class/struct 成员函数类外定义 {full_fn_name}")
+                    fn_ns = current_ns + extra_ns
+                    is_main = func_name == "main" and not fn_ns
+                    functions.append({
+                        "name": func_name,
+                        "namespace": list(fn_ns),
+                        "body": block_body,
+                        "params": params_str,
+                        "is_main": is_main,
+                    })
                 else:
-                    # 2. 检查是否为 class 或 struct 定义
-                    struct_match = re.search(r"\b(?:class|struct)\b", header) and not re.search(
-                        r"\)\s*(?:const|noexcept|override|final|\s)*$", header
-                    )
-                    if struct_match:
-                        # 若类/结构体内包含成员函数实现体（覆盖普通方法、const、noexcept、override 等限定符修饰的方法实现）
-                        # 轻量门禁不支持解析类作用域，明确诊断并拒绝
-                        if re.search(r"\([^)]*\)[^;{]*\{", block_body):
-                            unsupported_errors.append("class/struct 内包含成员函数实现")
-                    else:
-                        # 3. 检查是否为函数定义
-                        fn_match = re.search(
-                            r"\b([A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*)\s*\([^)]*\)\s*(?:const|noexcept|override|final|\s)*$",
-                            header,
-                            re.DOTALL,
-                        )
-                        if fn_match:
-                            full_fn_name = fn_match.group(1)
-                            fn_parts = [p.strip() for p in full_fn_name.split("::") if p.strip()]
-                            func_name = fn_parts[-1]
-                            extra_ns = fn_parts[:-1]
-                            if func_name not in {"if", "while", "for", "switch", "catch"}:
-                                fn_ns = current_ns + extra_ns
-                                is_main = (func_name == "main" and not fn_ns)
-                                functions.append({
-                                    "name": func_name,
-                                    "namespace": list(fn_ns),
-                                    "body": block_body,
-                                    "is_main": is_main,
-                                })
+                    # 非命名函数的块（如全局 brace/lambda 初始化），交给顶层语句检查。
+                    top_statements.append((tuple(current_ns), header + "{" + block_body + "}"))
 
                 last_stmt_end = j
                 i = j
@@ -255,7 +480,7 @@ def parse_scope_declarations(
         else:
             i += 1
 
-    return functions, unsupported_errors
+    return functions, unsupported_errors, top_statements
 
 
 CALL_RE = re.compile(
@@ -414,12 +639,20 @@ def check_entry_r8(entry_path: Path) -> bool:
         return False
 
     clean_code = strip_comments_and_strings(raw_code)
+    # 剥离 #include / #pragma 行，防止 `#include <QSettings>` 被顶层语句检查误当成全局代码。
+    clean_code = re.sub(r"(?m)^\s*#\s*(?:include|pragma|line)\b[^\n]*", "", clean_code)
 
-    # 0. 检查轻量门禁不支持的语法：using namespace、using 符号声明、命名空间别名
+    # 入口文件禁止使用条件编译或宏定义（防止用 #ifdef 包裹 applyApplicationIdentity 或用 #define 隐藏危险操作）
+    if re.search(r"(?m)^\s*#\s*(?:if|ifdef|ifndef|elif|else|endif|define|undef)\b", clean_code):
+        fail(f"R8：{entry_path} 中存在不支持解析的预处理条件编译或宏指令，轻量门禁无法保证启动时序，拒绝放行")
+        return False
+
+    # 0. 检查轻量门禁不支持的语法：using namespace、无等号 using 符号声明、命名空间别名与危险类型别名追踪
     if re.search(r"\busing\s+namespace\b", clean_code):
         fail(f"R8：{entry_path} 中存在不支持解析的语法（using namespace 指令），轻量门禁无法保证启动时序，拒绝放行")
         return False
 
+    alias_targets: dict[str, str] = {}
     for m in re.finditer(r"\busing\s+([^;{]+);", clean_code):
         stmt = m.group(1).strip()
         if stmt.startswith("namespace ") or stmt.startswith("namespace\t"):
@@ -427,12 +660,19 @@ def check_entry_r8(entry_path: Path) -> bool:
         if "=" not in stmt:
             fail(f"R8：{entry_path} 中存在不支持解析的语法（using 符号声明），轻量门禁无法保证启动时序，拒绝放行")
             return False
+        lhs, rhs = stmt.split("=", 1)
+        alias_name = lhs.strip().split()[-1] if lhs.strip() else ""
+        if re.fullmatch(r"[A-Za-z_]\w*", alias_name):
+            alias_targets[alias_name] = rhs.strip()
+
+    for m in re.finditer(r"\btypedef\s+([^;{]+)\s+([A-Za-z_]\w*)\s*;", clean_code):
+        alias_targets[m.group(2)] = m.group(1).strip()
 
     if re.search(r"\bnamespace\s+[A-Za-z_]\w*\s*=\s*[A-Za-z_][\w:]*\s*;", clean_code):
         fail(f"R8：{entry_path} 中存在不支持解析的语法（命名空间别名定义），轻量门禁无法保证启动时序，拒绝放行")
         return False
 
-    all_funcs, unsupported_errs = parse_scope_declarations(clean_code, [])
+    all_funcs, unsupported_errs, top_statements = parse_scope_declarations(clean_code, [])
     if unsupported_errs:
         fail(f"R8：{entry_path} 中存在不支持解析的语法（{unsupported_errs[0]}），轻量门禁无法保证启动时序，拒绝放行")
         return False
@@ -444,8 +684,8 @@ def check_entry_r8(entry_path: Path) -> bool:
 
     main_body = main_funcs[0]["body"]
 
-    # 1. 检查 QGuiApplication 创建
-    app_match = re.search(r"\bQGuiApplication\b", main_body)
+    # 1. 检查 QGuiApplication 实例创建（排除 QGuiApplication::setAttribute 等静态调用伪装）
+    app_match = re.search(r"\bQGuiApplication\b(?!\s*::)", main_body)
     if not app_match:
         fail(f"R8：{entry_path} 的 main() 中未创建 QGuiApplication")
         return False
@@ -464,14 +704,37 @@ def check_entry_r8(entry_path: Path) -> bool:
         )
         return False
 
-    # 3. 检查 main() 内直接危险操作是否出现在身份设置之前
+    # 3. 检查 main() 内直接危险操作（含单例 instance() 访问与通过类型别名引入的危险类型）是否出现在身份设置之前
     dangerous_patterns: list[tuple[str, re.Pattern]] = [
         ("QSettings", re.compile(r"\bQSettings\b")),
         ("QStandardPaths", re.compile(r"\bQStandardPaths\b")),
         ("MacPreferencesCleanup", re.compile(r"\bMacPreferencesCleanup\b")),
         ("SingleInstanceGuard", re.compile(r"\bSingleInstanceGuard\b")),
         ("openDatabase", re.compile(r"\bopenDatabase\s*\(")),
+        ("resolveProduction", re.compile(r"\bresolveProduction\s*\(")),
+        ("McpAccessController", re.compile(r"\bMcpAccessController\b")),
+        ("MacSqliteRuntime", re.compile(r"\bMacSqliteRuntime\b")),
+        ("AppSettings", re.compile(r"\bAppSettings\b")),
+        ("BackupService", re.compile(r"\bBackupService\b")),
+        ("DatabaseManager", re.compile(r"\bDatabaseManager\b")),
+        ("SharedApp", re.compile(r"\bSharedApp\b")),
+        ("singleton instance()", re.compile(r"\b[A-Za-z_]\w*\s*::\s*instance\s*\(")),
     ]
+
+    # 展开 using/typedef 类型别名闭包：using S = QSettings; using S2 = S; 均视为危险类型。
+    dangerous_aliases: set[str] = set()
+    changed_alias = True
+    while changed_alias:
+        changed_alias = False
+        for alias_name, rhs in alias_targets.items():
+            if alias_name in dangerous_aliases:
+                continue
+            hits_base = any(p.search(rhs) for _, p in dangerous_patterns)
+            hits_alias = any(re.search(rf"\b{re.escape(da)}\b", rhs) for da in dangerous_aliases)
+            if hits_base or hits_alias:
+                dangerous_aliases.add(alias_name)
+                dangerous_patterns.append((f"alias {alias_name}", re.compile(rf"\b{re.escape(alias_name)}\b")))
+                changed_alias = True
 
     for name, pattern in dangerous_patterns:
         for m in pattern.finditer(main_body):
@@ -482,7 +745,7 @@ def check_entry_r8(entry_path: Path) -> bool:
                 )
                 return False
 
-    # 4. 分析 main 之外的辅助函数：按命名空间与函数名分组，保守合并同名重载危险性
+    # 4. 分析 main 之外的辅助函数（同时覆盖函数体与参数默认值表达式）
     grouped_funcs: dict[tuple[tuple[str, ...], str], dict] = {}
     for fn in all_funcs:
         if fn["is_main"]:
@@ -501,7 +764,7 @@ def check_entry_r8(entry_path: Path) -> bool:
                 "bodies": [],
                 "is_dangerous": False,
             }
-        grouped_funcs[key]["bodies"].append(fn["body"])
+        grouped_funcs[key]["bodies"].append(fn["params"] + "\n" + fn["body"])
 
     # 4.1 初步判定直接危险性：只要同一分组内的任意重载包含危险操作，该函数组即为危险
     for gid, ginfo in grouped_funcs.items():
@@ -530,6 +793,21 @@ def check_entry_r8(entry_path: Path) -> bool:
                 if a_info["is_dangerous"]:
                     break
 
+    # 4.3 检查顶层/命名空间静态全局初始化（全部早于 main() 执行）
+    for stmt_ns, stmt in top_statements:
+        for name, pattern in dangerous_patterns:
+            if pattern.search(stmt):
+                fail(f"R8：{entry_path} 的全局/命名空间作用域初始化包含危险操作 {name}（早于 main 执行）")
+                return False
+        for is_global, qual_parts, call_name, _ in extract_calls(stmt):
+            target_sym = resolve_call(stmt_ns, is_global, qual_parts, call_name, grouped_funcs)
+            if target_sym is not None and target_sym["is_dangerous"]:
+                fail(
+                    f"R8：{entry_path} 的全局/命名空间作用域调用了含危险操作的辅助函数 "
+                    f"{target_sym['display_name']}（早于 main 执行）"
+                )
+                return False
+
     # 5. 检查 main() 中调用的辅助函数（按相同解析规则，检查身份设置之前的调用）
     caller_ns: tuple[str, ...] = ()  # main() 位于顶层全局作用域
     for is_global, qual_parts, call_name, call_pos in extract_calls(main_body):
@@ -557,10 +835,13 @@ def find_singletons(source_root: Path) -> dict[str, list[Path]] | None:
         except (OSError, UnicodeDecodeError) as exc:
             fail(f"R9：无法读取头文件 {header}: {exc}")
             return None
-        # 先去掉注释和字符串，注释里举例的 static X* instance() 不算声明。
-        for match in SINGLETON_DECL_RE.finditer(strip_comments_and_strings(text)):
-            type_name = re.sub(r"\s+", "", match.group(1)).split("::")[-1]
-            found.setdefault(type_name, []).append(header)
+        stripped = strip_comments_and_strings(text)
+        for pattern in (SINGLETON_DECL_RE, SINGLETON_TRAILING_RE):
+            for match in pattern.finditer(stripped):
+                type_name = re.sub(r"\s+", "", match.group(1)).split("::")[-1]
+                paths = found.setdefault(type_name, [])
+                if header not in paths:
+                    paths.append(header)
     return found
 
 
@@ -638,6 +919,26 @@ def main() -> int:
             fail(f"R1：PTCore 不允许链接 {dependency!r}，允许集合为 {sorted(ALLOWED_CORE_LINKS)}")
             valid = False
 
+    def transitive_project_includes(start_file: Path) -> set[Path]:
+        visited: set[Path] = set()
+        queue = [start_file]
+        while queue:
+            cur = queue.pop(0)
+            try:
+                cur_text = strip_comments_and_continuations(cur.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            for inc_line in cur_text.splitlines():
+                inc_m = INCLUDE_RE.match(inc_line)
+                if not inc_m:
+                    continue
+                res = resolve_include(inc_m.group(1), cur, root)
+                if res is None or not res.is_relative_to(root) or res in visited:
+                    continue
+                visited.add(res)
+                queue.append(res)
+        return visited
+
     for source in sorted(core_sources):
         stem = source.stem
         try:
@@ -647,10 +948,21 @@ def main() -> int:
             valid = False
             continue
 
-        if "Q_OS_" in text and stem != "PhaseSoundService":
-            fail(f"R5：{source.relative_to(root)} 含 Q_OS_，现存唯一例外仅允许 PhaseSoundService.cpp")
+        stripped_text = strip_comments_and_strings(text)
+        include_scan_text = strip_comments_and_continuations(text)
+        if stem == "PhaseSoundService":
+            if APPLE_ONLY_MACRO_RE.search(stripped_text):
+                fail(f"R5：{source.relative_to(root)} 不允许使用 __APPLE__ 或 TARGET_OS_* 宏")
+                valid = False
+        elif PLATFORM_MACRO_RE.search(stripped_text):
+            fail(f"R5：{source.relative_to(root)} 含平台宏（Q_OS_/__APPLE__/TARGET_OS_），现存唯一例外仅允许 PhaseSoundService.cpp 的 Q_OS_")
             valid = False
-        for line in text.splitlines():
+
+        if "Sync" in stem and stem not in SYNC_FILES:
+            fail(f"R4：同步服务文件 {source.relative_to(root)} 未纳入 SYNC_CORE_FILES / SYNC_COORDINATOR_FILES 边界管辖")
+            valid = False
+
+        for line in include_scan_text.splitlines():
             match = INCLUDE_RE.match(line)
             if not match:
                 continue
@@ -667,12 +979,46 @@ def main() -> int:
                     f"{resolved.relative_to(root)} 不属于 PTCore"
                 )
                 valid = False
-            if stem in SYNC_FILES and resolved.name not in SYNC_INCLUDE_ALLOWLIST:
-                fail(
-                    f"R4：{source.relative_to(root)} 不允许 include {resolved.name}；"
-                    f"同步引擎白名单为 {sorted(SYNC_INCLUDE_ALLOWLIST)}"
-                )
-                valid = False
+
+        # R4 同步层直接 + 传递本地头文件闭包检查
+        if stem in SYNC_CORE_FILES:
+            for dep in sorted(transitive_project_includes(source)):
+                if dep.name not in SYNC_INCLUDE_ALLOWLIST:
+                    fail(
+                        f"R4：{source.relative_to(root)} 直接或传递 include 了 {dep.name}；"
+                        f"同步核心白名单为 {sorted(SYNC_INCLUDE_ALLOWLIST)}"
+                    )
+                    valid = False
+        elif stem in SYNC_COORDINATOR_FILES:
+            if source.suffix in {".h", ".hpp"}:
+                for dep in sorted(transitive_project_includes(source)):
+                    if dep.name not in SYNC_COORDINATOR_HEADER_ALLOWLIST:
+                        fail(
+                            f"R4：同步协同头文件 {source.relative_to(root)} 传递 include 了 {dep.name}"
+                        )
+                        valid = False
+            else:
+                allowed_direct = SYNC_COORDINATOR_CPP_ALLOWLIST[stem]
+                for line in include_scan_text.splitlines():
+                    match = INCLUDE_RE.match(line)
+                    if not match:
+                        continue
+                    resolved = resolve_include(match.group(1), source, root)
+                    if resolved is None or not resolved.is_relative_to(root):
+                        continue
+                    if resolved.name not in allowed_direct:
+                        fail(
+                            f"R4：{source.relative_to(root)} 不允许 include {resolved.name}；"
+                            f"允许集合为 {sorted(allowed_direct)}"
+                        )
+                        valid = False
+                    if resolved.stem in SYNC_CORE_FILES:
+                        for trans_dep in sorted(transitive_project_includes(resolved)):
+                            if trans_dep.name not in SYNC_INCLUDE_ALLOWLIST:
+                                fail(
+                                    f"R4：{source.relative_to(root)} 经 {resolved.name} 传递 include 了 {trans_dep.name}"
+                                )
+                                valid = False
 
     # 2. 检查 PTApp（057-B 新增 R6 规则）
     app = manifest.get("PTApp")
@@ -718,10 +1064,10 @@ def main() -> int:
             valid = False
             continue
 
-        if "Q_OS_" in text:
-            fail(f"R6：{source.relative_to(root)} 含 Q_OS_，PTApp 不允许包含任何平台分支宏")
+        if PLATFORM_MACRO_RE.search(strip_comments_and_strings(text)):
+            fail(f"R6：{source.relative_to(root)} 含平台分支宏（Q_OS_/__APPLE__/TARGET_OS_），PTApp 不允许包含任何平台分支宏")
             valid = False
-        for line in text.splitlines():
+        for line in strip_comments_and_continuations(text).splitlines():
             match = INCLUDE_RE.match(line)
             if not match:
                 continue
@@ -782,10 +1128,10 @@ def main() -> int:
             valid = False
             continue
 
-        if "Q_OS_" in text:
-            fail(f"R7：{source.relative_to(root)} 含 Q_OS_，PTQml 不允许包含任何平台分支宏")
+        if PLATFORM_MACRO_RE.search(strip_comments_and_strings(text)):
+            fail(f"R7：{source.relative_to(root)} 含平台分支宏（Q_OS_/__APPLE__/TARGET_OS_），PTQml 不允许包含任何平台分支宏")
             valid = False
-        for line in text.splitlines():
+        for line in strip_comments_and_continuations(text).splitlines():
             match = INCLUDE_RE.match(line)
             if not match:
                 continue
@@ -807,7 +1153,7 @@ def main() -> int:
             text = source.read_text(encoding="utf-8")
         except OSError as exc:
             continue
-        for line in text.splitlines():
+        for line in strip_comments_and_continuations(text).splitlines():
             match = INCLUDE_RE.match(line)
             if not match:
                 continue
@@ -833,6 +1179,62 @@ def main() -> int:
     # 6. R9 检查：服务单例只减不增
     if not check_singletons_r9(root / "src"):
         valid = False
+
+    # 7. 检查 PomodoroTodoMcp 清单：helper 禁止静态或直接链接业务库/SQLite，源码必须限制在 helper/common
+    mcp_helper = manifest.get("PomodoroTodoMcp")
+    if mcp_helper is not None:
+        if not isinstance(mcp_helper, dict) or not isinstance(mcp_helper.get("sources"), list):
+            fail("PomodoroTodoMcp 清单格式无效")
+            valid = False
+        else:
+            allowed_mcp_links = {"Qt6::Core", "Qt6::Network"}
+            # qt_add_executable 会注入 Qt6 权限插件条件生成器表达式（QT_IS_PLUGIN_GENEX）；仅放行该已知插件表达式，其余一切生成器表达式与链接仍严格受限。
+            qt_perm_plugin_re = re.compile(
+                r"^\$<\$<BOOL:\$<AND:\$<BOOL:QT_IS_PLUGIN_GENEX>,.*>>:Qt6::QDarwin[A-Za-z0-9_]*PermissionPlugin(?:_init)?>$"
+            )
+            raw_mcp_links = [
+                x for x in (mcp_helper.get("link_libraries") or [])
+                if not (isinstance(x, str) and qt_perm_plugin_re.fullmatch(x))
+            ]
+            mcp_direct, mcp_direct_ok = link_items(raw_mcp_links, "PomodoroTodoMcp", "LINK_LIBRARIES")
+            mcp_iface, mcp_iface_ok = link_items(mcp_helper.get("interface_link_libraries"), "PomodoroTodoMcp", "INTERFACE_LINK_LIBRARIES")
+            valid = valid and mcp_direct_ok and mcp_iface_ok
+            for dep in mcp_direct + mcp_iface:
+                if dep not in allowed_mcp_links:
+                    fail(f"PomodoroTodoMcp 不允许链接 {dep!r}，只允许 {sorted(allowed_mcp_links)}")
+                    valid = False
+
+            allowed_mcp_prefixes = ((root / "src/mcp/helper").resolve(), (root / "src/mcp/common").resolve())
+            forbidden_mcp_inc_prefixes = (
+                "QSql", "QtSql/", "QGui", "QtGui/", "QtWidgets/", "QWidget",
+                "QApplication", "QMainWindow", "QDialog", "QtConcurrent", "QFuture", "QtMultimedia",
+            )
+            for raw in mcp_helper["sources"]:
+                if not isinstance(raw, str):
+                    fail(f"PomodoroTodoMcp.sources 含非文本项：{raw!r}")
+                    valid = False
+                    continue
+                src_p = Path(raw)
+                if not src_p.is_absolute():
+                    src_p = root / src_p
+                src_p = src_p.resolve()
+                if not any(src_p.is_relative_to(pref) for pref in allowed_mcp_prefixes):
+                    fail(f"PomodoroTodoMcp 禁止直接编入外部源码：{src_p.relative_to(root)}")
+                    valid = False
+                if src_p.is_file():
+                    for line in strip_comments_and_continuations(src_p.read_text(encoding="utf-8")).splitlines():
+                        inc_m = INCLUDE_RE.match(line)
+                        if not inc_m:
+                            continue
+                        inc = inc_m.group(1)
+                        if QML_INCLUDE_RE.match(inc) or "sqlite" in inc.lower() or inc.startswith(forbidden_mcp_inc_prefixes):
+                            fail(f"PomodoroTodoMcp 源文件 {src_p.relative_to(root)} 禁止 include {inc}")
+                            valid = False
+                        res = resolve_include(inc, src_p, root)
+                        if res is not None and res.is_relative_to(root):
+                            if not any(res.is_relative_to(pref) for pref in allowed_mcp_prefixes):
+                                fail(f"PomodoroTodoMcp 禁止 include {res.relative_to(root)}")
+                                valid = False
 
     if not valid:
         return 1

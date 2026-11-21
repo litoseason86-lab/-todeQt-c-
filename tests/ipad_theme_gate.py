@@ -51,6 +51,78 @@ def theme_values(path):
     return result
 
 
+def strip_swift_comments(source: str) -> str:
+    """移除 Swift 行注释与支持嵌套的块注释，保留或清空字符串字面量内容避免 URL 里的 // 吞掉同行后续代码。"""
+    out = []
+    i, n = 0, len(source)
+    while i < n:
+        if source.startswith("//", i):
+            i += 2
+            while i < n and source[i] != "\n":
+                i += 1
+        elif source.startswith("/*", i):
+            depth = 1
+            i += 2
+            while i < n and depth > 0:
+                if source.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif source.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    if source[i] == "\n":
+                        out.append("\n")
+                    i += 1
+        elif source.startswith('"""', i):
+            out.append('""')
+            i += 3
+            while i < n and not source.startswith('"""', i):
+                if source[i] == "\\" and i + 1 < n:
+                    if source[i + 1] == "\n":
+                        out.append("\n")
+                    i += 2
+                    continue
+                if source[i] == "\n":
+                    out.append("\n")
+                i += 1
+            i = min(n, i + 3)
+        elif source[i] == '"':
+            out.append('""')
+            i += 1
+            while i < n and source[i] != '"':
+                if source[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if source[i] == "\n":
+                    out.append("\n")
+                    break
+                i += 1
+            i = min(n, i + 1)
+        else:
+            out.append(source[i])
+            i += 1
+    return "".join(out)
+
+
+FORBIDDEN_SWIFT_COLOR_RE = re.compile(
+    r"(?:\b(?:Color|UIColor)\.(?:white|black)\b"
+    r"|\b(?:Color|UIColor)\(\s*white\s*:"
+    r"|\.(?:foregroundColor|foregroundStyle|background|tint|fill|stroke)\(\s*\.(?:white|black)\b)"
+)
+
+
+def check_hardcoded_swift_colors(paths: list[Path]) -> list[str]:
+    """检查 IPadUI SwiftUI 视图里不得直接写死 Color.white / Color.black 等纯色。"""
+    violations: list[str] = []
+    for path in paths:
+        clean = strip_swift_comments(path.read_text(encoding="utf-8"))
+        for match in FORBIDDEN_SWIFT_COLOR_RE.finditer(clean):
+            line = clean[: match.start()].count("\n") + 1
+            violations.append(f"{path}:{line}: 禁止在 iPad 视图中硬编码颜色 `{match.group(0)}`，请使用 ThemeColors 语义令牌")
+    return violations
+
+
 def main():
     root = Path(__file__).resolve().parent.parent
     values = theme_values(root / "qml/Theme.qml")
@@ -95,26 +167,27 @@ def main():
     references = set(re.findall(r'(?:Color|semantic)\("(\w+)"', swift))
     references.discard("themeBase_")  # 动态资源前缀，七份具体 base 已由资源逐个核对。
     if references != set(values): raise ValueError("Swift 颜色入口与资源集合不一致")
-    theme_source = (root / "qml/Theme.qml").read_text(encoding="utf-8")
-    theme_ids = set(re.findall(r'\bid:\s*"([^"]+)"', theme_source))
+    theme_ids = set(definitions)
     bridge_source = (root / "src/platform/ios/bridge/PTShellBridge.mm").read_text(encoding="utf-8")
-    bridge_match = re.search(r'const\s+QStringList\s+themes\s*=\s*\{([^}]*)\}', bridge_source, re.S)
-    if not bridge_match: raise ValueError("未找到 PTShellBridge 的壁纸资源白名单")
-    bridge_ids = set(re.findall(r'QStringLiteral\("([^"]+)"\)', bridge_match.group(1)))
-    if not bridge_ids.issubset(theme_ids): raise ValueError("PTShellBridge 壁纸白名单包含 Theme.qml 未定义的主题")
-    if bridge_ids != theme_ids:
-        raise ValueError("PTShellBridge 壁纸白名单与 Theme.qml 不一致")
+    bridge_blocks = re.findall(r'const\s+QStringList\s+themes\s*=\s*\{([^}]*)\}', bridge_source, re.S)
+    if not bridge_blocks:
+        raise ValueError("未找到 PTShellBridge 的壁纸资源白名单")
+    # 所有桥接壁纸白名单块均受门禁约束，避免后续新增入口漂移。
+    for block in bridge_blocks:
+        ids = set(re.findall(r'QStringLiteral\("([^\"]+)"\)', block))
+        if ids != theme_ids:
+            raise ValueError("PTShellBridge 壁纸白名单与 Theme.qml 不一致")
     settings_source = (root / "src/ui/ipad/Sources/IPadCore/Stores/SettingsAvailability.swift").read_text(encoding="utf-8")
     choices = {
         match[0]: (match[1], match[2], match[3])
         for match in re.findall(r'Theme\(id: "([^\"]+)", title: "([^\"]+)", mode: "([^\"]+)", base: "([^\"]+)"\)', settings_source)
     }
     if choices != definitions: raise ValueError("设置主题的名单、文案、明暗或 base 色与 Theme.qml 不一致")
-    # 两个原生入口的资源白名单都受门禁约束，不能只核对第一个匹配。
-    for block in re.findall(r'const\s+QStringList\s+themes\s*=\s*\{([^}]*)\}', bridge_source, re.S):
-        ids = set(re.findall(r'QStringLiteral\("([^\"]+)"\)', block))
-        if ids != theme_ids: raise ValueError("桥接主题白名单与 Theme.qml 不一致")
-    print(f"iPad 颜色门禁通过：{len(values)} 个语义令牌，浅深两套；七主题文案、明暗、base 与壁纸名单同源核对通过")
+    swift_views = sorted((root / "src/ui/ipad/Sources/IPadUI").rglob("*.swift"))
+    swift_violations = check_hardcoded_swift_colors(swift_views)
+    if swift_violations:
+        raise ValueError("\n".join(swift_violations))
+    print(f"iPad 颜色门禁通过：{len(values)} 个语义令牌，浅深两套；七主题文案、明暗、base 与壁纸名单同源核对通过，Swift 视图零硬编码纯色")
 
 
 if __name__ == "__main__":

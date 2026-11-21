@@ -14,6 +14,7 @@ file(DOWNLOAD
     "https://download.qt.io/official_releases/qt/6.10/6.10.3/submodules/qtbase-everywhere-src-6.10.3.tar.xz"
     "${pt_sqlite_archive}"
     EXPECTED_HASH "SHA256=${pt_sqlite_archive_hash}"
+    INACTIVITY_TIMEOUT 60
     TLS_VERIFY ON STATUS pt_sqlite_download_status)
 list(GET pt_sqlite_download_status 0 pt_sqlite_download_code)
 if(NOT pt_sqlite_download_code EQUAL 0)

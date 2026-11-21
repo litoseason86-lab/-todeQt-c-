@@ -414,6 +414,7 @@ set_tests_properties(MacGlobalHotkeyTests PROPERTIES
 # 备份/恢复：SQLite 快照 + 嵌入偏好；测试用临时目录与临时数据库，覆盖一致性与回滚。
 add_executable(BackupServiceTests
     tests/BackupServiceTests.cpp
+    tests/support/NativePreferenceDomain.h
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
@@ -432,6 +433,8 @@ add_executable(BackupServiceTests
     src/services/BackupOperations.cpp
     src/services/BackupService.h
     src/services/BackupService.cpp
+    src/services/ExportService.h
+    src/services/ExportService.cpp
     src/services/AppSettings.h
     src/services/AppSettings.cpp
     src/services/LogicalDay.h
@@ -449,10 +452,10 @@ target_link_libraries(BackupServiceTests PRIVATE
 )
 
 pomodoro_todo_enable_warnings(BackupServiceTests)
-add_test(NAME BackupServiceTests COMMAND BackupServiceTests)
+pomodoro_todo_add_native_preferences_test(BackupServiceTests)
 set_tests_properties(BackupServiceTests PROPERTIES
     # QDesktopServices/QtGui 需要一个平台；离屏即可，不弹窗。
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic"
 )
 
 # 计时健壮性：注入 FakeClock 模拟休眠、时钟跳变、跨界完成，不依赖真实等待或机器睡眠。
@@ -801,13 +804,21 @@ add_executable(PTShellBridgeTests ${PT_SHELL_TEST_SOURCES}
     src/platform/ios/native/IPadShellPreferences.h
     src/platform/ios/native/IPadShellPreferences.cpp
     src/platform/ios/bridge/PTShellBridge.h src/platform/ios/bridge/PTShellBridge.mm
+    src/platform/ios/bridge/PTSettingsBridge.h src/platform/ios/bridge/PTSettingsBridge.mm
+    src/platform/ios/bridge/PTRoutineBridge.h src/platform/ios/bridge/PTRoutineBridge.mm
     src/platform/ios/bridge/PTLifecycleBridge.h src/platform/ios/bridge/PTLifecycleBridge.mm
     src/services/StatisticsService.h src/services/StatisticsService.cpp
     src/services/BackupService.h src/services/BackupService.cpp
     src/services/BackupOperations.h src/services/BackupOperations.cpp
+    src/services/ExportService.h src/services/ExportService.cpp
     src/services/LogicalDayService.h src/services/LogicalDayService.cpp)
 set_source_files_properties(tests/PTShellBridgeTests.mm
-    src/platform/ios/bridge/PTShellBridge.mm src/platform/ios/bridge/PTLifecycleBridge.mm
+    src/platform/ios/bridge/PTBridgeSupport.mm
+    src/platform/ios/bridge/PTTaskBridge.mm
+    src/platform/ios/bridge/PTShellBridge.mm
+    src/platform/ios/bridge/PTSettingsBridge.mm
+    src/platform/ios/bridge/PTRoutineBridge.mm
+    src/platform/ios/bridge/PTLifecycleBridge.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_link_libraries(PTShellBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6::Concurrent Qt6::Test "-framework Foundation")
 pomodoro_todo_enable_warnings(PTShellBridgeTests)
@@ -1316,7 +1327,7 @@ find_program(POMODORO_TODO_QMLLINT
     NO_CMAKE_SYSTEM_PATH
 )
 if(POMODORO_TODO_QMLLINT)
-    file(GLOB_RECURSE POMODORO_TODO_QML_SOURCES
+    file(GLOB_RECURSE POMODORO_TODO_QML_SOURCES CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/qml/*.qml")
     add_test(
         NAME QmlLintGate
@@ -1350,13 +1361,18 @@ if(Python3_FOUND)
     if(APPLE)
         add_test(NAME McpBundleSmoke
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_mcp_bundle.py"
+                --expect-bundle
                 "$<TARGET_BUNDLE_DIR:PomodoroTodo>/Contents/MacOS/PomodoroTodoMcp")
+        set_tests_properties(McpBundleSmoke PROPERTIES TIMEOUT 30)
         add_test(NAME DeployLocalAppTests
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/DeployLocalAppTests.py")
+        set_tests_properties(DeployLocalAppTests PROPERTIES TIMEOUT 30)
     endif()
     # 055-P3A：原生颜色与 QML 的语义令牌必须同源。
     add_test(NAME IPadThemeGate COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipad_theme_gate.py")
     set_tests_properties(IPadThemeGate PROPERTIES TIMEOUT 30)
+    add_test(NAME IosCmakeManifestGate COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ios_cmake_manifest_gate.py" "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(IosCmakeManifestGate PROPERTIES TIMEOUT 30)
     add_test(NAME QmlTextFormatGate
              COMMAND ${Python3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml_text_format_gate.py
@@ -1481,6 +1497,9 @@ set_tests_properties(
     CoreLogicTests
     RobustnessTests
     CountdownServiceTests
+    KnowledgeGapServiceTests
+    ScheduleServiceTests
+    McpServiceTests
     PlatformControlTests
     BackupServiceTests
     TimingRobustnessTests
@@ -1504,6 +1523,33 @@ set_tests_properties(
     MacPreferencesCleanupTests
     MacGlobalHotkeyTests
     PROPERTIES TIMEOUT 30
+)
+set_tests_properties(
+    PomodoroTodoTests
+    CoreLogicTests
+    RobustnessTests
+    CountdownServiceTests
+    KnowledgeGapServiceTests
+    MemoServiceTests
+    ScheduleServiceTests
+    PlatformControlTests
+    AppleNotificationBackendTests
+    MacPreferencesCleanupTests
+    TimingRobustnessTests
+    PhaseAlarmCoordinatorTests
+    SyncTests
+    TrashServiceTests
+    PendingDeletionTests
+    FocusSessionControllerTests
+    SyncTransportTests
+    SyncControllerTests
+    ShaderAssetsTests
+    SoundAssetsTests
+    QmlResourceManifestTests
+    McpProtocolTests
+    McpIntegrationTests
+    McpServiceTests
+    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic"
 )
 
 # 055-P3B：科目、逻辑日与设置的 Mac 桥接测试。
@@ -1588,7 +1634,7 @@ get_target_property(PT_CONTENT_TEST_SOURCES TrashServiceTests SOURCES)
 list(REMOVE_ITEM PT_CONTENT_TEST_SOURCES tests/TrashServiceTests.cpp)
 add_executable(PTContentBridgeTests ${PT_CONTENT_TEST_SOURCES}
     tests/PTContentBridgeTests.mm
-    src/platform/ios/bridge/PTBridgeSupport.mm
+    src/platform/ios/bridge/PTBridgeSupport.h src/platform/ios/bridge/PTBridgeSupport.mm
     src/platform/ios/bridge/PTKnowledgeGapBridge.h src/platform/ios/bridge/PTKnowledgeGapBridge.mm
     src/platform/ios/bridge/PTMemoBridge.h src/platform/ios/bridge/PTMemoBridge.mm
     src/platform/ios/bridge/PTCountdownBridge.h src/platform/ios/bridge/PTCountdownBridge.mm
@@ -1757,23 +1803,35 @@ get_target_property(PTAPP_MANIFEST_SOURCES PTApp SOURCES)
 string(REPLACE ";" "\",\"" PTAPP_MANIFEST_SOURCES "${PTAPP_MANIFEST_SOURCES}")
 get_target_property(PTQML_MANIFEST_SOURCES PTQml SOURCES)
 string(REPLACE ";" "\",\"" PTQML_MANIFEST_SOURCES "${PTQML_MANIFEST_SOURCES}")
+set(PT_MCP_MANIFEST_ENTRY "")
+if(TARGET PomodoroTodoMcp)
+    get_target_property(MCP_HELPER_MANIFEST_SOURCES PomodoroTodoMcp SOURCES)
+    string(REPLACE ";" "\",\"" MCP_HELPER_MANIFEST_SOURCES "${MCP_HELPER_MANIFEST_SOURCES}")
+    set(PT_MCP_MANIFEST_ENTRY [=[,
+  "PomodoroTodoMcp": {
+    "sources": ["@MCP_HELPER_MANIFEST_SOURCES@"],
+    "link_libraries": $<IF:$<BOOL:$<TARGET_PROPERTY:PomodoroTodoMcp,LINK_LIBRARIES>>,["$<JOIN:$<TARGET_PROPERTY:PomodoroTodoMcp,LINK_LIBRARIES>,",">"],[]>,
+    "interface_link_libraries": $<IF:$<BOOL:$<TARGET_PROPERTY:PomodoroTodoMcp,INTERFACE_LINK_LIBRARIES>>,["$<JOIN:$<TARGET_PROPERTY:PomodoroTodoMcp,INTERFACE_LINK_LIBRARIES>,",">"],[]>
+  }]=])
+    string(CONFIGURE "${PT_MCP_MANIFEST_ENTRY}" PT_MCP_MANIFEST_ENTRY @ONLY)
+endif()
 string(CONFIGURE [=[
 {
   "PTCore": {
     "sources": ["@PTCORE_MANIFEST_SOURCES@"],
-    "link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTCore,LINK_LIBRARIES>,",">"],
-    "interface_link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTCore,INTERFACE_LINK_LIBRARIES>,",">"]
+    "link_libraries": $<IF:$<BOOL:$<TARGET_PROPERTY:PTCore,LINK_LIBRARIES>>,["$<JOIN:$<TARGET_PROPERTY:PTCore,LINK_LIBRARIES>,",">"],[]>,
+    "interface_link_libraries": $<IF:$<BOOL:$<TARGET_PROPERTY:PTCore,INTERFACE_LINK_LIBRARIES>>,["$<JOIN:$<TARGET_PROPERTY:PTCore,INTERFACE_LINK_LIBRARIES>,",">"],[]>
   },
   "PTApp": {
     "sources": ["@PTAPP_MANIFEST_SOURCES@"],
-    "link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTApp,LINK_LIBRARIES>,",">"],
-    "interface_link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTApp,INTERFACE_LINK_LIBRARIES>,",">"]
+    "link_libraries": $<IF:$<BOOL:$<TARGET_PROPERTY:PTApp,LINK_LIBRARIES>>,["$<JOIN:$<TARGET_PROPERTY:PTApp,LINK_LIBRARIES>,",">"],[]>,
+    "interface_link_libraries": $<IF:$<BOOL:$<TARGET_PROPERTY:PTApp,INTERFACE_LINK_LIBRARIES>>,["$<JOIN:$<TARGET_PROPERTY:PTApp,INTERFACE_LINK_LIBRARIES>,",">"],[]>
   },
   "PTQml": {
     "sources": ["@PTQML_MANIFEST_SOURCES@"],
-    "link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTQml,LINK_LIBRARIES>,",">"],
-    "interface_link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTQml,INTERFACE_LINK_LIBRARIES>,",">"]
-  }
+    "link_libraries": $<IF:$<BOOL:$<TARGET_PROPERTY:PTQml,LINK_LIBRARIES>>,["$<JOIN:$<TARGET_PROPERTY:PTQml,LINK_LIBRARIES>,",">"],[]>,
+    "interface_link_libraries": $<IF:$<BOOL:$<TARGET_PROPERTY:PTQml,INTERFACE_LINK_LIBRARIES>>,["$<JOIN:$<TARGET_PROPERTY:PTQml,INTERFACE_LINK_LIBRARIES>,",">"],[]>
+  }@PT_MCP_MANIFEST_ENTRY@
 }
 ]=] PT_ARCHITECTURE_MANIFEST @ONLY)
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/architecture-manifest.json"
@@ -1794,6 +1852,15 @@ if(NOT IOS AND Python3_FOUND)
     add_test(NAME ArchitectureGateR9
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_architecture_gate_r9.py")
     set_tests_properties(ArchitectureGateR9 PROPERTIES TIMEOUT 30)
+
+    add_test(NAME ArchitectureGateRules
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_architecture_gate_rules.py")
+    set_tests_properties(ArchitectureGateRules PROPERTIES TIMEOUT 30)
+
+    add_test(NAME QmlAndBundleGateTests
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_qml_and_bundle_gates.py")
+    set_tests_properties(QmlAndBundleGateTests PROPERTIES TIMEOUT 60
+        ENVIRONMENT "QT_LIB_DIR=${QT6_INSTALL_PREFIX}/lib")
 
     # 原生偏好测试的清理脚本自检：读域名文件、白名单拒绝、缺文件不清理与退出码传播（062 A060）。
     add_test(NAME NativePreferencesRunnerTests

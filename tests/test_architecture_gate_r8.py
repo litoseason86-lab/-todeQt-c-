@@ -805,6 +805,124 @@ class ArchitectureGateR8Tests(unittest.TestCase):
         p = self._write_entry(code)
         self.assertTrue(check_entry_r8(p), "纯数据 struct 应合法通过，不应误报拒绝")
 
+    def test_lexical_evasion_forms_rejected(self) -> None:
+        """保证 C++14 数字分隔符、原始字符串失配引号与反斜杠续行无法吞掉身份前危险操作。"""
+        cases = [
+            ("cpp14_digit_separator", """
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                    int budget = 40'000;
+                    QSettings earlyBadRead;
+                    int budget2 = 80'000;
+                    McpPaths::applyApplicationIdentity();
+                    return 0;
+                }
+            """),
+            ("raw_string_unbalanced_quotes", r'''
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                    const char* pat = R"(unbalanced " quote)";
+                    QSettings earlyBadRead;
+                    const char* pat2 = R"(closing " quote)";
+                    McpPaths::applyApplicationIdentity();
+                    return 0;
+                }
+            '''),
+            ("line_continuation_split_identifier", """
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                    QSet\\
+tings earlyBadRead;
+                    McpPaths::applyApplicationIdentity();
+                    return 0;
+                }
+            """),
+        ]
+        for name, code in cases:
+            with self.subTest(case=name):
+                self.assertFalse(check_entry_r8(self._write_entry(code)), f"{name} 绕过应被 R8 拒绝")
+
+    def test_nested_parens_singleton_alias_and_global_init_rejected(self) -> None:
+        """保证带默认构造参数的函数、单例访问、顶层类型别名与全局初始化、类外方法定义均无法绕过 R8。"""
+        cases = [
+            ("default_ctor_arg_helper", """
+                void sneakHelper(QString tag = QString()) {
+                    QSettings early;
+                }
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                    sneakHelper();
+                    McpPaths::applyApplicationIdentity();
+                    return 0;
+                }
+            """),
+            ("singleton_instance_before_identity", """
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                    AppSettings::instance()->workMinutes();
+                    McpPaths::applyApplicationIdentity();
+                    return 0;
+                }
+            """),
+            ("using_type_alias", """
+                using S = QSettings;
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                    S s;
+                    McpPaths::applyApplicationIdentity();
+                    return 0;
+                }
+            """),
+            ("global_initializer_before_main", """
+                static int g_early = (openDatabase(), 0);
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                    McpPaths::applyApplicationIdentity();
+                    return g_early;
+                }
+            """),
+            ("out_of_line_member_method", """
+                struct Helper { void run(); };
+                void Helper::run() { QSettings s; }
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                    Helper h;
+                    h.run();
+                    McpPaths::applyApplicationIdentity();
+                    return 0;
+                }
+            """),
+            ("static_qguiapp_call_before_identity", """
+                int main(int argc, char** argv) {
+                    QGuiApplication::setQuitOnLastWindowClosed(false);
+                    McpPaths::applyApplicationIdentity();
+                    QGuiApplication app(argc, argv);
+                    return 0;
+                }
+            """),
+            ("resolve_production_before_identity", """
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                    auto p = McpPaths::resolveProduction();
+                    McpPaths::applyApplicationIdentity();
+                    return 0;
+                }
+            """),
+            ("ifdef_wrapped_identity", """
+                int main(int argc, char** argv) {
+                    QGuiApplication app(argc, argv);
+                #ifdef NEVER_ENABLED
+                    int dummy = 0;
+                    McpPaths::applyApplicationIdentity();
+                #endif
+                    return 0;
+                }
+            """),
+        ]
+        for name, code in cases:
+            with self.subTest(case=name):
+                self.assertFalse(check_entry_r8(self._write_entry(code)), f"{name} 绕过应被 R8 拒绝")
+
 
 if __name__ == "__main__":
     unittest.main()

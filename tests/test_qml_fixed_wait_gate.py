@@ -70,6 +70,26 @@ class QmlFixedWaitGateTests(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("Helpers.js:1:", problems[0])
 
+    def test_template_regex_and_concat_bypasses_are_rejected(self) -> None:
+        """保证模板字符串插值、带单引号的正则字面量与拼接表达式无法绕过固定等待门禁。"""
+        samples = {
+            "tpl.qml": "import QtQuick\nItem { property string s: `${wait(500)}` }\n",
+            "regex.js": "var re = /don't/;\nwait(500);\nvar end = \"'\";\n",
+            "concat.qml": 'import QtQuick\nItem { function f() { TestWaits.letElapse(testCase, 50, "" + dynamicVar + "") } }\n',
+        }
+        for name, body in samples.items():
+            with self.subTest(sample=name):
+                sub = self.root / name.replace(".", "_")
+                sub.mkdir()
+                (sub / name).write_text(body, encoding="utf-8")
+                problems = check_tree(sub)
+                self.assertEqual(len(problems), 1, problems)
+
+    def test_division_slashes_do_not_trigger_false_regex(self) -> None:
+        """保证除法斜杠不会误判为正则字面量而吞掉字符串引号或误报，且第三参旁带行内注释仍正常放行。"""
+        body = 'var ratio = a / b + c / d;\nvar msg = "not wait(100)";\nTestWaits.observe(tc, 20, /* 理由 */ "除法后字符串字面量保持完整");\n'
+        self.assertEqual(self._problems("Division.js", body), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -88,6 +88,54 @@ class ArchitectureGateR9Tests(unittest.TestCase):
         self.assertIn("SINGLETON_ALLOWLIST", out)
         self.assertNotIn("Kept", out)
 
+    def test_lexical_tricks_and_modern_singleton_signatures_rejected(self) -> None:
+        """保证原始字符串、数字分隔符及引用/尾置返回/属性/inline 声明变体都无法隐藏新单例。"""
+        self._write_header(
+            "Sneaky.h",
+            r'''
+            class RawStrSingleton {
+            public:
+                const char* pat = R"(unbalanced " quote)";
+                static RawStrSingleton* instance();
+                const char* pat2 = R"(closing " quote)";
+            };
+            class DigitSepSingleton {
+            public:
+                static constexpr int kBudget = 40'000;
+                static DigitSepSingleton* instance();
+                static constexpr int kBudget2 = 80'000;
+            };
+            class RefSingleton { public: static RefSingleton& instance(); };
+            class TrailingSingleton { public: static auto instance() -> TrailingSingleton*; };
+            class TrailingRefSingleton { public: static auto instance() -> TrailingRefSingleton&; };
+            class AttrSingleton { public: [[nodiscard]] static AttrSingleton* instance(); };
+            class AttrMidSingleton { public: static [[nodiscard]] AttrMidSingleton* instance(); };
+            class InlineSingleton { public: inline static InlineSingleton* instance(); };
+            class VoidParamSingleton { public: static VoidParamSingleton* instance(void); };
+            class EastConstSingleton { public: static EastConstSingleton const* instance(); };
+            ''',
+        )
+        found = find_singletons(self.src)
+        self.assertIsNotNone(found)
+        self.assertEqual(
+            set(found),
+            {
+                "RawStrSingleton",
+                "DigitSepSingleton",
+                "RefSingleton",
+                "TrailingSingleton",
+                "TrailingRefSingleton",
+                "AttrSingleton",
+                "AttrMidSingleton",
+                "InlineSingleton",
+                "VoidParamSingleton",
+                "EastConstSingleton",
+            },
+        )
+        ok, _, err = self._run_quietly(frozenset())
+        self.assertFalse(ok)
+        self.assertIn("RefSingleton::instance", err)
+
 
 if __name__ == "__main__":
     unittest.main()

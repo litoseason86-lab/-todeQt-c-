@@ -2,8 +2,8 @@ name: 验证
 
 "on":
   push:
-    # 首次审计交付在功能分支验证，不必先把尚未远端验证的代码送进main。
-    branches: [main, fix/058-audit-gates]
+    # 主分支与所有功能/修复分支都会触发全套构建、离屏测试、iOS 不签名编译与消毒器检查。
+    branches: [main, "fix/**", "feat/**"]
   pull_request:
   workflow_dispatch:
 
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   macos-verify:
-    name: macOS 构建与回归
+    name: macOS 构建与全量回归
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -35,32 +35,38 @@ jobs:
           modules: qtshadertools
           cache: true
 
-      # 使用与本地审计相同的目录和显式开关，禁止CI覆盖安装应用。
+      - name: 缓存固定 Qt SQLite 驱动官方源码包
+        uses: actions/cache@d4323d4df104b026c6a166049fb557cb5d0bedfc # v4.2.0
+        with:
+          path: .cache/qt-sqlite-6.10.3/qtbase.tar.xz
+          key: qt-sqlite-6.10.3-383dc907816338f0cba72088a524c07458dfc69ce684ca9132fcc4fe91c24b0b
+
+      # 使用与本地审计相同的目录和显式开关，禁止 CI 覆盖安装应用；CI 开启编译告警阻断。
       - name: 配置离屏验证构建
         run: |
           "$QT_ROOT_DIR/bin/qt-cmake" -S . -B "$HOME/pt-audit" \
-            -DCMAKE_BUILD_TYPE=Debug -DPOMODORO_TODO_DEPLOY_LOCAL=OFF
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DPOMODORO_TODO_DEPLOY_LOCAL=OFF \
+            -DPOMODORO_TODO_WERROR=ON
 
-      - name: 完整构建与MCP压力门禁
+      - name: 完整构建与 MCP 压力门禁
         id: build
         run: |
-          # 先验证已定位的压力用例，避免每次等待全仓构建才能取得诊断；其余门禁仍完整执行。
-          cmake --build "$HOME/pt-audit" --target McpIntegrationTests --parallel 3
+          cmake --build "$HOME/pt-audit" --target McpIntegrationTests --parallel 4
           QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic POMODORO_MCP_PRESSURE_TRACE=1 \
             "$HOME/pt-audit/McpIntegrationTests" helperSurvivesMixedBatchWhileBacklogged
-          cmake --build "$HOME/pt-audit" --parallel 3
+          cmake --build "$HOME/pt-audit" --parallel 4
 
+      # Swift 数据层由紧随其后的独立步骤运行并保留单独结果，此处排除 IPadSwiftTests 避免重复执行。
+      # 离屏环境由各测试目标的 ENVIRONMENT 负责，这里不导出：导出会掩盖漏设离屏环境的测试。
       - name: C++、QML、桥接与架构门禁
-        # 使用固定串行基线，便于对照托管 runner 与本机结果；
-        # 各测试是独立进程，串行调度本身不代表已经排除用例内部的异步竞态。
-        run: ctest --test-dir "$HOME/pt-audit" --output-on-failure --timeout 240 --parallel 1
+        run: ctest --test-dir "$HOME/pt-audit" --output-on-failure --timeout 240 --parallel 4 -E "^IPadSwiftTests$"
 
       - name: Swift 数据层
-        # 独立收集各层结果：CTest 失败仍保留 Swift/SDK 证据，job 的失败结论不被覆盖。
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: swift test --package-path src/ui/ipad --scratch-path "$HOME/pt-audit/ipad-swift"
 
-      # 只运行锁定SDK的隔离宿主验证；不运行verify-claude，不调用模型或生产数据库。
+      # 只运行锁定 SDK 的隔离宿主验证；不运行 verify-claude，不调用模型或生产数据库。
       - name: 准备锁定的 MCP SDK 依赖
         id: mcp_deps
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -69,3 +75,108 @@ jobs:
       - name: MCP SDK 兼容性
         if: ${{ !cancelled() && steps.mcp_deps.outcome == 'success' }}
         run: npm test --prefix tests/mcp-sdk
+
+  macos-asan:
+    name: macOS ASan + UBSan 消毒器回归
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: 读取源码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 安装验证用 Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: '6.10.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qtshadertools
+          cache: true
+
+      - name: 缓存固定 Qt SQLite 驱动官方源码包
+        uses: actions/cache@d4323d4df104b026c6a166049fb557cb5d0bedfc # v4.2.0
+        with:
+          path: .cache/qt-sqlite-6.10.3/qtbase.tar.xz
+          key: qt-sqlite-6.10.3-383dc907816338f0cba72088a524c07458dfc69ce684ca9132fcc4fe91c24b0b
+
+      - name: 配置并构建 ASan + UBSan 审计目录
+        run: |
+          SANITIZER_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
+          "$QT_ROOT_DIR/bin/qt-cmake" -S . -B "$HOME/pt-asan" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DPOMODORO_TODO_DEPLOY_LOCAL=OFF \
+            -DCMAKE_C_FLAGS="$SANITIZER_FLAGS" \
+            -DCMAKE_CXX_FLAGS="$SANITIZER_FLAGS" \
+            -DCMAKE_OBJC_FLAGS="$SANITIZER_FLAGS" \
+            -DCMAKE_OBJCXX_FLAGS="$SANITIZER_FLAGS"
+          cmake --build "$HOME/pt-asan" --parallel 4
+
+      - name: 运行全部 C++ / Objective-C++ ASan + UBSan 回归
+        # 同上，离屏环境不在这里导出；只放消毒器自身的运行选项。
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          ASAN_OPTIONS: detect_stack_use_after_return=1:abort_on_error=0
+        run: |
+          ctest --test-dir "$HOME/pt-asan" --output-on-failure --timeout 240 --parallel 4 \
+            -E '^(QmlTest\..*|.*Gate|.*GateTests|ArchitectureGate.*|IPadSwiftTests|DeployLocalAppTests|NativePreferencesRunnerTests|SyncServerUnitTests)$'
+
+      - name: 运行 Swift 数据层 ASan 回归
+        run: swift test --package-path src/ui/ipad --scratch-path "$HOME/pt-asan/ipad-swift" --sanitize=address
+
+  ios-unsigned-build:
+    name: iOS 不签名编译检查
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: 读取源码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 安装主机 Qt（QT_HOST_PATH）
+        id: qt_host
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: '6.10.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qtshadertools
+          dir: ${{ runner.temp }}/qt-host
+          set-env: false
+          cache: true
+
+      - name: 安装 iOS Qt SDK
+        id: qt_ios
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: '6.10.3'
+          host: mac
+          target: ios
+          arch: ios
+          modules: qtshadertools
+          cache: true
+
+      - name: 配置并执行 iOS 不签名编译
+        run: |
+          HOST_CFG="$(find "${{ runner.temp }}/qt-host" -maxdepth 6 -path '*/lib/cmake/Qt6/Qt6Config.cmake' -print -quit)"
+          if [ -z "$HOST_CFG" ]; then
+            echo "未在 ${{ runner.temp }}/qt-host 下找到主机 Qt6Config.cmake" >&2
+            exit 1
+          fi
+          QT_HOST_PATH="$(cd "$(dirname "$HOST_CFG")/../../.." && pwd)"
+          if [ ! -f "$QT_HOST_PATH/lib/cmake/Qt6/Qt6Config.cmake" ] || [ "$QT_HOST_PATH" = "$QT_ROOT_DIR" ]; then
+            echo "无效的 QT_HOST_PATH: $QT_HOST_PATH (QT_ROOT_DIR=$QT_ROOT_DIR)" >&2
+            exit 1
+          fi
+          if [ ! -x "$QT_HOST_PATH/bin/qsb" ] && [ ! -x "$QT_HOST_PATH/libexec/qsb" ]; then
+            echo "主机 Qt 缺少可执行 qsb 工具: $QT_HOST_PATH" >&2
+            exit 1
+          fi
+          "$QT_ROOT_DIR/bin/qt-cmake" -S . -B "$HOME/pt-ios" -G Xcode \
+            -DPOMODORO_TODO_DEPLOY_LOCAL=OFF \
+            -DQT_HOST_PATH="$QT_HOST_PATH"
+          cmake --build "$HOME/pt-ios" --config Debug -- -sdk iphoneos CODE_SIGNING_ALLOWED=NO -jobs 4

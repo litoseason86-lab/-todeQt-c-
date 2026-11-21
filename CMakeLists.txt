@@ -504,13 +504,20 @@ endif()
 #
 # 只加到本项目自己的目标上，不用 CMAKE_CXX_FLAGS 全局污染——那会连 Qt 自动生成的
 # moc/qrc 代码也一起管，那些不是我们能修的。
-# 不开 -Werror：单条告警不值得阻断本地开发，CI 里可另行升级。
+# 默认不开 -Werror：单条告警不值得阻断本地开发；CI 通过 POMODORO_TODO_WERROR=ON 强制零新增告警。
+option(POMODORO_TODO_WERROR "将本项目目标的编译告警升为错误（CI 门禁用）" OFF)
 function(pomodoro_todo_enable_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4)
+        if(POMODORO_TODO_WERROR)
+            target_compile_options(${target} PRIVATE /WX)
+        endif()
     else()
         # CMake 4.0.2 + Xcode 27 会把无语言限制的选项写进 OTHER_SWIFT_FLAGS；Swift 不接受 -Wall。
         target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wall;-Wextra>")
+        if(POMODORO_TODO_WERROR)
+            target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Werror>")
+        endif()
         # 64 位转 32 位的截断告警：iOS 用 Xcode 生成器，默认就开着它；Mac 这边不开的话，
         # 这类告警只在编 iOS 时冒出来，平时看不到也就没人修（2026-10 攒到过 6 条）。只有 Clang 认这个选项。
         if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
