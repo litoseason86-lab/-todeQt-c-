@@ -18,6 +18,7 @@ import re
 import shutil
 import signal
 import socket
+import socketserver
 import stat
 import sys
 import tempfile
@@ -947,6 +948,14 @@ class PtSyncHTTPServer(ThreadingHTTPServer):
         self.store = store
         self.access_log = access_log
         ThreadingHTTPServer.__init__(self, address, handler_class)
+
+    def server_bind(self):
+        # 跳过标准库 HTTPServer 默认的 socket.getfqdn() 反向 DNS 查询：纯 IP 监听不需要 PTR 主机名，
+        # 否则无本地 PTR 缓存的环境每次绑定都会被 DNS 超时卡住数秒乃至数十秒。
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
 
 
 class SyncRequestHandler(BaseHTTPRequestHandler):

@@ -98,6 +98,7 @@ class RemoteSyncFolderTests : public QObject
     Q_OBJECT
 
 private slots:
+    void cleanupTestCase();
     void init();
     void cleanup();
 
@@ -130,8 +131,14 @@ private:
     QString enrollSecret;
 };
 
+void RemoteSyncFolderTests::cleanupTestCase()
+{
+    stopServer();
+}
+
 void RemoteSyncFolderTests::init()
 {
+    stopServer();
     stateDirectory = std::make_unique<QTemporaryDir>(
         QDir::tempPath() + QStringLiteral("/pt-remote-sync-test-XXXXXX"));
     QVERIFY(stateDirectory->isValid());

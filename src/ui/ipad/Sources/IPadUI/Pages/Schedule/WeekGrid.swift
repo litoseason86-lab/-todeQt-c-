@@ -29,20 +29,7 @@ import SwiftUI
                 HStack(spacing: 0) {
                     Color.clear.frame(width: gutter, height: 44)
                     ForEach(weekdays, id: \.self) { day in
-                        let today = store.weekIndex == store.currentWeekIndex && store.todayWeekday == day
-                        HStack(spacing: 6) {
-                            Text("周" + ScheduleView.weekdayName(day))
-                            let number = Text(WeekView.day(store.dateForWeekday(day))).monospacedDigit()
-                            if today {
-                                number.scaledSystemFont(size: 13, weight: .bold).foregroundStyle(ThemeColors.surface)
-                                    .frame(width: 26, height: 26).background(ThemeColors.accentInk, in: Circle())
-                            } else { number }
-                        }
-                        .scaledSystemFont(size: 14, weight: .semibold)
-                        .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.ink)
-                        .frame(width: width, height: 44)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel("周" + ScheduleView.weekdayName(day) + (today ? "，今天" : ""))
+                        dayHeader(day, width: width)
                     }
                 }
                 CardDivider()
@@ -98,55 +85,109 @@ import SwiftUI
             }
         }
     }
-    private func dayColumn(_ day: Int, width: Double, placements: [SchedulePlacement<ScheduleEntry>]) -> some View {
-        return ZStack(alignment: .topLeading) {
-            // 今天那列浅焦糖底；列间一条细竖线。
-            Rectangle().fill(store.weekIndex == store.currentWeekIndex && store.todayWeekday == day ? ThemeColors.accentFill.opacity(0.35) : Color.clear)
-                .overlay(alignment: .leading) { Rectangle().fill(ThemeColors.borderSubtle).frame(width: 1) }
-                .contentShape(Rectangle())
-                .onTapGesture { location in
-                    add(day, store.minutesAtOffset(location.y, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight))
-                }.accessibilityLabel("周" + ScheduleView.weekdayName(day) + "，添加课程")
-                .accessibilityAddTraits(.isButton)
-                .accessibilityAction { add(day, 480) }
-            ForEach(placements, id: \.entry.id) { item in
-                let laneWidth = width / Double(max(1, item.laneCount))
-                Button { edit(item.entry) } label: {
-                    // 定稿课程块：科目色浅底、左边 3 宽科目色条，课名 13 粗、地点与时间 11。
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.entry.title).scaledSystemFont(size: 13, weight: .semibold).lineLimit(2)
-                        if !item.entry.location.isEmpty { Text(item.entry.location).scaledSystemFont(size: 11).lineLimit(2) }
-                        Text(ScheduleFormat.formatMinutes(Double(item.entry.startMinutes)) + "–" + ScheduleFormat.formatMinutes(Double(item.entry.endMinutes)))
-                            .scaledSystemFont(size: 11).monospacedDigit().lineLimit(1)
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.horizontal, 8).padding(.vertical, 6)
-                        .foregroundStyle(ThemeColors.inkStrong)
-                        .background(TaskCategoryColor.value(item.entry.categoryColor).opacity(0.18))
-                        .overlay(alignment: .leading) { Rectangle().fill(TaskCategoryColor.value(item.entry.categoryColor)).frame(width: 3) }
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }.buttonStyle(.plain)
-                    .frame(width: max(1, laneWidth - 4), height: item.height)
-                    .offset(x: Double(item.lane) * laneWidth + 2, y: item.top)
-                    .accessibilityLabel(item.entry.title + "，" + item.entry.location + "，" + ScheduleFormat.formatMinutes(Double(item.entry.startMinutes)))
-                    .contextMenu {
-                        Button("编辑", systemImage: "pencil") { edit(item.entry) }
-                        Button("删除", systemImage: "trash", role: .destructive) { delete(item.entry) }
-                    }
-            }
-            if store.weekIndex == store.currentWeekIndex && store.todayWeekday == day {
-                TimelineView(.periodic(from: .now, by: 60)) { context in
-                    // 本地时钟仅画当前时间线，不决定课程或逻辑今日；不另建业务定时器。
-                    let components = Calendar.current.dateComponents([.hour, .minute], from: context.date)
-                    let minute = (components.hour ?? 0) * 60 + (components.minute ?? 0)
-                    if let top = store.currentTimeTop(minutes: minute, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight) {
-                        HStack(spacing: 0) {
-                            Circle().fill(ThemeColors.danger).frame(width: 8, height: 8)
-                            Rectangle().fill(ThemeColors.danger).frame(height: 2)
-                        }
-                        .offset(x: -4, y: top - 4)
-                        .accessibilityLabel("当前时间，" + ScheduleFormat.formatMinutes(Double(minute)))
-                    }
-                }.allowsHitTesting(false)
+    @ViewBuilder private func dayHeader(_ day: Int, width: Double) -> some View {
+        let today = store.weekIndex == store.currentWeekIndex && store.todayWeekday == day
+        let title: String = "周" + ScheduleView.weekdayName(day)
+        let a11yLabel: String = today ? "\(title)，今天" : title
+        HStack(spacing: 6) {
+            Text(title)
+            let number = Text(WeekView.day(store.dateForWeekday(day))).monospacedDigit()
+            if today {
+                number.scaledSystemFont(size: 13, weight: .bold).foregroundStyle(ThemeColors.surface)
+                    .frame(width: 26, height: 26).background(ThemeColors.accentInk, in: Circle())
+            } else {
+                number
             }
         }
+        .scaledSystemFont(size: 14, weight: .semibold)
+        .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.ink)
+        .frame(width: width, height: 44)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(a11yLabel)
+    }
+
+    private func dayColumn(_ day: Int, width: Double, placements: [SchedulePlacement<ScheduleEntry>]) -> some View {
+        let isToday = store.weekIndex == store.currentWeekIndex && store.todayWeekday == day
+        return ZStack(alignment: .topLeading) {
+            dayBackground(day, isToday: isToday)
+            ForEach(placements, id: \.entry.id) { item in
+                courseButton(item: item, columnWidth: width)
+            }
+            if isToday {
+                currentTimeIndicator()
+            }
+        }
+    }
+
+    private func dayBackground(_ day: Int, isToday: Bool) -> some View {
+        let label: String = "周\(ScheduleView.weekdayName(day))，添加课程"
+        // 今天那列浅焦糖底；列间一条细竖线。
+        return Rectangle()
+            .fill(isToday ? ThemeColors.accentFill.opacity(0.35) : Color.clear)
+            .overlay(alignment: .leading) { Rectangle().fill(ThemeColors.borderSubtle).frame(width: 1) }
+            .contentShape(Rectangle())
+            .onTapGesture { location in
+                add(day, store.minutesAtOffset(location.y, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight))
+            }
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { add(day, 480) }
+    }
+
+    private func courseButton(item: SchedulePlacement<ScheduleEntry>, columnWidth: Double) -> some View {
+        let laneWidth = columnWidth / Double(max(1, item.laneCount))
+        let startText: String = ScheduleFormat.formatMinutes(Double(item.entry.startMinutes))
+        let a11yLabel: String = "\(item.entry.title)，\(item.entry.location)，\(startText)"
+        return Button {
+            edit(item.entry)
+        } label: {
+            courseCard(item.entry)
+        }
+        .buttonStyle(.plain)
+        .frame(width: max(1, laneWidth - 4), height: item.height)
+        .offset(x: Double(item.lane) * laneWidth + 2, y: item.top)
+        .accessibilityLabel(a11yLabel)
+        .contextMenu {
+            Button("编辑", systemImage: "pencil") { edit(item.entry) }
+            Button("删除", systemImage: "trash", role: .destructive) { delete(item.entry) }
+        }
+    }
+
+    private func courseCard(_ entry: ScheduleEntry) -> some View {
+        let timeText: String = "\(ScheduleFormat.formatMinutes(Double(entry.startMinutes)))–\(ScheduleFormat.formatMinutes(Double(entry.endMinutes)))"
+        let color = TaskCategoryColor.value(entry.categoryColor)
+        // 定稿课程块：科目色浅底、左边 3 宽科目色条，课名 13 粗、地点与时间 11。
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(entry.title).scaledSystemFont(size: 13, weight: .semibold).lineLimit(2)
+            if !entry.location.isEmpty {
+                Text(entry.location).scaledSystemFont(size: 11).lineLimit(2)
+            }
+            Text(timeText).scaledSystemFont(size: 11).monospacedDigit().lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .foregroundStyle(ThemeColors.inkStrong)
+        .background(color.opacity(0.18))
+        .overlay(alignment: .leading) { Rectangle().fill(color).frame(width: 3) }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func currentTimeIndicator() -> some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            // 本地时钟仅画当前时间线，不决定课程或逻辑今日；不另建业务定时器。
+            let components = Calendar.current.dateComponents([.hour, .minute], from: context.date)
+            let minute = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+            if let top = store.currentTimeTop(minutes: minute, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight) {
+                let timeLabel: String = "当前时间，\(ScheduleFormat.formatMinutes(Double(minute)))"
+                HStack(spacing: 0) {
+                    Circle().fill(ThemeColors.danger).frame(width: 8, height: 8)
+                    Rectangle().fill(ThemeColors.danger).frame(height: 2)
+                }
+                .offset(x: -4, y: top - 4)
+                .accessibilityLabel(timeLabel)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }

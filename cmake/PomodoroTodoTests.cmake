@@ -1509,7 +1509,7 @@ set_tests_properties(
     # 同步引擎在工作线程里读写文件：万一卡死，到点就报出来，不让全套一直挂着。
     SyncTransportTests
     SyncControllerTests
-    PROPERTIES TIMEOUT 90
+    PROPERTIES TIMEOUT 240
 )
 set_tests_properties(
     FontAssetsTests
