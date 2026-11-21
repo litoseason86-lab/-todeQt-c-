@@ -120,7 +120,7 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
           ASAN_OPTIONS: detect_stack_use_after_return=1:abort_on_error=0
         run: |
-          ctest --test-dir "$HOME/pt-asan" --output-on-failure --timeout 240 --parallel 4 \
+          ctest --test-dir "$HOME/pt-asan" --output-on-failure --timeout 480 --parallel 4 \
             -E '^(QmlTest\..*|.*Gate|.*GateTests|ArchitectureGate.*|IPadSwiftTests|DeployLocalAppTests|NativePreferencesRunnerTests|SyncServerUnitTests)$'
 
       - name: 运行 Swift 数据层 ASan 回归

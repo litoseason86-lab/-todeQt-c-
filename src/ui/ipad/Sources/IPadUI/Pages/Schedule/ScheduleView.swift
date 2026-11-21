@@ -93,23 +93,7 @@ import SwiftUI
         VStack(spacing: 12) {
             HStack(spacing: 4) {
                 ForEach(1...7, id: \.self) { day in
-                    let selected = store.selectedWeekday == day
-                    let today = store.weekIndex == store.currentWeekIndex && store.todayWeekday == day
-                    Button { store.selectWeekday(day) } label: {
-                        VStack(spacing: 2) {
-                            Text(Self.weekdayName(day)).scaledSystemFont(size: 12)
-                            Text(WeekView.day(store.dateForWeekday(day))).scaledSystemFont(size: 18, weight: .semibold).monospacedDigit()
-                                .lineLimit(1).minimumScaleFactor(0.5)
-                            Circle().fill(today && !selected ? ThemeColors.danger : Color.clear).frame(width: 4, height: 4)
-                        }
-                        .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.ink)
-                        .frame(maxWidth: .infinity, minHeight: 56)
-                        .background(selected ? ThemeColors.accentInk : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("周" + Self.weekdayName(day) + (today ? "，今天" : ""))
-                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    weekdayButton(day)
                 }
             }
             .padding(6)
@@ -118,6 +102,33 @@ import SwiftUI
                 Text("时间").tag(ScheduleDisplayMode.time); Text("节次").tag(ScheduleDisplayMode.period)
             }.pickerStyle(.segmented)
         }
+    }
+
+    private func weekdayButton(_ day: Int) -> some View {
+        let selected: Bool = store.selectedWeekday == day
+        let today: Bool = store.weekIndex == store.currentWeekIndex && store.todayWeekday == day
+        let fgColor: Color = selected ? ThemeColors.surface : ThemeColors.ink
+        let bgColor: Color = selected ? ThemeColors.accentInk : Color.clear
+        let dotColor: Color = today && !selected ? ThemeColors.danger : Color.clear
+        let a11yLabel: String = "周\(Self.weekdayName(day))\(today ? "，今天" : "")"
+        let traits: AccessibilityTraits = selected ? .isSelected : []
+        return Button {
+            store.selectWeekday(day)
+        } label: {
+            VStack(spacing: 2) {
+                Text(Self.weekdayName(day)).scaledSystemFont(size: 12)
+                Text(WeekView.day(store.dateForWeekday(day))).scaledSystemFont(size: 18, weight: .semibold).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.5)
+                Circle().fill(dotColor).frame(width: 4, height: 4)
+            }
+            .foregroundStyle(fgColor)
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .background(bgColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(a11yLabel)
+        .accessibilityAddTraits(traits)
     }
     private var hiddenMessage: some View {
         HStack(alignment: .top, spacing: 10) {

@@ -144,27 +144,38 @@ import UniformTypeIdentifiers
     private var dayStrip: some View {
         HStack(spacing: 4) {
             ForEach(Array(store.groups.enumerated()), id: \.offset) { index, group in
-                let selected = store.selectedGroup?.date == group.date
-                Button { store.selectDay(group.date) } label: {
-                    VStack(spacing: 2) {
-                        Text(Self.weekdayLabel(index)).scaledSystemFont(size: 12)
-                        // 七格等分宽度，大字号时两位数会被折成两行；单行缩小。
-                        Text(Self.day(group.date)).scaledSystemFont(size: 18, weight: .semibold).monospacedDigit()
-                            .lineLimit(1).minimumScaleFactor(0.5)
-                    }
-                    .foregroundStyle(selected ? ThemeColors.surface : (store.isToday(group.date) ? ThemeColors.accentInk : ThemeColors.ink))
-                    .frame(maxWidth: .infinity, minHeight: 52)
-                    .background(selected ? ThemeColors.accentInk : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("周" + Self.weekdayLabel(index) + "，" + Self.monthDay(group.date) + (store.isToday(group.date) ? "，今天" : ""))
-                .accessibilityAddTraits(selected ? .isSelected : [])
-                .dropDestination(for: String.self) { ids, _ in return drop(ids, to: group.date) }
+                dayStripButton(index: index, group: group)
             }
         }
         .padding(6)
         .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
+    }
+
+    private func dayStripButton(index: Int, group: WeekDayGroup) -> some View {
+        let selected: Bool = store.selectedGroup?.date == group.date
+        let today: Bool = store.isToday(group.date)
+        let fgColor: Color = selected ? ThemeColors.surface : (today ? ThemeColors.accentInk : ThemeColors.ink)
+        let bgColor: Color = selected ? ThemeColors.accentInk : Color.clear
+        let a11yLabel: String = "周\(Self.weekdayLabel(index))，\(Self.monthDay(group.date))\(today ? "，今天" : "")"
+        let traits: AccessibilityTraits = selected ? .isSelected : []
+        return Button {
+            store.selectDay(group.date)
+        } label: {
+            VStack(spacing: 2) {
+                Text(Self.weekdayLabel(index)).scaledSystemFont(size: 12)
+                // 七格等分宽度，大字号时两位数会被折成两行；单行缩小。
+                Text(Self.day(group.date)).scaledSystemFont(size: 18, weight: .semibold).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.5)
+            }
+            .foregroundStyle(fgColor)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(bgColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(a11yLabel)
+        .accessibilityAddTraits(traits)
+        .dropDestination(for: String.self) { ids, _ in return drop(ids, to: group.date) }
     }
 
     static func weekdayLabel(_ index: Int) -> String { ["一", "二", "三", "四", "五", "六", "日"][index] }
@@ -202,15 +213,19 @@ import UniformTypeIdentifiers
     }
 
     private func column(_ group: WeekDayGroup, index: Int) -> some View {
-        let today = store.isToday(group.date)
+        let today: Bool = store.isToday(group.date)
+        let headerTitle: String = "周\(Self.weekdayLabel(index)) \(Self.day(group.date))"
+        let headerColor: Color = today ? ThemeColors.accentInk : ThemeColors.inkStrong
+        let plannedLabel: String = group.plannedMinutes > 0 ? "已排 \(DurationFormat.minutes(Double(group.plannedMinutes)))" : ""
+        let columnA11yLabel: String = "周\(Self.weekdayLabel(index))，\(Self.monthDay(group.date))\(today ? "，今天" : "")"
         return VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                Text("周" + Self.weekdayLabel(index) + " " + Self.day(group.date))
+                Text(headerTitle)
                     .scaledSystemFont(size: 16, weight: .semibold)
-                    .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.inkStrong)
+                    .foregroundStyle(headerColor)
                 Spacer(minLength: 4)
                 Text(Self.shortMinutes(group.plannedMinutes)).scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
-                    .accessibilityLabel(group.plannedMinutes > 0 ? "已排 " + DurationFormat.minutes(Double(group.plannedMinutes)) : "")
+                    .accessibilityLabel(plannedLabel)
             }
             .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 8)
             CardDivider().padding(.horizontal, 8)
@@ -247,7 +262,7 @@ import UniformTypeIdentifiers
         }
         .dropDestination(for: String.self) { ids, _ in return drop(ids, to: group.date) }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("周" + Self.weekdayLabel(index) + "，" + Self.monthDay(group.date) + (today ? "，今天" : ""))
+        .accessibilityLabel(columnA11yLabel)
     }
 
     private func taskRow(_ task: TaskValue, compact: Bool, chip: Bool = false) -> some View {
