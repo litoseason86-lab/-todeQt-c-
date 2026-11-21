@@ -46,6 +46,9 @@ Popup {
     // 等这一层淡出完再打开下一层，两层不会叠在同一个位置一起动。
     signal finished(var option)
 
+    // 退出动画期间 Popup 仍可见，已结束的选项弹层不能再次触发选择；重新打开才解除。
+    property bool submissionClosed: false
+
     // 键盘打开后的指针跟踪：第一次只记下位置；之后位置变了才让悬停接管，并把高亮交给指针底下那一行
     // （指针可能一直在同一行里挪动，那一行的 hovered 不会再变，得在这里补一次）。
     function trackPointer(scenePosition, listPosition) {
@@ -65,6 +68,8 @@ Popup {
     }
 
     function choose(index) {
+        if (popup.submissionClosed)
+            return;
         var option = popup.options[index];
         if (!option)
             return;
@@ -83,6 +88,7 @@ Popup {
 
     // 打开前就停到当前项：淡入的那一下已经看得到它亮着，方向键也从它开始走。
     onAboutToShow: {
+        popup.submissionClosed = false;
         popup.pickedOption = null;
         popup.hoverFollows = !popup.openedByKeyboard;
         popup.openedByKeyboard = false;
@@ -93,6 +99,7 @@ Popup {
         optionList.currentIndex = Math.max(0, index);
         optionList.positionViewAtIndex(optionList.currentIndex, ListView.Contain);
     }
+    onAboutToHide: popup.submissionClosed = true
     onClosed: {
         var option = popup.pickedOption;
         popup.pickedOption = null;

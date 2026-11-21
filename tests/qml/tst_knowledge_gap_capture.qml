@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../qml"
 import "../../qml/components"
+import "../../qml/views"
 
 // 快速捕获框的验收重点只有两条，其余都是附属：
 //   1. 回车就能存下，不用去够鼠标；
@@ -35,17 +36,55 @@ TestCase {
         }
     }
 
-    // 计时器替身只记录有没有被动过。捕获框一旦调用了它的任何方法，
-    // 就说明「记一笔会打断专注」这条红线被越过了。
+    // 计时器替身按真实 FocusTimer 接口提供 pauseFocus / stopFocus；捕获框挂载在 FocusView 内实跑，
+    // 一旦捕获触发了暂停或停表就会被立刻抓到。
     QtObject {
         id: fakeTimer
 
         property int pauseCalls: 0
         property int stopCalls: 0
         property bool isRunning: true
+        property bool hasActiveSession: true
+        property int mode: 0
+        property int phase: 0
+        property int currentTaskId: 1
+        property string currentTaskTitle: "正在专注的任务"
+        property int targetSeconds: 1500
+        property int remainingSeconds: 900
+        property int elapsedSeconds: 600
+        property int completedPomodoros: 0
 
-        function pause() { fakeTimer.pauseCalls += 1 }
-        function stop() { fakeTimer.stopCalls += 1 }
+        function pauseFocus() { fakeTimer.pauseCalls += 1; fakeTimer.isRunning = false }
+        function stopFocus() { fakeTimer.stopCalls += 1; fakeTimer.isRunning = false; return true }
+        function startFocus() { return true }
+        function startPomodoroWork() { return true }
+        function startBreak() { return true }
+        function startBreakForTask() { return true }
+        function resetPomodoroCount() {}
+    }
+
+    QtObject {
+        id: fakeTaskManager
+
+        function getTask(id) {
+            return { id: id, title: "正在专注的任务", categoryId: 5 }
+        }
+        function getTodayTasks() {
+            return [{ id: 1, title: "正在专注的任务", completed: false }]
+        }
+    }
+
+    Component {
+        id: focusHostComponent
+
+        FocusView {
+            width: 640
+            height: 480
+            visible: true
+            timer: fakeTimer
+            taskManagerRef: fakeTaskManager
+            knowledgeGapServiceRef: fakeGapService
+        }
     }
 
     Component {
@@ -121,18 +160,31 @@ TestCase {
     }
 
     function test_submitDoesNotTouchTheTimer() {
-        var popup = createPopup()
-        popup.openWithSource(1, "正在专注的任务", 0)
-        var field = findChild(popup.contentItem, "knowledgeGapCaptureField")
-        verify(field)
-        field.text = "这一段没听懂"
-        popup.submit()
+        var prevVisible = testCase.visible
+        testCase.visible = true
+        try {
+            var host = createTemporaryObject(focusHostComponent, testCase)
+            verify(host)
+            host.openKnowledgeGapCapture()
+            var popup = host.knowledgeGapPopupItem
+            verify(popup)
+            tryCompare(popup, "opened", true, 3000)
+            var field = findChild(popup.contentItem, "knowledgeGapCaptureField")
+            verify(field)
+            field.text = "这一段没听懂"
+            field.forceActiveFocus()
+            keyClick(Qt.Key_Return)
 
-        compare(testCase.captureCalls, 1)
-        // 计时器一次都不该被碰过，而且仍在跑。
-        compare(fakeTimer.pauseCalls, 0)
-        compare(fakeTimer.stopCalls, 0)
-        compare(fakeTimer.isRunning, true)
+            compare(testCase.captureCalls, 1)
+            compare(testCase.lastSourceTaskId, 1)
+            compare(testCase.lastCategoryId, 5)
+            // 计时器一次都不该被碰过，而且仍在跑。
+            compare(fakeTimer.pauseCalls, 0)
+            compare(fakeTimer.stopCalls, 0)
+            compare(fakeTimer.isRunning, true)
+        } finally {
+            testCase.visible = prevVisible
+        }
     }
 
     function test_enterKeySaves() {

@@ -889,6 +889,8 @@ Item {
 
                     background: Rectangle {
                         color: rolloverMoveButton.hovered ? Theme.accentFillStrong : Theme.accentFill
+                        border.color: rolloverMoveButton.visualFocus ? Theme.focusRing : "transparent"
+                        border.width: rolloverMoveButton.visualFocus ? 2 : 0
                         radius: Theme.radiusMd
                     }
 
@@ -913,15 +915,15 @@ Item {
 
                     background: Rectangle {
                         color: rolloverIgnoreButton.hovered ? Theme.surfaceSunken : "transparent"
-                        border.color: Theme.border
-                        border.width: 1
+                        border.color: rolloverIgnoreButton.visualFocus ? Theme.focusRing : Theme.border
+                        border.width: rolloverIgnoreButton.visualFocus ? 2 : 1
                         radius: Theme.radiusMd
                     }
 
                     contentItem: Text {
                         text: rolloverIgnoreButton.text
                         textFormat: Text.PlainText
-                        color: Theme.inkSoft
+                        color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -979,6 +981,8 @@ Item {
 
                     background: Rectangle {
                         color: gapConvertButton.hovered ? Theme.accentFillStrong : Theme.accentFill
+                        border.color: gapConvertButton.visualFocus ? Theme.focusRing : "transparent"
+                        border.width: gapConvertButton.visualFocus ? 2 : 0
                         radius: Theme.radiusMd
                     }
 
@@ -1003,15 +1007,15 @@ Item {
 
                     background: Rectangle {
                         color: gapOpenButton.hovered ? Theme.surfaceSunken : "transparent"
-                        border.color: Theme.border
-                        border.width: 1
+                        border.color: gapOpenButton.visualFocus ? Theme.focusRing : Theme.border
+                        border.width: gapOpenButton.visualFocus ? 2 : 1
                         radius: Theme.radiusMd
                     }
 
                     contentItem: Text {
                         text: gapOpenButton.text
                         textFormat: Text.PlainText
-                        color: Theme.inkSoft
+                        color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -1264,6 +1268,7 @@ Item {
     AddTaskDialog {
         id: addTaskDialog
         taskManagerRef: root.taskManagerRef
+        settingsRef: root.settingsRef
         objectName: "todayAddTaskDialog"
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
@@ -1276,6 +1281,7 @@ Item {
 
     EditTaskDialog {
         taskManagerRef: root.taskManagerRef
+        settingsRef: root.settingsRef
         interactionCoordinatorRef: root.interactionCoordinatorRef
         interactionSource: "TodayTaskView.edit_dialog"
         onOpenFailed: function(message) { root.loadError = message }
@@ -1312,5 +1318,6 @@ Item {
 
         parent: root
         countdownServiceRef: root.countdownServiceRef
+        settingsRef: root.settingsRef
     }
 }

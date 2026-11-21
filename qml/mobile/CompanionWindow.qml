@@ -98,6 +98,8 @@ Item {
 
     // 同步计时失败由发起处合并到现有提示，外壳只显示未被认领的后台失败。
     property var timerFailureCall: null
+    property bool endingFocusForCompletion: false
+    property bool lastStopDiscarded: false
     function callTimer(action) {
         var previous = root.timerFailureCall
         var call = { value: undefined, error: "" }
@@ -113,6 +115,9 @@ Item {
             if (root.timerFailureCall && root.timerFailureCall.error.length === 0)
                 root.timerFailureCall.error = String(message || "")
         }
+        function onSessionDiscarded(duration) {
+            root.lastStopDiscarded = true
+        }
     }
 
     function setCompleted(task, completed) {
@@ -126,9 +131,22 @@ Item {
             return
         // 完成的正是正在计时的任务：顺带结束这段专注，否则之后的时间也会记到它头上。
         if (root.focusTimerRef && root.focusTimerRef.hasActiveSession && root.currentTaskId === taskId) {
-            var call = root.callTimer(function() { return root.focusTimerRef.stopFocus() })
+            root.endingFocusForCompletion = true
+            root.lastStopDiscarded = false
+            var call
+            try {
+                call = root.callTimer(function() {
+                    return typeof root.focusTimerRef.stopAndResetPomodoroCycle === "function"
+                           ? root.focusTimerRef.stopAndResetPomodoroCycle()
+                           : root.focusTimerRef.stopFocus()
+                })
+            } finally {
+                root.endingFocusForCompletion = false
+            }
             if (call.value) {
-                root.toastRequested(qsTr("已完成，专注已结束"))
+                root.toastRequested(root.lastStopDiscarded
+                                    ? qsTr("已完成，专注不足 3 分钟，未计入记录")
+                                    : qsTr("已完成，专注已结束"))
             } else {
                 root.toastRequested(call.error.length > 0 ? qsTr("已完成，但%1").arg(call.error)
                                                           : qsTr("已完成，但结束专注失败，计时仍在继续"))
@@ -136,25 +154,67 @@ Item {
         }
     }
 
+    function stopCurrentTimer() {
+        if (!root.focusTimerRef)
+            return
+        autoAdvanceTimer.stop()
+        root.justCompletedPhase = 0
+        var call = root.callTimer(function() {
+            return typeof root.focusTimerRef.stopAndResetPomodoroCycle === "function"
+                   ? root.focusTimerRef.stopAndResetPomodoroCycle()
+                   : root.focusTimerRef.stopFocus()
+        })
+        if (!call.value)
+            root.toastRequested(call.error || qsTr("专注没有结束，请重试"))
+    }
+
+    function dismissCompletedPhase() {
+        autoAdvanceTimer.stop()
+        root.justCompletedPhase = 0
+        if (root.focusTimerRef && typeof root.focusTimerRef.resetPomodoroCount === "function")
+            root.focusTimerRef.resetPomodoroCount()
+    }
+
+    // 同步计时器已持有的任务上下文：冷启动恢复番茄专注或休息阶段时，onCurrentTaskChanged
+    // 可能早于伴侣页创建，必须在初始化与阶段变更时主动回读，避免休息结束后丢失任务编号。
+    function syncLastTaskFromTimer() {
+        if (!root.focusTimerRef)
+            return
+        var phase = Number(root.focusTimerRef.phase)
+        var taskId = Number(root.focusTimerRef.currentTaskId)
+        if (taskId > 0 && (phase === 1 || phase === 2)) {
+            root.lastTaskId = taskId
+            root.lastTaskTitle = String(root.focusTimerRef.currentTaskTitle || "")
+        }
+    }
+
+    onFocusTimerRefChanged: root.syncLastTaskFromTimer()
+
     function startPomodoro(taskId, title) {
         if (!root.focusTimerRef || root.timerActive)
             return
         autoAdvanceTimer.stop()
-        root.justCompletedPhase = 0
         var call = root.callTimer(function() { return root.focusTimerRef.startPomodoroWork(taskId, title, root.workMinutes * 60) })
-        if (!call.value)
+        if (call.value) {
+            // 仅在真正启动成功后才离开完成态，失败时保留「下一个番茄」重试入口。
+            root.justCompletedPhase = 0
+        } else {
             root.toastRequested(call.error || qsTr("番茄没有开始，请重试"))
+        }
     }
 
     function startBreak() {
         if (!root.focusTimerRef || root.timerActive)
             return
         autoAdvanceTimer.stop()
-        root.justCompletedPhase = 0
         var call = root.callTimer(function() { return root.focusTimerRef.startBreakForTask(root.nextBreakMinutes() * 60,
                                                   root.lastTaskId, root.lastTaskTitle) })
-        if (!call.value)
+        if (call.value) {
+            // 仅在真正进入休息后才离开完成态，失败时保留「开始休息」重试入口。
+            root.justCompletedPhase = 0
+        } else {
             root.toastRequested(call.error || qsTr("休息没有开始，请重试"))
+        }
     }
 
     function adjustWorkMinutes(delta) {
@@ -163,7 +223,10 @@ Item {
         root.appSettingsRef.workMinutes = Math.max(5, Math.min(180, root.workMinutes + delta))
     }
 
-    Component.onCompleted: root.refresh()
+    Component.onCompleted: {
+        root.refresh()
+        root.syncLastTaskFromTimer()
+    }
 
     Connections {
         target: root.taskManagerRef
@@ -202,11 +265,12 @@ Item {
         ignoreUnknownSignals: true
 
         function onCurrentTaskChanged() {
-            // 记下这一段专注的任务，休息结束后「开始下一个番茄」接着它。
-            if (root.focusTimerRef.phase === 1 && root.focusTimerRef.currentTaskId > 0) {
-                root.lastTaskId = root.focusTimerRef.currentTaskId
-                root.lastTaskTitle = String(root.focusTimerRef.currentTaskTitle || "")
-            }
+            // 记下这一段专注或休息所关联的任务，休息结束后「开始下一个番茄」接着它。
+            root.syncLastTaskFromTimer()
+        }
+
+        function onPhaseChanged() {
+            root.syncLastTaskFromTimer()
         }
 
         // 人在场时到点：按设置自动衔接下一阶段。
@@ -238,12 +302,13 @@ Item {
         onTriggered: {
             var phase = autoAdvanceTimer.pendingPhase
             autoAdvanceTimer.pendingPhase = 0
-            // 延迟期间用户可能已经手动开始了别的计时；只在仍停在这个完成态时衔接。
+            // 延迟期间用户可能已手动操作或关掉自动衔接开关；触发前重新核验设置与当前完成态。
             if (root.justCompletedPhase !== phase || root.timerActive)
                 return
-            if (phase === 1)
+            var settings = root.appSettingsRef
+            if (phase === 1 && settings && settings.autoStartBreak)
                 root.startBreak()
-            else if (phase === 2)
+            else if (phase === 2 && settings && settings.autoStartNextPomodoro && root.lastTaskId > 0)
                 root.startPomodoro(root.lastTaskId, root.lastTaskTitle)
         }
     }

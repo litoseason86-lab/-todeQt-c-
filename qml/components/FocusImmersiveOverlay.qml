@@ -12,6 +12,8 @@ Item {
     property var timerRef: null
     property var settingsRef: null
     property bool active: false
+    // 备份或恢复处于数据库临界区时由 MainWindow 置真，阻断 Esc 快捷键穿透。
+    property bool inputBlocked: false
 
     signal exitRequested()
 
@@ -152,9 +154,28 @@ Item {
         onTriggered: root.hideControls()
     }
 
+    function itemInsideOverlay(item) {
+        const overlayLayer = root.Overlay.overlay
+        if (!overlayLayer || !item) {
+            return false
+        }
+        let current = item
+        while (current) {
+            if (current === overlayLayer) {
+                return true
+            }
+            current = current.parent
+        }
+        return false
+    }
+
+    readonly property bool overlayHoldsFocus: root.itemInsideOverlay(
+        root.Window.window ? root.Window.window.activeFocusItem : null)
+
     Shortcut {
         sequence: "Esc"
-        enabled: root.active
+        // 顶层浮层弹窗（如快速记一笔、确认框）持焦，或备份/恢复阻断输入时，不穿透退出沉浸态。
+        enabled: root.active && !root.overlayHoldsFocus && !root.inputBlocked
         onActivated: root.requestExit()
     }
 
@@ -332,8 +353,10 @@ Item {
 
                 background: Rectangle {
                     color: immersiveExitButton.hovered ? Theme.surface : "transparent"
-                    border.color: immersiveExitButton.hovered ? Theme.border : "transparent"
-                    border.width: 1
+                    border.color: immersiveExitButton.visualFocus
+                                  ? Theme.focusRing
+                                  : (immersiveExitButton.hovered ? Theme.border : "transparent")
+                    border.width: immersiveExitButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
                 }
 
@@ -383,6 +406,8 @@ Item {
                             return Theme.glassHover
                         return Theme.glassCard
                     }
+                    border.color: immersivePrimaryButton.visualFocus ? Theme.focusRing : Theme.glassBorder
+                    border.width: immersivePrimaryButton.visualFocus ? 2 : 1
                     panelShadowEnabled: false
 
                     Behavior on color {
@@ -414,9 +439,11 @@ Item {
 
                 onClicked: root.triggerSecondary()
 
-                // 次按钮：透明玻璃底，悬停才加实；与仪表盘「结束」一致。
+                // 次按钮：同色零透明玻璃底，悬停才加实；用 glassHoverIdle 避免暗色主题白雾插值闪烁。
                 background: GlassPanel {
-                    color: immersiveSecondaryButton.hovered ? Theme.glassHover : Qt.rgba(1, 1, 1, 0)
+                    color: immersiveSecondaryButton.hovered ? Theme.glassHover : Theme.glassHoverIdle
+                    border.color: immersiveSecondaryButton.visualFocus ? Theme.focusRing : Theme.glassBorder
+                    border.width: immersiveSecondaryButton.visualFocus ? 2 : 1
                     specularEnabled: false
                     panelShadowEnabled: false
 

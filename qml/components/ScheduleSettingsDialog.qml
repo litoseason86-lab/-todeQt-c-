@@ -23,6 +23,9 @@ Popup {
     palette.highlight: Theme.inputSelection
     palette.highlightedText: Theme.inputSelectedInk
     palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
     palette.base: Theme.controlSurface
     palette.button: Theme.controlSurface
     palette.buttonText: Theme.controlInk
@@ -370,8 +373,10 @@ Popup {
                     y: Math.round((weekendCheck.height - height) / 2)
                     radius: Theme.radiusSm
                     color: weekendCheck.checked ? Theme.accentFill : Theme.surfaceRaised
-                    border.color: weekendCheck.checked ? Theme.accent : Theme.border
-                    border.width: weekendCheck.activeFocus ? 2 : 1
+                    border.color: weekendCheck.visualFocus
+                                  ? Theme.focusRing
+                                  : (weekendCheck.checked ? Theme.accent : Theme.border)
+                    border.width: weekendCheck.visualFocus ? 2 : 1
 
                     Text {
                         anchors.centerIn: parent

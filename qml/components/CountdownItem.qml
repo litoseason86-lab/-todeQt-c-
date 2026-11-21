@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import ".."
+import "../LogicalDay.js" as LogicalDay
 
 // 玻璃卡的底色、白色描边、圆角、顶部高光和落影都由 GlassPanel 统一提供，与各页面的玻璃框同一套。
 GlassPanel {
@@ -20,11 +21,19 @@ GlassPanel {
     signal moveDownRequested()
 
     height: 62
+    activeFocusOnTab: true
     // 悬停反馈靠“边框变色”表达：底色 idle/hover 都用玻璃卡片材质，
     // 悬停时由 border 从玻璃描边变为 Theme.accent 来提示，所以底色不随悬停变化不是笔误。
     // 落影图层的开关（GlassPanel.layer.enabled）只看可见性和透明度，悬停不会让它重建：
     // 悬停事件分发期间重建效果层，Qt Quick 的 hover 命中树可能留下失效项指针。
-    border.color: hitArea.containsMouse ? Theme.accent : Theme.glassBorder
+    border.color: root.activeFocus ? Theme.focusRing : (hitArea.containsMouse ? Theme.accent : Theme.glassBorder)
+    border.width: root.activeFocus ? 2 : 1
+    Accessible.role: Accessible.Button
+    Accessible.name: qsTr("编辑倒计时：%1").arg(root.goalName)
+    Accessible.onPressAction: root.clicked()
+    Keys.onReturnPressed: root.clicked()
+    Keys.onEnterPressed: root.clicked()
+    Keys.onSpacePressed: root.clicked()
 
     // 上移/下移/删除共用的安静描边样式：默认玻璃底，悬停才转强调色，
     // 避免每行三颗按钮把列表变成按钮墙。
@@ -33,13 +42,16 @@ GlassPanel {
 
         implicitWidth: 34
         implicitHeight: Theme.controlHeightMd
+        activeFocusOnTab: true
 
         background: Rectangle {
             radius: Theme.radiusMd
             color: actionButton.pressed || actionButton.hovered ? Theme.glassHover : Theme.glassCard
-            border.color: actionButton.enabled && (actionButton.hovered || actionButton.pressed)
-                          ? Theme.accent : Theme.border
-            border.width: 1
+            border.color: actionButton.visualFocus
+                          ? Theme.focusRing
+                          : (actionButton.enabled && (actionButton.hovered || actionButton.pressed)
+                             ? Theme.accent : Theme.border)
+            border.width: actionButton.visualFocus ? 2 : 1
             opacity: actionButton.enabled ? 1.0 : 0.45
 
             Behavior on color {
@@ -98,7 +110,7 @@ GlassPanel {
             }
 
             Text {
-                text: Qt.formatDate(root.targetDate, "yyyy年MM月dd日")
+                text: LogicalDay.formatChineseDate(root.targetDate)
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXs
                 color: Theme.inkSoft
@@ -149,6 +161,7 @@ GlassPanel {
         RowActionButton {
             text: "删除"
             implicitWidth: 52
+            Accessible.name: qsTr("删除 %1").arg(root.goalName)
             onClicked: root.deleteRequested(root.goalId)
         }
     }

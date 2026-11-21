@@ -124,6 +124,17 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: root.sessions.length === 0
+
+            Text {
+                objectName: "focusTimelineEmptyText"
+                anchors.centerIn: parent
+                text: root.editable
+                      ? qsTr("暂无专注记录，开始专注或点击右上角补录")
+                      : qsTr("暂无专注记录")
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontMd
+                color: Theme.inkSoft
+            }
         }
 
         ScrollView {

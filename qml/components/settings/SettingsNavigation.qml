@@ -55,7 +55,7 @@ Control {
                 Text {
                     anchors.centerIn: parent
                     text: "番"
-                    color: Theme.accentInk
+                    color: Theme.accentFillInk
                     font.pixelSize: 14
                     font.weight: Font.Bold
                 }
@@ -112,8 +112,8 @@ Control {
                            : (categoryButton.hovered
                               ? hoverTint
                               : Qt.rgba(hoverTint.r, hoverTint.g, hoverTint.b, 0))
-                    border.color: categoryButton.activeFocus ? Theme.focusRing : "transparent"
-                    border.width: categoryButton.activeFocus ? 2 : 0
+                    border.color: categoryButton.visualFocus ? Theme.focusRing : "transparent"
+                    border.width: categoryButton.visualFocus ? 2 : 0
                     radius: Theme.radiusMd
 
                     Behavior on color {

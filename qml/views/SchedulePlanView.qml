@@ -184,8 +184,14 @@ Item {
         target: root.scheduleServiceRef
         ignoreUnknownSignals: true
 
-        function onScheduleChanged() { root.refreshEntries() }
-        function onPeriodsChanged() { root.refreshPeriods() }
+        function onScheduleChanged() {
+            if (root.pageActive)
+                root.refreshEntries()
+        }
+        function onPeriodsChanged() {
+            if (root.pageActive)
+                root.refreshPeriods()
+        }
         function onOperationFailed(message) {
             if (!root.pageActive)
                 return
@@ -391,8 +397,8 @@ Item {
                     color: settingsButton.pressed || settingsButton.hovered
                            ? hoverTint
                            : Qt.rgba(hoverTint.r, hoverTint.g, hoverTint.b, 0)
-                    border.color: settingsButton.activeFocus ? Theme.focusRing : "transparent"
-                    border.width: settingsButton.activeFocus ? 2 : 0
+                    border.color: settingsButton.visualFocus ? Theme.focusRing : "transparent"
+                    border.width: settingsButton.visualFocus ? 2 : 0
 
                     Behavior on color {
                         ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad }

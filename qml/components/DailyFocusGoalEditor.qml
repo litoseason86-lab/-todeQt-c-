@@ -119,7 +119,7 @@ FocusScope {
 
                 background: Rectangle {
                     radius: Theme.radiusMd
-                    color: cancelButton.hovered ? Theme.glassHover : Qt.rgba(1, 1, 1, 0)
+                    color: cancelButton.hovered ? Theme.glassHover : Theme.glassHoverIdle
                     border.width: cancelButton.visualFocus ? 2 : 1
                     border.color: cancelButton.visualFocus ? Theme.focusRing : Theme.borderSubtle
                 }

@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
@@ -6,6 +8,26 @@ import ".."
 // 恢复确认弹窗：明确告知“替换全部数据 + 先自动备份当前数据”，并展示备份元信息。
 Popup {
     id: root
+
+    // 退出动画/关闭期间拦截二次提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
+    // 破坏性全库替换操作：默认焦点放在「取消」按钮，防止误触回车立即覆盖数据。
+    onOpened: cancelButton.forceActiveFocus(Qt.PopupFocusReason)
+
+    palette.text: Theme.inputInk
+    palette.placeholderText: Theme.inputPlaceholderInk
+    palette.highlight: Theme.inputSelection
+    palette.highlightedText: Theme.inputSelectedInk
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
+    palette.base: Theme.controlSurface
+    palette.button: Theme.controlSurface
+    palette.buttonText: Theme.controlInk
+    palette.windowText: Theme.controlInk
 
     property string backupPath: ""
     property var info: ({})
@@ -151,8 +173,8 @@ Popup {
 
                 background: Rectangle {
                     color: cancelButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                    border.color: Theme.border
-                    border.width: 1
+                    border.color: cancelButton.visualFocus ? Theme.focusRing : Theme.border
+                    border.width: cancelButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
                 }
                 contentItem: Text {
@@ -172,12 +194,16 @@ Popup {
                 implicitWidth: 96
                 implicitHeight: Theme.controlHeightMd
                 onClicked: {
+                    if (root.submissionClosed)
+                        return
                     root.confirmed(root.backupPath)
                     root.close()
                 }
 
                 background: Rectangle {
                     color: confirmButton.hovered ? Theme.accentFillStrong : Theme.accentFill
+                    border.color: confirmButton.visualFocus ? Theme.focusRing : "transparent"
+                    border.width: confirmButton.visualFocus ? 2 : 0
                     radius: Theme.radiusMd
                 }
                 contentItem: Text {

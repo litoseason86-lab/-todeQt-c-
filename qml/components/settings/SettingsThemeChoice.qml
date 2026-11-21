@@ -28,8 +28,8 @@ Button {
 
     background: Rectangle {
         color: root.checked ? Theme.accentSoft : "transparent"
-        border.color: root.activeFocus ? Theme.focusRing : (root.checked ? Theme.accent : Theme.border)
-        border.width: root.activeFocus ? 2 : 1
+        border.color: root.visualFocus ? Theme.focusRing : (root.checked ? Theme.accent : Theme.border)
+        border.width: root.visualFocus ? 2 : 1
         radius: Theme.radiusMd
     }
 

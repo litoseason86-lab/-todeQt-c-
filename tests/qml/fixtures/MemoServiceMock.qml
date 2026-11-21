@@ -91,39 +91,60 @@ QtObject {
             operationFailed(saveFailureMessage);
             return false;
         }
+        var found = false;
         var next = records.slice();
         for (var i = 0; i < next.length; ++i) {
             if (next[i].id !== id)
                 continue;
+            found = true;
             next[i] = Object.assign({}, next[i], changes);
             next[i].displayTitle = next[i].title || next[i].body.split("\n")[0];
             next[i].preview = next[i].body.split("\n")[0];
         }
+        if (!found)
+            return false;
         records = next;
         memosChanged();
         return true;
     }
     function deleteMemo(id) {
+        calls = calls.concat(["delete:" + id]);
         deletes = deletes.concat([id]);
-        records = records.filter(function (r) {
+        if (failSave) {
+            operationFailed(saveFailureMessage);
+            return false;
+        }
+        var next = records.filter(function (r) {
             return r.id !== id;
         });
+        if (next.length === records.length)
+            return false;
+        records = next;
         memosChanged();
         return true;
     }
     function reorderMemos(categoryId, ids) {
+        calls = calls.concat(["reorder:" + categoryId]);
         reorders = reorders.concat([
             {
                 categoryId: categoryId,
                 ids: ids.slice()
             }
         ]);
+        if (failSave) {
+            operationFailed(saveFailureMessage);
+            return false;
+        }
         var others = records.filter(function (r) {
             return r.categoryId !== categoryId;
         });
-        var moved = ids.map(function (id) {
-            return root.getMemo(id);
-        });
+        var moved = [];
+        for (var i = 0; i < ids.length; ++i) {
+            var item = root.getMemo(ids[i]);
+            if (!item || item.id === undefined)
+                return false;
+            moved.push(item);
+        }
         records = moved.concat(others);
         memosChanged();
         return true;

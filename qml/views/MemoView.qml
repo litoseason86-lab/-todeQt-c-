@@ -177,6 +177,18 @@ FocusScope {
             updatedAt: ""
         });
     }
+    // 恢复备份或被同步快照整库替换时：旧库未保存草稿和待决交互属于旧库主键空间，必须先清空再重读新库。
+    function resetForDatabaseRestore() {
+        saveTimer.stop();
+        if (root.draggingId >= 0)
+            root.finishDrag(true);
+        if (deleteConfirm.pendingId > 0)
+            root.cancelDelete();
+        if (moveCategoryPopup.visible)
+            moveCategoryPopup.close();
+        root.clearEditor();
+        root.reload();
+    }
     function rebuildRows() {
         rows.clear();
         for (var entry of root.allMemos) {
@@ -699,6 +711,7 @@ FocusScope {
     }
     GlassPanel {
         id: panel
+        objectName: "memoGlass"
         anchors {
             top: header.bottom
             topMargin: Theme.space16
@@ -1311,6 +1324,7 @@ FocusScope {
                     }
                     ScrollBar.vertical: PageScrollBar {
                         id: bodyBar
+                        objectName: "memoScrollBar"
                         parent: root
                         x: root.width - width
                         // 滚动条挂在页面根上（贴窗口右缘），纵向要和正文区对齐。逐层加上各级的 y：

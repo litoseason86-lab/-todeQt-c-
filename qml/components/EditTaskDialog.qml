@@ -69,6 +69,7 @@ Popup {
     // 它残留的旧记录（取消完成时保留下来的）也不该在这里被改动。
     property bool editingCompleted: false
     property var taskManagerRef: null
+    property var settingsRef: null
     // 同步服务失败只由本次提交认领；不用 Connections.enabled，避免绑定重算晚于信号。
     property bool writingTask: false
     // 生产页面注入返回 bool 的写入函数 (taskId, changes)；保留信号用于独立组件和兼容测试。
@@ -83,28 +84,28 @@ Popup {
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     width: Math.min(460, parent ? Math.max(300, parent.width - 64) : 460)
-    height: panel.implicitHeight
+    // 编辑已完成任务（含备注与完成记录）在 620px 最矮窗口下会超过一屏，配合内部 Flickable 防上下溢裁。
+    height: Math.min(panel.implicitHeight, parent ? Math.max(360, parent.height - 48) : panel.implicitHeight)
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round((parent.height - height) / 2) : 0
     padding: 0
 
     function isoWithOffset(offset) {
-        // 快捷日期以逻辑今天为锚，避免凌晨编辑时“今天”跳到物理次日。
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        // 快捷日期以逻辑今天为锚，避免凌晨编辑时“今天”跳到物理次日；优先读注入的 settingsRef。
+        var settings = root.settingsRef
+        if (!settings) {
+            // qmllint disable unqualified
+            settings = (typeof appSettings !== "undefined" && appSettings) ? appSettings : null
+            // qmllint enable unqualified
+        }
+        var hour = settings ? settings.dayStartHour : 4
         var d = LogicalDay.todayDate(hour, new Date());
         d.setDate(d.getDate() + offset);
         return Qt.formatDate(d, "yyyy-MM-dd");
     }
 
     function normalizedIso(value) {
-        if (value instanceof Date) {
-            return Qt.formatDate(value, "yyyy-MM-dd");
-        }
-        // QML modelData.date 可能是 Date、yyyy-MM-dd 或带时间字符串；编辑接口只需要日期段。
-        return String(value || "").substring(0, 10);
+        return LogicalDay.isoFromValue(value) || String(value || "").substring(0, 10);
     }
 
     function refreshCategories() {
@@ -455,11 +456,17 @@ Popup {
         }
     }
 
-    contentItem: ColumnLayout {
-        id: contentColumn
+    contentItem: Flickable {
+        contentWidth: width
+        contentHeight: contentColumn.implicitHeight
+        boundsBehavior: Flickable.StopAtBounds
+        clip: true
 
-        width: root.width
-        spacing: Theme.space12
+        ColumnLayout {
+            id: contentColumn
+
+            width: root.width
+            spacing: Theme.space12
 
         Rectangle {
             Layout.fillWidth: true
@@ -546,9 +553,12 @@ Popup {
                 accessiblePrefix: "预计用时"
                 compact: true
                 totalMinutes: root.estimatedMinutes
+                // 优先读取注入的 taskManagerRef，未注入时回落兼容独立测试。
                 // qmllint disable unqualified
-                maximumMinutes: (typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedMinutes)
-                    ? taskManager.maxEstimatedMinutes : 24 * 60
+                maximumMinutes: (root.taskManagerRef && root.taskManagerRef.maxEstimatedMinutes)
+                    ? root.taskManagerRef.maxEstimatedMinutes
+                    : ((typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedMinutes)
+                       ? taskManager.maxEstimatedMinutes : 24 * 60)
                 // qmllint enable unqualified
                 onAccepted: root.submit()
             }
@@ -558,7 +568,7 @@ Popup {
                 visible: estimateFields.enteredMinutes === 0
                 text: "未设置"
                 textFormat: Text.PlainText
-                color: Theme.inkMuted
+                color: Theme.inkSoft
                 font.pixelSize: Theme.fontSm
                 verticalAlignment: Text.AlignVCenter
             }
@@ -606,6 +616,16 @@ Popup {
                 font.pixelSize: Theme.fontMd
                 wrapMode: TextArea.Wrap
                 selectByMouse: true
+                // 拦截 Tab 避免键盘焦点死锁在多行输入框内，同时支持 ⌘↩ 快捷保存。
+                KeyNavigation.priority: KeyNavigation.BeforeItem
+                KeyNavigation.tab: root.editingCompleted ? completionNoteField : cancelButton
+                Keys.onPressed: function (event) {
+                    if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                            && (event.modifiers & Qt.ControlModifier)) {
+                        event.accepted = true
+                        root.submit()
+                    }
+                }
 
                 background: Rectangle {
                     radius: Theme.radiusMd
@@ -661,6 +681,15 @@ Popup {
                 wrapMode: TextArea.Wrap
                 selectByMouse: true
                 Accessible.name: "完成记录"
+                KeyNavigation.priority: KeyNavigation.BeforeItem
+                KeyNavigation.tab: cancelButton
+                Keys.onPressed: function (event) {
+                    if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                            && (event.modifiers & Qt.ControlModifier)) {
+                        event.accepted = true
+                        root.submit()
+                    }
+                }
 
                 background: Rectangle {
                     radius: Theme.radiusMd
@@ -746,8 +775,8 @@ Popup {
 
                 background: Rectangle {
                     color: cancelButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                    border.color: Theme.border
-                    border.width: 1
+                    border.color: cancelButton.visualFocus ? Theme.focusRing : Theme.border
+                    border.width: cancelButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
                 }
 
@@ -773,6 +802,8 @@ Popup {
 
                 background: Rectangle {
                     color: confirmButton.hovered ? Theme.accentFillStrong : Theme.accentFill
+                    border.color: confirmButton.visualFocus ? Theme.focusRing : "transparent"
+                    border.width: confirmButton.visualFocus ? 2 : 0
                     radius: Theme.radiusMd
                 }
 
@@ -786,6 +817,7 @@ Popup {
                     verticalAlignment: Text.AlignVCenter
                 }
             }
+        }
         }
     }
 

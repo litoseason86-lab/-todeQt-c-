@@ -4,15 +4,25 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
+import "../LogicalDay.js" as LogicalDay
 import ".."
 
 Item {
     id: root
 
     property var countdownServiceRef: null
+    property var settingsRef: null
+    property bool pageActive: true
     property string loadError: ""
     readonly property bool showingErrorState: root.loadError.length > 0
     readonly property bool showingEmptyState: !root.primaryGoal() && !root.showingErrorState
+
+    onPageActiveChanged: {
+        if (root.pageActive && root.countdownServiceRef
+                && typeof root.countdownServiceRef.reload === "function") {
+            root.countdownServiceRef.reload()
+        }
+    }
 
     function primaryGoal() {
         return root.countdownServiceRef ? root.countdownServiceRef.primaryGoal : null;
@@ -40,9 +50,10 @@ Item {
 
     function weekdayText(value) {
         // Qt.formatDate 的星期占位符依赖系统区域设置，C locale 下会输出英文；
-        // 手工映射保证任何环境都显示中文「周X」。
+        // 统一先经 LogicalDay.toLocalDate 消除负时区偏移，再手工映射中文「周X」。
         var glyphs = ["日", "一", "二", "三", "四", "五", "六"];
-        return "周" + glyphs[new Date(value).getDay()];
+        var local = LogicalDay.toLocalDate(value);
+        return local ? ("周" + glyphs[local.getDay()]) : "";
     }
 
     function heroDateText() {
@@ -50,7 +61,9 @@ Item {
         if (!goal) {
             return "";
         }
-        var text = Qt.formatDate(goal.targetDate, "yyyy年MM月dd日") + " · " + root.weekdayText(goal.targetDate);
+        var dateLabel = LogicalDay.formatChineseDate(goal.targetDate);
+        var weekday = root.weekdayText(goal.targetDate);
+        var text = weekday.length > 0 ? (dateLabel + " · " + weekday) : dateLabel;
         // 过期状态并入日期行，天数大字保持「还剩/已过 N 天」同一种排版，不再切换布局。
         if (Number(goal.daysRemaining || 0) < 0) {
             text += " · 已过期";
@@ -62,6 +75,7 @@ Item {
         id: countdownDialog
         parent: root
         countdownServiceRef: root.countdownServiceRef
+        settingsRef: root.settingsRef
     }
 
     Connections {
@@ -69,6 +83,8 @@ Item {
         ignoreUnknownSignals: true
 
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             root.loadError = String(message || qsTr("倒计时数据操作失败"))
         }
 
@@ -191,8 +207,8 @@ Item {
                     background: Rectangle {
                         color: bannerRetryButton.down ? Theme.accentFillStrong
                                                       : Theme.accentFill
-                        border.color: bannerRetryButton.activeFocus ? Theme.focusRing : Theme.accent
-                        border.width: bannerRetryButton.activeFocus ? 2 : 1
+                        border.color: bannerRetryButton.visualFocus ? Theme.focusRing : Theme.accent
+                        border.width: bannerRetryButton.visualFocus ? 2 : 1
                         radius: Theme.radiusMd
                     }
 
@@ -211,15 +227,40 @@ Item {
             }
         }
 
-        // —— 英雄卡：与全应用一致的玻璃面板；悬停用描边转强调色提示可点击 ——
+        // —— 英雄卡：与全应用一致的玻璃面板；悬停用描边转强调色提示可点击，支持键盘回车/空格编辑 ——
         GlassPanel {
+            id: heroCard
             objectName: "countdownHeroCard"
 
             visible: !!root.primaryGoal()
             Layout.fillWidth: true
             Layout.preferredHeight: 220
             bottomRimEnabled: true
-            border.color: heroArea.containsMouse ? Theme.accent : Theme.glassBorder
+            activeFocusOnTab: visible
+            border.color: heroCard.activeFocus ? Theme.focusRing : (heroArea.containsMouse ? Theme.accent : Theme.glassBorder)
+            border.width: heroCard.activeFocus ? 2 : 1
+            Accessible.role: Accessible.Button
+            Accessible.name: root.primaryGoal()
+                             ? qsTr("编辑首要倒计时：%1").arg(String(root.primaryGoal().name || ""))
+                             : ""
+            Accessible.onPressAction: {
+                var goal = root.primaryGoal();
+                if (goal) {
+                    root.openEditor(goal.goalId, goal.name, goal.targetDate);
+                }
+            }
+            Keys.onReturnPressed: {
+                var goal = root.primaryGoal();
+                if (goal) root.openEditor(goal.goalId, goal.name, goal.targetDate);
+            }
+            Keys.onEnterPressed: {
+                var goal = root.primaryGoal();
+                if (goal) root.openEditor(goal.goalId, goal.name, goal.targetDate);
+            }
+            Keys.onSpacePressed: {
+                var goal = root.primaryGoal();
+                if (goal) root.openEditor(goal.goalId, goal.name, goal.targetDate);
+            }
 
             ColumnLayout {
                 anchors.centerIn: parent
@@ -227,6 +268,7 @@ Item {
                 spacing: Theme.space8
 
                 Text {
+                    objectName: "countdownHeroName"
                     Layout.fillWidth: true
                     text: root.primaryGoal() ? root.primaryGoal().name : ""
                     textFormat: Text.PlainText
@@ -473,8 +515,8 @@ Item {
                         background: Rectangle {
                             color: errorRetryButton.down ? Theme.accentFillStrong
                                                          : Theme.accentFill
-                            border.color: errorRetryButton.activeFocus ? Theme.focusRing : Theme.accent
-                            border.width: errorRetryButton.activeFocus ? 2 : 1
+                            border.color: errorRetryButton.visualFocus ? Theme.focusRing : Theme.accent
+                            border.width: errorRetryButton.visualFocus ? 2 : 1
                             radius: Theme.radiusMd
                         }
 

@@ -464,8 +464,10 @@ Rectangle {
                 color: checkbox.checked
                        ? Theme.accent
                        : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0)
-                border.color: checkbox.hovered ? Theme.accent : Theme.border
-                border.width: checkbox.hovered ? 2 : 1.5
+                border.color: checkbox.visualFocus
+                              ? Theme.focusRing
+                              : (checkbox.hovered ? Theme.accent : Theme.border)
+                border.width: (checkbox.visualFocus || checkbox.hovered) ? 2 : 1.5
 
                 Text {
                     anchors.centerIn: parent
@@ -562,7 +564,7 @@ Rectangle {
                         text: root.categoryName
                         textFormat: Text.PlainText
                         font.pixelSize: Theme.fontXs
-                        color: Theme.inkMuted
+                        color: Theme.inkSoft
                         elide: Text.ElideRight
                         Layout.maximumWidth: 88
                     }
@@ -580,7 +582,8 @@ Rectangle {
                     text: root.focusSummary
                     textFormat: Text.PlainText
                     font.pixelSize: root.compact ? Theme.fontXs : Theme.fontSm
-                    color: root.estimateOverflow ? Theme.accent : Theme.inkMuted
+                    // 浅底文字用可达 AA 对比度的 accentInk / inkSoft，禁用低对比品牌装饰色 accent / inkMuted。
+                    color: root.estimateOverflow ? Theme.accentInk : Theme.inkSoft
                 }
 
                 Text {
@@ -588,7 +591,7 @@ Rectangle {
                     text: "已超出预估"
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontXs
-                    color: Theme.inkMuted
+                    color: Theme.inkSoft
                 }
             }
 
@@ -703,6 +706,8 @@ Rectangle {
                         return Theme.glassHover
                     return Theme.glassCard
                 }
+                border.color: focusButton.visualFocus ? Theme.focusRing : Theme.glassBorder
+                border.width: focusButton.visualFocus ? 2 : 1
                 panelShadowEnabled: false
 
                 Behavior on color {
@@ -746,8 +751,10 @@ Rectangle {
             background: Rectangle {
                 radius: Theme.radiusMd
                 color: completeButton.hovered ? Theme.surfaceSunken : "transparent"
-                border.color: completeButton.hovered ? Theme.accent : Theme.border
-                border.width: 1
+                border.color: completeButton.visualFocus
+                              ? Theme.focusRing
+                              : (completeButton.hovered ? Theme.accent : Theme.border)
+                border.width: completeButton.visualFocus ? 2 : 1
             }
 
             contentItem: Text {
@@ -800,8 +807,10 @@ Rectangle {
             background: Rectangle {
                 radius: Theme.radiusMd
                 color: editButton.hovered ? Theme.surfaceSunken : "transparent"
-                border.color: editButton.hovered ? Theme.accent : Theme.border
-                border.width: 1
+                border.color: editButton.visualFocus
+                              ? Theme.focusRing
+                              : (editButton.hovered ? Theme.accent : Theme.border)
+                border.width: editButton.visualFocus ? 2 : 1
             }
 
             contentItem: Text {
@@ -840,25 +849,14 @@ Rectangle {
                         return Theme.accentSoft;
                     if (deleteButton.hovered)
                         return Theme.surfaceSunken;
-                    return "transparent";
+                    // 用悬停态同色零透明做静息起点，避免 ColorAnimation 从黑基透明插值出灰影。
+                    return Qt.rgba(Theme.surfaceSunken.r, Theme.surfaceSunken.g, Theme.surfaceSunken.b, 0);
                 }
-                border.color: deleteButton.hovered || deleteButton.pressFeedbackActive ? Theme.dangerSoft : Theme.border
-                border.width: 1
-                property color warmShadowColor: Theme.ink
-                property real warmShadowOpacity: deleteButton.pressFeedbackActive ? 0.04 : 0.08
-                property real warmShadowBlur: deleteButton.pressFeedbackActive ? 0.10 : 0.14
-                property real warmShadowVerticalOffset: deleteButton.pressFeedbackActive ? 1 : 2
-                // 按钮 hover/按下期间只改阴影参数，不改变效果层生命周期。
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    autoPaddingEnabled: true
-                    shadowEnabled: true
-                    shadowColor: taskDeleteButtonBackground.warmShadowColor
-                    shadowOpacity: taskDeleteButtonBackground.warmShadowOpacity
-                    shadowBlur: taskDeleteButtonBackground.warmShadowBlur
-                    shadowHorizontalOffset: 0
-                    shadowVerticalOffset: taskDeleteButtonBackground.warmShadowVerticalOffset
-                }
+                // 按钮复用整行阴影层，不再单独开启离屏 FBO + MultiEffect，避免每行任务显存与 GPU pass 翻倍。
+                border.color: deleteButton.visualFocus
+                              ? Theme.focusRing
+                              : (deleteButton.hovered || deleteButton.pressFeedbackActive ? Theme.dangerSoft : Theme.border)
+                border.width: deleteButton.visualFocus ? 2 : 1
 
                 Behavior on color {
                     ColorAnimation {
@@ -875,27 +873,6 @@ Rectangle {
                 }
 
                 Behavior on y {
-                    NumberAnimation {
-                        duration: Theme.reduceMotion ? 0 : 90
-                        easing.type: Easing.OutQuad
-                    }
-                }
-
-                Behavior on warmShadowOpacity {
-                    NumberAnimation {
-                        duration: Theme.reduceMotion ? 0 : 90
-                        easing.type: Easing.OutQuad
-                    }
-                }
-
-                Behavior on warmShadowBlur {
-                    NumberAnimation {
-                        duration: Theme.reduceMotion ? 0 : 90
-                        easing.type: Easing.OutQuad
-                    }
-                }
-
-                Behavior on warmShadowVerticalOffset {
                     NumberAnimation {
                         duration: Theme.reduceMotion ? 0 : 90
                         easing.type: Easing.OutQuad

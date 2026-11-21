@@ -258,9 +258,16 @@ TestCase {
         taskManager.weekRows = [makeTask(1, "已完成", testCase.logicalToday(), true),
                                 makeTask(2, "未完成", testCase.logicalToday())]
         var view = createTemporaryObject(viewComponent, testCase)
+        verify(!!view, "Component exists")
         view.refresh()
-        // 契约由 delegate 的 draggable 绑定表达；这里确认服务支持判定本身成立。
         tryCompare(view, "canMoveTasks", true)
+        tryVerify(function () {
+            return !!testCase.findTaskRow(view, 1) && !!testCase.findTaskRow(view, 2)
+        }, 3000, "本周任务行未就绪")
+        var completedRow = testCase.findTaskRow(view, 1)
+        var pendingRow = testCase.findTaskRow(view, 2)
+        compare(completedRow.draggable, false)
+        compare(pendingRow.draggable, true)
     }
 
     function test_reschedule_is_disabled_without_service_support() {

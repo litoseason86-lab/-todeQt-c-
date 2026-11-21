@@ -356,4 +356,51 @@ TestCase {
         overlay.active = true
         tryCompare(exitSpy, "count", 1)
     }
+
+    Component {
+        id: overlayPopupComponent
+
+        KnowledgeGapCapturePopup {
+            parent: overlay
+        }
+    }
+
+    // 产品保证：沉浸层之上浮层弹窗持焦时按 Esc 先关浮层而不退出沉浸模式。
+    function test_escapeClosesOverlayWithoutExitingImmersive() {
+        var wasVisible = testCase.visible
+        testCase.visible = true
+        try {
+            exitSpy.clear()
+            var popup = createTemporaryObject(overlayPopupComponent, testCase)
+            verify(popup)
+            popup.openWithSource(0, "", 0)
+            tryCompare(popup, "opened", true, 3000)
+            tryCompare(overlay, "overlayHoldsFocus", true, 3000)
+
+            keyClick(Qt.Key_Escape)
+            tryCompare(popup, "opened", false, 3000)
+            compare(exitSpy.count, 0)
+        } finally {
+            testCase.visible = wasVisible
+        }
+    }
+
+    // 产品保证：备份或恢复处于数据库临界区（inputBlocked 为真）时，Esc 快捷键被阻断，不会穿透退出沉浸模式。
+    function test_escapeBlockedWhileBackupOperationBlocksInput() {
+        var wasVisible = testCase.visible
+        testCase.visible = true
+        try {
+            exitSpy.clear()
+            overlay.inputBlocked = true
+            keyClick(Qt.Key_Escape)
+            compare(exitSpy.count, 0)
+
+            overlay.inputBlocked = false
+            keyClick(Qt.Key_Escape)
+            compare(exitSpy.count, 1)
+        } finally {
+            overlay.inputBlocked = false
+            testCase.visible = wasVisible
+        }
+    }
 }

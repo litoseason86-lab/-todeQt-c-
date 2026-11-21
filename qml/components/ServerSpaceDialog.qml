@@ -232,8 +232,17 @@ Popup {
             DialogButton {
                 objectName: "serverSpaceCancelButton"
                 text: "取消"
+                // 在途建立空间时若控制器支持取消切换，允许用户主动打断网络等待并恢复原同步引擎。
                 enabled: !root.busy
-                onClicked: root.close()
+                         || (root.syncControllerRef !== null
+                             && typeof root.syncControllerRef.cancelTransportSwitch === "function")
+                onClicked: {
+                    if (root.busy && root.syncControllerRef
+                            && typeof root.syncControllerRef.cancelTransportSwitch === "function") {
+                        root.syncControllerRef.cancelTransportSwitch()
+                    }
+                    root.close()
+                }
             }
 
             DialogButton {

@@ -56,6 +56,17 @@ Item {
     }
 
     Connections {
+        target: root.focusHistoryServiceRef
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
+
+        // 同步、备份恢复、废纸篓恢复或手工补录变更历史记录时，停留在月历页须即时刷新。
+        function onHistoryChanged() {
+            root.refresh();
+        }
+    }
+
+    Connections {
         target: root.logicalDayServiceRef
         ignoreUnknownSignals: true
 
@@ -133,7 +144,13 @@ Item {
 
         // 清理动作只删除 3 分钟以下的已结束记录；服务层会保护正在进行的会话。
         root.focusHistoryServiceRef.cleanupInvalidSessions();
+        var cleanupError = (typeof root.focusHistoryServiceRef.lastError === "function")
+                ? String(root.focusHistoryServiceRef.lastError() || "") : "";
         root.refresh();
+        if (cleanupError.length > 0 && root.loadError.length === 0) {
+            // refresh() 重查月度列表成功会清空 lastError；清理本身的失败必须保留下来告知用户。
+            root.loadError = "无效记录清理失败：" + cleanupError;
+        }
     }
 
     function calculateDailyTotals() {
@@ -590,6 +607,37 @@ Item {
 
                                     objectName: dayNumber > 0 ? "monthDayCell-" + dayNumber : "monthDayCell-empty-" + calendarCell.index
                                     radius: Theme.radiusMd
+                                    activeFocusOnTab: dayNumber > 0
+                                    Accessible.role: dayNumber > 0 ? Accessible.Button : Accessible.NoRole
+                                    Accessible.name: dayNumber > 0
+                                                     ? (root.currentMonth + "月" + dayNumber + "日"
+                                                        + (dayDuration > 0 ? ("，专注 " + root.formatDuration(dayDuration)) : ""))
+                                                     : ""
+                                    Accessible.ignored: dayNumber <= 0
+                                    Accessible.onPressAction: {
+                                        if (dayNumber > 0) {
+                                            root.selectedDay = dayNumber;
+                                            root.focusDateRequested(root.dateForDay(dayNumber));
+                                        }
+                                    }
+                                    Keys.onReturnPressed: {
+                                        if (dayNumber > 0) {
+                                            root.selectedDay = dayNumber;
+                                            root.focusDateRequested(root.dateForDay(dayNumber));
+                                        }
+                                    }
+                                    Keys.onEnterPressed: {
+                                        if (dayNumber > 0) {
+                                            root.selectedDay = dayNumber;
+                                            root.focusDateRequested(root.dateForDay(dayNumber));
+                                        }
+                                    }
+                                    Keys.onSpacePressed: {
+                                        if (dayNumber > 0) {
+                                            root.selectedDay = dayNumber;
+                                            root.focusDateRequested(root.dateForDay(dayNumber));
+                                        }
+                                    }
                                     color: {
                                         if (dayNumber <= 0)
                                             return Theme.surfaceRaised;
@@ -600,11 +648,13 @@ Item {
                                         return Theme.surfaceRaised;
                                     }
                                     border.color: {
+                                        if (calendarCell.activeFocus && dayNumber > 0)
+                                            return Theme.focusRing;
                                         if (dayNumber > 0 && (dayNumber === root.selectedDay || todayCell || dayMouseArea.containsMouse))
                                             return Theme.accent;
                                         return Theme.border;
                                     }
-                                    border.width: (dayNumber === root.selectedDay || todayCell) ? 2 : 1
+                                    border.width: (calendarCell.activeFocus || dayNumber === root.selectedDay || todayCell) ? 2 : 1
 
                                     Behavior on color {
                                         ColorAnimation {

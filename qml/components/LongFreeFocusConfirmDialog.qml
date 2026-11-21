@@ -9,6 +9,19 @@ Popup {
 
     objectName: "longFreeFocusConfirmDialog"
 
+    palette.text: Theme.inputInk
+    palette.placeholderText: Theme.inputPlaceholderInk
+    palette.highlight: Theme.inputSelection
+    palette.highlightedText: Theme.inputSelectedInk
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
+    palette.base: Theme.controlSurface
+    palette.button: Theme.controlSurface
+    palette.buttonText: Theme.controlInk
+    palette.windowText: Theme.controlInk
+
     property int elapsedSeconds: 0
     property int thresholdHours: 8
     property int suggestedDurationMinutes: 0

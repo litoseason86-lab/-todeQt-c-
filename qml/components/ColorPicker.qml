@@ -49,13 +49,36 @@ Item {
 
                     id: swatch
 
+                    readonly property bool selected: root.selectedColor === swatch.modelData
                     objectName: "colorSwatch-" + swatch.index
                     Layout.preferredWidth: 48
                     Layout.preferredHeight: 36
                     radius: Theme.radiusSm
                     color: swatch.modelData
-                    border.width: root.selectedColor === swatch.modelData ? 3 : 1
-                    border.color: root.selectedColor === swatch.modelData ? Theme.ink : Theme.border
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.RadioButton
+                    Accessible.name: qsTr("颜色 %1").arg(swatch.index + 1)
+                    Accessible.checked: swatch.selected
+                    Accessible.onPressAction: {
+                        root.selectedColor = swatch.modelData
+                        root.colorSelected(swatch.modelData)
+                    }
+                    Keys.onReturnPressed: {
+                        root.selectedColor = swatch.modelData
+                        root.colorSelected(swatch.modelData)
+                    }
+                    Keys.onEnterPressed: {
+                        root.selectedColor = swatch.modelData
+                        root.colorSelected(swatch.modelData)
+                    }
+                    Keys.onSpacePressed: {
+                        root.selectedColor = swatch.modelData
+                        root.colorSelected(swatch.modelData)
+                    }
+                    border.width: (swatch.selected || swatch.activeFocus) ? 3 : 1
+                    border.color: swatch.activeFocus
+                                  ? Theme.focusRing
+                                  : (swatch.selected ? Theme.ink : Theme.border)
 
                     Behavior on border.width {
                         NumberAnimation {

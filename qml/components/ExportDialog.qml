@@ -28,6 +28,11 @@ Popup {
     palette.windowText: Theme.controlInk
 
     property var exportServiceRef: null
+    property var settingsRef: null
+    // 退出动画期间 Popup 仍可见，已结束的导出表单不能再次触发文件选择器。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
     property date currentDate: new Date()
     property bool statusIsError: false
     property string statusText: ""
@@ -116,10 +121,14 @@ Popup {
     }
 
     function logicalToday() {
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        var settings = root.settingsRef
+        if (!settings) {
+            // 兼容独立测试未注入 settingsRef 的旧场景。
+            // qmllint disable unqualified
+            settings = (typeof appSettings !== "undefined" && appSettings) ? appSettings : null
+            // qmllint enable unqualified
+        }
+        var hour = settings ? settings.dayStartHour : 4
         return LogicalDay.todayDate(hour, new Date())
     }
 
@@ -156,13 +165,8 @@ Popup {
     }
 
     function parsedDate(text) {
-        // 只认 yyyy-MM-dd：new Date 会宽容解析 "2026/07/19" 等格式，
-        // 造成前端放行、C++ 端拒绝的口径不一致。
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(text))) {
-            return null
-        }
-        var date = new Date(text)
-        return isNaN(date.getTime()) ? null : date
+        // 统一经 LogicalDay.parseIsoDate 校验，拦截 2 月 31 日这类 new Date() 自动进位的非法日期。
+        return LogicalDay.parseIsoDate(String(text || "").trim())
     }
 
     function validateRange() {
@@ -182,6 +186,12 @@ Popup {
     }
 
     function performExport() {
+        if (root.submissionClosed) {
+            return false
+        }
+        if (root.busy) {
+            return
+        }
         if (!root.exportServiceRef) {
             root.statusIsError = true
             root.statusText = "导出服务不可用"
@@ -208,9 +218,16 @@ Popup {
     }
 
     function localPath(urlValue) {
-        // FileDialog 返回 URL，服务层需要真实本地路径。
+        // FileDialog 返回 URL，服务层需要真实本地路径；畸形百分号编码时回退原始路径避免抛异常。
         var value = String(urlValue)
-        return value.startsWith("file://") ? decodeURIComponent(value.substring(7)) : value
+        if (!value.startsWith("file://"))
+            return value
+        var stripped = value.substring(7)
+        try {
+            return decodeURIComponent(stripped)
+        } catch (error) {
+            return stripped
+        }
     }
 
     background: Rectangle {
@@ -362,6 +379,7 @@ Popup {
             Button {
                 objectName: "exportButton"
                 text: "导出"
+                enabled: !root.busy
                 Layout.fillWidth: true
                 implicitHeight: Theme.controlHeightLg
                 onClicked: root.performExport()

@@ -926,15 +926,18 @@ Item {
                         property bool isToday: root.isTodayIndex(dayRow.index)
                         property bool canAddTask: root.canAddTaskForIndex(dayRow.index)
                         property bool isWeekend: dayRow.index >= 5
+                        // 拖拽跨天改期时高亮当前悬停命中的目标日期行，让用户明确松手后的落点。
+                        readonly property bool isDropTarget: root.draggingTaskId > 0 && root.dropTargetIndex === dayRow.index
 
-                        // —— 星期脊柱：领起一整天；今天用强调色高亮，其余为透壁纸玻璃 ——
+                        // —— 星期脊柱：领起一整天；今天或拖拽命中目标用强调色高亮，其余为透壁纸玻璃 ——
                         Rectangle {
+                            objectName: "weekDaySpine-" + dayRow.index
                             Layout.preferredWidth: 52
                             Layout.fillHeight: true
                             radius: Theme.radiusMd
-                            color: dayRow.isToday ? Theme.accentFill : Theme.glassCard
-                            border.color: dayRow.isToday ? Theme.accentStrong : Theme.border
-                            border.width: 1
+                            color: dayRow.isDropTarget || dayRow.isToday ? Theme.accentFill : Theme.glassCard
+                            border.color: dayRow.isDropTarget ? Theme.accent : (dayRow.isToday ? Theme.accentStrong : Theme.border)
+                            border.width: dayRow.isDropTarget ? 2 : 1
 
                             ColumnLayout {
                                 anchors.centerIn: parent
@@ -973,7 +976,7 @@ Item {
                             }
                         }
 
-                        // —— 空日子：塌成一行，安静地给出添加入口 ——
+                        // —— 空日子：塌成一行，安静地给出添加入口；拖拽悬停命中时呈目标高亮 ——
                         Rectangle {
                             objectName: "weekEmptyDayCard"
 
@@ -982,9 +985,9 @@ Item {
                             Layout.preferredHeight: 48
                             radius: Theme.radiusMd
                             // 占位应比内容更轻：玻璃占位 vs 暖纸内容卡是有意的材质层级。
-                            color: Theme.glassCard
-                            border.color: Theme.glassBorder
-                            border.width: 1
+                            color: dayRow.isDropTarget ? Theme.accentFill : Theme.glassCard
+                            border.color: dayRow.isDropTarget ? Theme.accent : Theme.glassBorder
+                            border.width: dayRow.isDropTarget ? 2 : 1
 
                             RowLayout {
                                 anchors.fill: parent
@@ -1006,8 +1009,10 @@ Item {
                                     background: Rectangle {
                                         color: !emptyAddButton.enabled ? Theme.surfaceSunken
                                                : (emptyAddButton.pressed ? Theme.glassHover : (emptyAddButton.hovered ? Theme.glassHover : Theme.glassCard))
-                                        border.color: emptyAddButton.enabled && (emptyAddButton.hovered || emptyAddButton.pressed) ? Theme.accent : Theme.border
-                                        border.width: 1
+                                        border.color: emptyAddButton.visualFocus
+                                                      ? Theme.focusRing
+                                                      : (emptyAddButton.enabled && (emptyAddButton.hovered || emptyAddButton.pressed) ? Theme.accent : Theme.border)
+                                        border.width: emptyAddButton.visualFocus ? 2 : 1
                                         radius: Theme.radiusMd
 
                                         Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
@@ -1029,11 +1034,23 @@ Item {
                             }
                         }
 
-                        // —— 有任务的日子：展开任务列表 + 强调填充的添加 ——
-                        ColumnLayout {
+                        // —— 有任务的日子：展开任务列表 + 强调填充的添加；拖拽命中目标时套一层强调描边提示落点 ——
+                        Rectangle {
                             visible: dayRow.hasTasks
                             Layout.fillWidth: true
-                            spacing: Theme.space8
+                            implicitHeight: dayTasksColumn.implicitHeight + (dayRow.isDropTarget ? Theme.space8 : 0)
+                            radius: Theme.radiusMd
+                            color: dayRow.isDropTarget ? Theme.accentFill : "transparent"
+                            border.color: dayRow.isDropTarget ? Theme.accent : "transparent"
+                            border.width: dayRow.isDropTarget ? 2 : 0
+
+                            ColumnLayout {
+                                id: dayTasksColumn
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: dayRow.isDropTarget ? Theme.space4 : 0
+                                spacing: Theme.space8
 
                             Repeater {
                                 model: dayRow.dayTasks
@@ -1153,8 +1170,10 @@ Item {
                                     background: Rectangle {
                                         color: !addDayButton.enabled ? Theme.border
                                                : (addDayButton.pressed || addDayButton.hovered ? Theme.accentStrong : Theme.accent)
-                                        border.color: addDayButton.enabled && addDayButton.hovered ? Theme.accentStrong : "transparent"
-                                        border.width: addDayButton.enabled && addDayButton.hovered ? 1 : 0
+                                        border.color: addDayButton.visualFocus
+                                                      ? Theme.focusRing
+                                                      : (addDayButton.enabled && addDayButton.hovered ? Theme.accentStrong : "transparent")
+                                        border.width: addDayButton.visualFocus ? 2 : (addDayButton.enabled && addDayButton.hovered ? 1 : 0)
                                         radius: Theme.radiusMd
 
                                         Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
@@ -1178,6 +1197,7 @@ Item {
                                     onClicked: root.openAddTaskForDay(dayRow.index)
                                 }
                             }
+                            }
                         }
                     }
         }
@@ -1186,6 +1206,7 @@ Item {
     AddTaskDialog {
         id: addTaskDialog
         taskManagerRef: root.taskManagerRef
+        settingsRef: root.settingsRef
         objectName: "weekAddTaskDialog"
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
@@ -1198,6 +1219,7 @@ Item {
 
     EditTaskDialog {
         taskManagerRef: root.taskManagerRef
+        settingsRef: root.settingsRef
         interactionCoordinatorRef: root.interactionCoordinatorRef
         interactionSource: "WeekPlanView.edit_dialog"
         onOpenFailed: function(message) { root.loadError = message }

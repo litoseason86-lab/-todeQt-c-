@@ -218,9 +218,13 @@ TestCase {
 
     function test_countdownViewReflectsPrimaryGoal() {
         fakeCountdownService.addGoal("研究生初试", new Date(2026, 11, 23))
+        countdownView.pageActive = true
         countdownView.visible = true
 
-        verify(fakeCountdownService.primaryGoal !== null)
+        tryVerify(function () { return findChild(countdownView, "countdownHeroName") !== null }, 3000)
+        compare(countdownView.showingEmptyState, false)
+        compare(findChild(countdownView, "countdownHeroName").text, "研究生初试")
+        verify(Number(findChild(countdownView, "countdownHeroDays").text) >= 0)
         compare(countdownModel.count, 1)
     }
 

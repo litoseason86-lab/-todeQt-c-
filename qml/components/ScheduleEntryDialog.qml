@@ -378,6 +378,7 @@ Popup {
     }
 
     Component.onCompleted: root.refreshCategories()
+    onOpened: titleField.forceActiveFocus()
 
     background: Rectangle {
         id: panel
@@ -787,6 +788,7 @@ Popup {
     // —— 表单里反复出现的三种控件，抽成局部组件避免每个字段重抄一遍样式 ——
 
     component FieldLabel: Label {
+        textFormat: Text.PlainText
         Layout.fillWidth: true
         Layout.leftMargin: Theme.space16
         Layout.rightMargin: Theme.space16

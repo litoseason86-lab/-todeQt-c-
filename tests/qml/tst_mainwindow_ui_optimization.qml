@@ -251,8 +251,39 @@ TestCase {
     QtObject {
         id: backupService
 
+        signal backupCompleted(bool success, string message)
+        signal backupInfoReady(string sourcePath, var info)
+        signal restoreStarted()
+        signal restoreCompleted(bool success, string message)
+
         property bool operationBlocksUi: false
         property string operationText: ""
+        property var calls: []
+
+        function requestBackup(path) { calls.push("backup:" + path) }
+        function requestRestore(path) { calls.push("restore:" + path) }
+        function backupsDirectory() { return "/tmp" }
+        function suggestedBackupFileName() { return "test.tomatobackup" }
+    }
+
+    QtObject {
+        id: syncController
+
+        signal notice(string message)
+        signal snapshotReplaced()
+
+        property var calls: []
+        property bool hasProblem: false
+        property string summaryText: ""
+        property string transport: "icloud"
+        property bool enabled: false
+        property string statusKey: "stopped"
+        property bool choosingFolder: false
+        property bool switchingTransport: false
+        property string transportProblem: ""
+
+        function restoreWarning() { return "" }
+        function confirmJoin() { calls.push("confirmJoin") }
     }
 
     // 最小快捷键注册表：只给一条应用内动作，够验证「弹窗打开时整体让路」这条接线。
@@ -322,6 +353,7 @@ TestCase {
         appSettingsRef: appSettings
         focusTimerRef: focusTimer
         backupServiceRef: backupService
+        syncControllerRef: syncController
         shortcutRegistryRef: shortcutRegistry
     }
 
@@ -339,6 +371,9 @@ TestCase {
         appSettings.soundEnabled = true;
         backupService.operationBlocksUi = false;
         backupService.operationText = "";
+        backupService.calls = [];
+        syncController.calls = [];
+        mainWindow.syncControllerRef = syncController;
         taskManager.todayTasks = [];
         focusTimer.isRunning = false;
         focusTimer.hasActiveSession = false;
@@ -353,6 +388,9 @@ TestCase {
     function cleanup() {
         backupService.operationBlocksUi = false;
         backupService.operationText = "";
+        backupService.calls = [];
+        syncController.calls = [];
+        mainWindow.syncControllerRef = syncController;
         mainWindow.focusSessionControllerRef = null;
         taskManager.todayTasks = [];
         focusTimer.isRunning = false;
@@ -460,7 +498,76 @@ TestCase {
         page.saveNow()
         mainWindow.memoServiceRef = null
         mainWindow.categoryManagerRef = null
+        mainWindow.syncControllerRef = null
         Theme.reduceMotion = oldReduceMotion
+    }
+
+    // 产品保证：主窗口在触发备份、导出与确认加入同步前刷新备忘草稿，并在恢复开始与快照替换时重置同编号脏草稿。
+    function test_mainWindowFlushesAndResetsMemoAroundBackupExportRestoreAndSnapshot() {
+        const oldReduceMotion = Theme.reduceMotion
+        Theme.reduceMotion = true
+        memoService.reset([memoService.makeRecord(1, "旧库备忘", "初始正文", 1)])
+        mainWindow.memoServiceRef = memoService
+        mainWindow.categoryManagerRef = memoCategories
+        try {
+            mainWindow.switchToView("memo")
+            var page = findChild(mainWindow, "memoViewPage")
+            var settings = findChild(mainWindow, "settingsDialog")
+            var exportDlg = findChild(mainWindow, "exportDialog")
+            verify(page && settings && exportDlg)
+            tryCompare(page, "selectedId", 1, 3000)
+
+            // 1. 导出入口：先刷新脏草稿再打开导出弹窗；保存失败时停留备忘页且不打开导出窗。
+            page.editorBody = "导出前新正文"
+            verify(page.dirty)
+            settings.exportRequested()
+            compare(memoService.updates.length, 1)
+            compare(memoService.updates[0].changes.body, "导出前新正文")
+            tryCompare(exportDlg, "opened", true, 3000)
+            exportDlg.close()
+            tryCompare(exportDlg, "opened", false, 3000)
+
+            page.editorBody = "导出失败保留草稿"
+            memoService.failSave = true
+            settings.exportRequested()
+            compare(mainWindow.currentView, "memo")
+            compare(exportDlg.opened, false)
+            memoService.failSave = false
+            page.saveNow()
+
+            // 2. 备份保存入口：提交草稿后才发起备份写库。
+            page.editorBody = "备份前最新正文"
+            verify(page.dirty)
+            mainWindow.performBackupToPath("/tmp/manual.tomatobackup")
+            compare(memoService.updates[memoService.updates.length - 1].changes.body, "备份前最新正文")
+            compare(backupService.calls[0], "backup:/tmp/manual.tomatobackup")
+
+            // 3. 确认加入同步前也必须先刷新备忘草稿。
+            page.editorBody = "加入前草稿"
+            verify(page.dirty)
+            verify(settings.beforeSyncMutation())
+            compare(memoService.updates[memoService.updates.length - 1].changes.body, "加入前草稿")
+
+            // 4. 恢复开始信号：清除同编号脏草稿并重新读取新库，不把旧草稿保存回新库。
+            page.editorBody = "恢复前旧库脏草稿"
+            verify(page.dirty)
+            memoService.records = [memoService.makeRecord(1, "备份库标题", "备份库正文", 1)]
+            backupService.restoreStarted()
+            compare(page.dirty, false)
+            compare(page.editorBody, "备份库正文")
+
+            // 5. 远端快照替换信号：同样清除同编号脏草稿并重新读取，不留旧库编辑态。
+            page.editorBody = "快照替换前脏草稿"
+            verify(page.dirty)
+            memoService.records = [memoService.makeRecord(1, "远端快照标题", "远端快照正文", 1)]
+            syncController.snapshotReplaced()
+            compare(page.dirty, false)
+            compare(page.editorBody, "远端快照正文")
+        } finally {
+            mainWindow.memoServiceRef = null
+            mainWindow.categoryManagerRef = null
+            Theme.reduceMotion = oldReduceMotion
+        }
     }
 
     // 页面编号必须与 StackLayout 里页面的书写顺序一一对应，切页状态机按编号取页。

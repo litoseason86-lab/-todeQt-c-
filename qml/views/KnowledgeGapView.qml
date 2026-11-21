@@ -190,7 +190,8 @@ Item {
 
     Component.onCompleted: {
         root.refreshLogicalToday()
-        root.reload()
+        if (root.pageActive)
+            root.reload()
     }
 
     onPageActiveChanged: if (root.pageActive) root.reload()
@@ -229,7 +230,8 @@ Item {
 
         function onChanged() {
             root.refreshLogicalToday()
-            root.reload()
+            if (root.pageActive)
+                root.reload()
         }
     }
 
@@ -239,7 +241,19 @@ Item {
 
         function onDayStartHourChanged() {
             root.refreshLogicalToday()
-            root.reload()
+            if (root.pageActive)
+                root.reload()
+        }
+    }
+
+    // 搜索框输入防抖：避免每次击键同步查 SQLite 造成卡顿；按回车仍立即查询。
+    Timer {
+        id: searchDebounceTimer
+        interval: 180
+        repeat: false
+        onTriggered: {
+            if (root.pageActive)
+                root.reload()
         }
     }
 
@@ -349,6 +363,10 @@ Item {
 
             onTextChanged: {
                 root.searchText = searchField.text
+                searchDebounceTimer.restart()
+            }
+            onAccepted: {
+                searchDebounceTimer.stop()
                 root.reload()
             }
         }
@@ -489,7 +507,8 @@ Item {
                                             text: root.metaTextFor(gapRow.modelData)
                                             textFormat: Text.PlainText
                                             font.pixelSize: Theme.fontXs
-                                            color: Theme.inkMuted
+                                            // surfaceRaised 底上 inkMuted 仅 3.0:1，元信息属正文可读信息须用 inkSoft（≥4.5:1）。
+                                            color: Theme.inkSoft
                                             elide: Text.ElideRight
                                         }
 

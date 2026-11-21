@@ -11,11 +11,11 @@ Rectangle {
     width: 208
     // 导航栏允许着色玻璃；实时模糊由 MainWindow.sidebarFrost 单层采样，这里不二次模糊。
     color: Theme.glassBlurAllowed ? Theme.glassSidebar : Theme.glassSolidSidebar
-    // 玻璃侧栏上的条目默认态要“隐形”才能透出壁纸；但不能用 Qt 的 transparent（黑基透明）：
-    // hover 退场的 ColorAnimation 会在黑白之间插出灰闪。白基透明只动 alpha，不经过灰。
-    readonly property color sidebarItemIdleColor: Qt.rgba(1, 1, 1, 0)
-    readonly property color sidebarItemIdleBorderColor: Qt.rgba(1, 1, 1, 0)
-    readonly property color sidebarItemHoverColor: Qt.rgba(1, 1, 1, 0.45)
+    // 玻璃侧栏上的条目默认态要“隐形”才能透出壁纸；使用与 Theme.glassHover 同色零透明的
+    // Theme.glassHoverIdle，避免明暗两套主题下悬停过渡出现灰闪或暗色下发白失对比。
+    readonly property color sidebarItemIdleColor: Theme.glassHoverIdle
+    readonly property color sidebarItemIdleBorderColor: Theme.glassHoverIdle
+    readonly property color sidebarItemHoverColor: Theme.glassHover
     readonly property color sidebarItemHoverBorderColor: Theme.border
     readonly property color sidebarItemActiveColor: Theme.glassAccent
     readonly property color sidebarItemActiveBorderColor: Theme.accent
@@ -437,7 +437,8 @@ Rectangle {
                         SequentialAnimation on opacity {
                             id: pulseAnimation
 
-                            running: statusPulse.visible && statusPulse.pulseRunning
+                            // 侧栏收起隐藏或开启减少动效时立即停动画，避免后台空转。
+                            running: root.visible && statusPulse.visible && statusPulse.pulseRunning
                                      && !root.reduceMotionActive
                                      && !Theme.reduceMotion
                             loops: Animation.Infinite

@@ -98,8 +98,8 @@ Button {
         border.color: root.recording
                       ? Theme.accent
                       : (root.unregistered ? Theme.danger
-                                           : (root.activeFocus ? Theme.focusRing : Theme.border))
-        border.width: (root.recording || root.activeFocus || root.unregistered) ? 2 : 1
+                                           : (root.visualFocus ? Theme.focusRing : Theme.border))
+        border.width: (root.recording || root.visualFocus || root.unregistered) ? 2 : 1
 
         Behavior on color {
             ColorAnimation { duration: Theme.reduceMotion ? 0 : 120 }

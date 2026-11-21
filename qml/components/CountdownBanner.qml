@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import ".."
+import "../LogicalDay.js" as LogicalDay
 
 // 与页面其它玻璃卡同一基底（glassCard + 玻璃描边 + 受光棱边 + 柔影），
 // 不再自带暖色渐变，避免在冷色壁纸上显得发黄突兀。
@@ -16,6 +17,17 @@ GlassPanel {
     height: 68
     scale: hitArea.containsMouse ? 1.01 : 1.0
     transformOrigin: Item.Center
+    activeFocusOnTab: true
+    border.color: root.activeFocus ? Theme.focusRing : Theme.glassBorder
+    border.width: root.activeFocus ? 2 : 1
+    Accessible.role: Accessible.Button
+    Accessible.name: root.hasGoal
+                     ? qsTr("倒计时：%1，%2").arg(String(root.primaryGoal.name || "")).arg(root.dayText())
+                     : qsTr("添加目标倒计时")
+    Accessible.onPressAction: root.activate()
+    Keys.onReturnPressed: root.activate()
+    Keys.onEnterPressed: root.activate()
+    Keys.onSpacePressed: root.activate()
 
     function dayText() {
         if (!root.hasGoal) {
@@ -60,7 +72,7 @@ GlassPanel {
             }
 
             Text {
-                text: root.hasGoal ? Qt.formatDate(root.primaryGoal.targetDate, "yyyy年MM月dd日") : ""
+                text: root.hasGoal ? LogicalDay.formatChineseDate(root.primaryGoal.targetDate) : ""
                 visible: text.length > 0
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXs
@@ -76,7 +88,7 @@ GlassPanel {
             textFormat: Text.PlainText
             font.pixelSize: Theme.fontXxl
             font.weight: Font.Bold
-            color: Theme.accent
+            color: Theme.accentInk
         }
     }
 

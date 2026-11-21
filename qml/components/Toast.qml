@@ -60,7 +60,11 @@ Rectangle {
     visible: root.shown || opacity > 0.001
     enabled: root.shown
 
-    Component.onCompleted: root.y = root.yOffset
+    // 用 Translate 变换表达进出位移，避免直接改写 root.y 与宿主 anchors.bottom 冲突。
+    transform: Translate {
+        id: toastSlideTransform
+        y: root.yOffset
+    }
 
     onYOffsetChanged: {
         toastMoveAnimation.to = root.yOffset
@@ -78,7 +82,7 @@ Rectangle {
         id: toastMoveAnimation
         objectName: "toastMoveAnimation"
 
-        target: root
+        target: toastSlideTransform
         property: "y"
         duration: Theme.reduceMotion ? 0 : 180
         easing.type: Easing.OutQuad

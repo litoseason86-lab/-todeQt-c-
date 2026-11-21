@@ -20,6 +20,14 @@ Popup {
     palette.placeholderText: Theme.inputPlaceholderInk
     palette.highlight: Theme.inputSelection
     palette.highlightedText: Theme.inputSelectedInk
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
+    palette.base: Theme.controlSurface
+    palette.button: Theme.controlSurface
+    palette.buttonText: Theme.controlInk
+    palette.windowText: Theme.controlInk
 
     property var gapServiceRef: null
     // 来源任务：捕获时自动带上，之后在清单页能看出这条是在做什么的时候记的。
@@ -40,6 +48,19 @@ Popup {
     }
 
     property string errorText: ""
+    property bool capturing: false
+    property string capturedFailureReason: ""
+
+    Connections {
+        target: root.gapServiceRef
+        ignoreUnknownSignals: true
+
+        function onOperationFailed(message) {
+            if (root.capturing && root.capturedFailureReason.length === 0) {
+                root.capturedFailureReason = String(message || "")
+            }
+        }
+    }
 
     function submit() {
         var text = inputField.text.trim()
@@ -52,10 +73,19 @@ Popup {
             root.errorText = "记录服务不可用"
             return
         }
-        var newId = Number(root.gapServiceRef.captureGap(text, root.categoryId, root.sourceTaskId))
+        var newId = -1
+        root.capturedFailureReason = ""
+        root.capturing = true
+        try {
+            newId = Number(root.gapServiceRef.captureGap(text, root.categoryId, root.sourceTaskId))
+        } finally {
+            root.capturing = false
+        }
         if (!(newId > 0)) {
-            // 具体原因由服务的 operationFailed 播报，这里只保证输入不被清掉，用户能重试。
-            root.errorText = "没能存下来，请再试一次"
+            // 在非知识缺口页打开捕获框时，页面不监听 operationFailed；由捕获框自己认领并原地展示原因。
+            root.errorText = root.capturedFailureReason.length > 0
+                    ? root.capturedFailureReason
+                    : "没能存下来，请再试一次"
             root.captureFailed(text)
             return
         }

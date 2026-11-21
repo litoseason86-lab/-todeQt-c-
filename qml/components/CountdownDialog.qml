@@ -42,6 +42,7 @@ Popup {
     padding: 0
 
     property var countdownServiceRef: null
+    property var settingsRef: null
     // 仅测试注入；生产为空时读取真实时间。
     property var logicalNowProvider: null
     property int editGoalId: -1
@@ -56,15 +57,20 @@ Popup {
         // qmllint disable use-proper-function
         var now = root.logicalNowProvider ? root.logicalNowProvider() : new Date()
         // qmllint enable use-proper-function
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        var settings = root.settingsRef
+        if (!settings) {
+            // 兼容独立测试未注入 settingsRef 的场景。
+            // qmllint disable unqualified
+            settings = (typeof appSettings !== "undefined" && appSettings) ? appSettings : null
+            // qmllint enable unqualified
+        }
+        var hour = settings ? settings.dayStartHour : 4
         return LogicalDay.todayDate(hour, now)
     }
 
     function dateToInput(value) {
-        return Qt.formatDate(value ? value : root.logicalToday(), "yyyy-MM-dd");
+        // 统一按本地年月日提取 ISO，避免负时区下 QDate 转 JS Date 少一天。
+        return LogicalDay.isoFromValue(value ? value : root.logicalToday());
     }
 
     function openForAdd() {
@@ -266,6 +272,7 @@ Popup {
             Layout.rightMargin: Theme.space16
             implicitHeight: Theme.controlHeightLg
             placeholderText: "例如：研究生初试"
+            maximumLength: 50
             selectByMouse: true
 
             background: Rectangle {
@@ -316,6 +323,7 @@ Popup {
 
         Label {
             id: errorLabel
+            textFormat: Text.PlainText
 
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16

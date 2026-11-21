@@ -21,6 +21,10 @@ Dialog {
     palette.placeholderText: Theme.inputPlaceholderInk
     palette.highlight: Theme.inputSelection
     palette.highlightedText: Theme.inputSelectedInk
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
     palette.base: Theme.controlSurface
     palette.button: Theme.controlSurface
     palette.buttonText: Theme.controlInk
@@ -238,11 +242,13 @@ Dialog {
     objectName: "knowledgeGapDialog"
     modal: true
     anchors.centerIn: parent
-    // 与其它表单弹窗同一口径：窄窗口下跟着收，但不窄过 320。
+    // 与其它表单弹窗同一口径：窄矮窗口下跟着收，配合内部 Flickable 防上下被切。
     width: Math.min(460, parent ? Math.max(320, parent.width - 64) : 460)
+    height: Math.min(implicitHeight, parent ? Math.max(360, parent.height - 48) : implicitHeight)
     padding: Theme.space24
     closePolicy: Popup.CloseOnEscape
     title: root.editing ? qsTr("编辑知识缺口") : qsTr("新增知识缺口")
+    onOpened: titleField.forceActiveFocus()
 
     background: Rectangle {
         objectName: "knowledgeGapDialogBackground"
@@ -264,8 +270,17 @@ Dialog {
         rightPadding: Theme.space24
     }
 
-    contentItem: ColumnLayout {
-        spacing: Theme.space12
+    contentItem: Flickable {
+        contentWidth: width
+        contentHeight: formColumn.implicitHeight
+        implicitHeight: formColumn.implicitHeight
+        boundsBehavior: Flickable.StopAtBounds
+        clip: true
+
+        ColumnLayout {
+            id: formColumn
+            width: parent.width
+            spacing: Theme.space12
 
         Text {
             Layout.fillWidth: true
@@ -286,6 +301,8 @@ Dialog {
             selectByMouse: true
             color: Theme.inputInk
             onTextChanged: if (root.errorText.length > 0) root.errorText = ""
+            Keys.onReturnPressed: root.submit()
+            Keys.onEnterPressed: root.submit()
 
             background: Rectangle {
                 color: Theme.surfaceRaised
@@ -315,6 +332,16 @@ Dialog {
                 wrapMode: TextEdit.Wrap
                 selectByMouse: true
                 color: Theme.inputInk
+                // 拦截 Tab 避免焦点困死在多行输入框，并支持 ⌘↩ 提交。
+                KeyNavigation.priority: KeyNavigation.BeforeItem
+                KeyNavigation.tab: duePicker
+                Keys.onPressed: function (event) {
+                    if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                            && (event.modifiers & Qt.ControlModifier)) {
+                        event.accepted = true
+                        root.submit()
+                    }
+                }
                 background: Rectangle {
                     color: Theme.surfaceRaised
                     radius: Theme.radiusMd
@@ -340,6 +367,7 @@ Dialog {
             // 日期胶囊：点开挑日子，不用手打。未排期是它的常态文案，清除也做在胶囊上，
             // 原先那个常驻的「未排期」灰方块与会标红的空输入框一起去掉了。
             DatePill {
+                id: duePicker
                 objectName: "knowledgeGapDuePicker"
                 Layout.alignment: Qt.AlignLeft
                 dateIso: root.dueIso
@@ -428,6 +456,15 @@ Dialog {
                     wrapMode: TextEdit.Wrap
                     selectByMouse: true
                     color: Theme.inputInk
+                    KeyNavigation.priority: KeyNavigation.BeforeItem
+                    KeyNavigation.tab: cancelBtn
+                    Keys.onPressed: function (event) {
+                        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                                && (event.modifiers & Qt.ControlModifier)) {
+                            event.accepted = true
+                            root.submit()
+                        }
+                    }
                     background: Rectangle {
                         color: Theme.surfaceRaised
                         radius: Theme.radiusMd
@@ -448,6 +485,7 @@ Dialog {
             color: Theme.danger
             wrapMode: Text.WordWrap
         }
+        }
     }
 
     footer: RowLayout {
@@ -456,6 +494,7 @@ Dialog {
         Item { Layout.fillWidth: true }
 
         PageActionButton {
+            id: cancelBtn
             objectName: "knowledgeGapCancelButton"
             text: qsTr("取消")
             // 底边距两个按钮都要给：只给「保存」时这一行被加高，RowLayout 把「取消」

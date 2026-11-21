@@ -59,6 +59,8 @@ Popup {
     }
 
     onClosed: {
+        // 配对码含解密密钥，关窗即从界面状态清空，避免明文长期滞留内存。
+        root.actualCode = ""
         root.showCode = false
         root.copied = false
         copiedReset.stop()

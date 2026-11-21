@@ -99,4 +99,30 @@ TestCase {
         compare(exportDialog.statusText, "错误：无法创建文件: Permission denied")
         exportDialog.close()
     }
+
+    // 产品保证：导出进行中时主导出按钮禁用，且直接调用 performExport() 也不重入打开文件或目录选择框。
+    function test_exportButtonDisabledAndBlockedWhileBusy() {
+        fakeExportService.busy = false
+        exportDialog.open()
+        tryCompare(exportDialog, "opened", true)
+
+        const exportButton = findChild(exportDialog, "exportButton")
+        verify(exportButton !== null)
+        compare(exportButton.enabled, true)
+
+        fakeExportService.busy = true
+        tryCompare(exportButton, "enabled", false)
+        const startInput = findChild(exportDialog, "startDateInput")
+        const endInput = findChild(exportDialog, "endDateInput")
+        startInput.text = "2026-06-10"
+        endInput.text = "2026-06-01"
+        exportDialog.statusText = "正在后台导出"
+        exportDialog.performExport()
+        compare(exportDialog.statusText, "正在后台导出")
+
+        fakeExportService.busy = false
+        tryCompare(exportButton, "enabled", true)
+        exportDialog.close()
+        tryCompare(exportDialog, "opened", false)
+    }
 }

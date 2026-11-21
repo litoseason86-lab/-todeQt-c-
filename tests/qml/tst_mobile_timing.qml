@@ -30,8 +30,11 @@ TestCase {
         signal phaseCompleted(int phase)
         signal phaseSettledOffline(int phase)
         signal currentTaskChanged()
+        signal sessionDiscarded(int duration)
+        signal taskAutoCompleteFailed(int taskId)
 
         property bool freeTimingAllowed: false
+        property bool simulateShortSessionDiscard: false
         property bool isRunning: false
         property bool hasActiveSession: false
         property int currentTaskId: -1
@@ -47,6 +50,8 @@ TestCase {
         property int startPomodoroCalls: 0
         property int startBreakCalls: 0
         property int stopFocusCalls: 0
+        property int resetPomodoroCountCalls: 0
+        property int stopAndResetCycleCalls: 0
 
         function startFocus(taskId, title) {
             startFocusCalls += 1
@@ -81,16 +86,29 @@ TestCase {
         function stopFocus() {
             if (rejectT33()) return false
             stopFocusCalls += 1
+            var wasWork = hasActiveSession && phase === 1
             hasActiveSession = false
             isRunning = false
             phase = 0
             currentTaskId = -1
             currentTaskTitle = ""
+            if (wasWork && simulateShortSessionDiscard)
+                sessionDiscarded(30)
             return true
         }
         function pauseFocus() { isRunning = false; return true }
         function resumeFocus() { isRunning = true; return true }
-        function resetPomodoroCount() { completedPomodoros = 0 }
+        function resetPomodoroCount() {
+            resetPomodoroCountCalls += 1
+            completedPomodoros = 0
+            return true
+        }
+        function stopAndResetPomodoroCycle() {
+            stopAndResetCycleCalls += 1
+            if (!stopFocus())
+                return false
+            return resetPomodoroCount()
+        }
 
         // 模拟一个专注段结束（正常到点或离线结算之后，计时器回到空闲）。
         function finishWork() {
@@ -263,9 +281,37 @@ TestCase {
         timerStub.startPomodoroCalls = 0
         timerStub.startBreakCalls = 0
         timerStub.stopFocusCalls = 0
+        timerStub.resetPomodoroCountCalls = 0
+        timerStub.stopAndResetCycleCalls = 0
+        timerStub.simulateShortSessionDiscard = false
+        taskStub.setCompletedCalls = 0
+        companionBackupStub.operationBlocksUi = false
+        companionBackupStub.operationText = ""
         settingsStub.lastMode = 0
         settingsStub.autoStartBreak = true
         taskStub.setCompletedCalls = 0
+    }
+
+    QtObject {
+        id: companionBackupStub
+
+        property bool operationBlocksUi: false
+        property string operationText: ""
+    }
+
+    Component {
+        id: companionMainComponent
+
+        CompanionMain {
+            visible: false
+            width: 390
+            height: 844
+            taskManagerRef: taskStub
+            focusTimerRef: timerStub
+            appSettingsRef: settingsStub
+            logicalDayServiceRef: todayLogicalDayStub
+            backupServiceRef: companionBackupStub
+        }
     }
 
     function test_focusViewStartsPomodoroWhenFreeTimingUnavailable() {
@@ -421,6 +467,170 @@ TestCase {
         compare(companion.loadError,"原结果")
         taskStub.operationFailed("删除失败：T33-2 batch blocked")
         compare(companion.loadError,"删除失败：T33-2 batch blocked")
+    }
+
+    // 产品保证：伴侣页完成不足 3 分钟的正在专注任务时，外层不单独再弹一条被覆盖的不足 3 分钟提示，而由完成提示一并说明。
+    function test_companionShortCompletionShowsCombinedDiscardedToastWithoutDuplicate() {
+        var win = createTemporaryObject(companionMainComponent, testCase)
+        verify(win)
+        var toastText = findChild(win, "toastText")
+        verify(toastText)
+        var shownMessages = []
+        toastText.textChanged.connect(function() {
+            if (toastText.text.length > 0)
+                shownMessages.push(toastText.text)
+        })
+        var companion = findChild(win, "companionWindow")
+        verify(companion)
+        companion.startPomodoro(7, "短专注任务")
+        verify(timerStub.hasActiveSession)
+        timerStub.simulateShortSessionDiscard = true
+
+        companion.setCompleted({ id: 7, title: "短专注任务", completed: false }, true)
+        compare(shownMessages.length, 1, "只能有一条合并提示，实际：" + JSON.stringify(shownMessages))
+        verify(shownMessages[0].indexOf("不足 3 分钟") >= 0)
+    }
+
+    // 产品保证：伴侣页主动结束专注或点「先不休息」「好的」结束循环时归零 completedPomodoros，避免下一轮长休息间隔错乱。
+    function test_companionStopAndDismissResetPomodoroCycle() {
+        var companion = createTemporaryObject(companionComponent, testCase)
+        verify(companion)
+
+        timerStub.completedPomodoros = 3
+        companion.startPomodoro(7, "重置测试")
+        var stopBtn = findChild(companion, "companionStopButton")
+        verify(stopBtn)
+        stopBtn.clicked()
+        compare(timerStub.completedPomodoros, 0)
+
+        timerStub.completedPomodoros = 2
+        companion.justCompletedPhase = 1
+        var skipRest = findChild(companion, "companionSkipBreakButton")
+        verify(skipRest)
+        skipRest.clicked()
+        compare(timerStub.completedPomodoros, 0)
+        compare(companion.justCompletedPhase, 0)
+
+        timerStub.completedPomodoros = 4
+        companion.justCompletedPhase = 2
+        var doneRest = findChild(companion, "companionBreakDoneDismissButton")
+        verify(doneRest)
+        doneRest.clicked()
+        compare(timerStub.completedPomodoros, 0)
+        compare(companion.justCompletedPhase, 0)
+    }
+
+    // 产品保证：手机随身伴侣窗口在备份或恢复临界区加载模态阻断遮罩，防止用户在换库期间操作旧任务或计时器。
+    function test_companionMainShowsBackupOperationOverlayDuringBlock() {
+        companionBackupStub.operationBlocksUi = false
+        var win = createTemporaryObject(companionMainComponent, testCase)
+        verify(win)
+        var loader = findChild(win, "companionBackupOverlayLoader")
+        verify(loader)
+        compare(loader.active, false)
+
+        companionBackupStub.operationText = "正在恢复数据"
+        companionBackupStub.operationBlocksUi = true
+        tryCompare(loader, "active", true, 3000)
+        verify(loader.item !== null)
+        compare(loader.item.message, "正在恢复数据")
+    }
+
+    // 产品保证：伴侣页在计时器已恢复番茄专注（phase 1）或休息（phase 2）后才冷启动创建时，仍能回读任务上下文并在休息结束后展示「下一个番茄」入口。
+    function test_companionRestoresLastTaskFromColdStartedWorkAndBreak() {
+        // TestCase 默认不可见，子项 visible 会被父链遮蔽为 false；临时显示测试宿主以核对真实可见性绑定，结束后还原。
+        const previousVisible = testCase.visible
+        testCase.visible = true
+        try {
+            // 场景 A：冷启动时计时器正处于番茄休息（phase === 2），C++ 仍保留 currentTaskId/Title。
+            timerStub.currentTaskId = 7
+            timerStub.currentTaskTitle = "冷启动休息中的任务"
+            timerStub.mode = 1
+            timerStub.phase = 2
+            timerStub.hasActiveSession = false
+            timerStub.isRunning = true
+
+            var companion = createTemporaryObject(companionComponent, testCase)
+            verify(companion)
+            compare(companion.lastTaskId, 7)
+            compare(companion.lastTaskTitle, "冷启动休息中的任务")
+
+            var card = findChild(companion, "companionTimerCard")
+            var nextBtn = findChild(companion, "companionNextPomodoroButton")
+            verify(card)
+            verify(nextBtn)
+            compare(card.cardState, "break")
+            compare(nextBtn.visible, false)
+
+            // 休息到点结束：卡片进入 breakDone 且「下一个番茄」按钮可见、点击能续上同一任务。
+            timerStub.isRunning = false
+            timerStub.phase = 0
+            timerStub.phaseCompleted(2)
+            compare(card.cardState, "breakDone")
+            compare(nextBtn.visible, true)
+            nextBtn.clicked()
+            compare(timerStub.startPomodoroCalls, 1)
+            compare(timerStub.currentTaskId, 7)
+        } finally {
+            testCase.visible = previousVisible
+        }
+    }
+
+    // 产品保证：伴侣页在完成态点击「开始休息」或「下一个番茄」被后端拒绝时，不提前清零 justCompletedPhase，保留当前重试按钮。
+    function test_companionFailedStartBreakOrNextPomodoroRetainsRetryEntry() {
+        var companion = createTemporaryObject(companionComponent, testCase)
+        verify(companion)
+        var card = findChild(companion, "companionTimerCard")
+        verify(card)
+
+        companion.startPomodoro(7, "重试测试任务")
+        timerStub.finishWork()
+        timerStub.phaseSettledOffline(1)
+        compare(companion.justCompletedPhase, 1)
+        compare(card.cardState, "workDone")
+
+        // 1. 启动休息失败：必须留在 workDone，保留「开始休息」重试入口。
+        timerStub.t33Failure = "休息启动失败：存储阻塞"
+        companion.startBreak()
+        compare(companion.justCompletedPhase, 1)
+        compare(card.cardState, "workDone")
+
+        // 恢复正常后重试成功。
+        timerStub.t33Failure = ""
+        companion.startBreak()
+        compare(companion.justCompletedPhase, 0)
+        compare(card.cardState, "break")
+
+        // 2. 休息结束进入 breakDone，启动下一轮番茄失败：必须留在 breakDone，保留「下一个番茄」重试入口。
+        timerStub.isRunning = false
+        timerStub.phase = 0
+        timerStub.phaseSettledOffline(2)
+        compare(companion.justCompletedPhase, 2)
+        compare(card.cardState, "breakDone")
+
+        timerStub.t33Failure = "番茄启动失败：存储阻塞"
+        companion.startPomodoro(companion.lastTaskId, companion.lastTaskTitle)
+        compare(companion.justCompletedPhase, 2)
+        compare(card.cardState, "breakDone")
+
+        timerStub.t33Failure = ""
+        companion.startPomodoro(companion.lastTaskId, companion.lastTaskTitle)
+        compare(companion.justCompletedPhase, 0)
+        compare(card.cardState, "work")
+    }
+
+    // 产品保证：伴侣页收到番茄结束但自动完成关联任务失败信号（taskAutoCompleteFailed）时，弹出与桌面端同口径的提示条。
+    function test_companionTaskAutoCompleteFailedShowsToast() {
+        var win = createTemporaryObject(companionMainComponent, testCase)
+        verify(win)
+        var toast = findChild(win, "companionToast")
+        verify(toast)
+        var toastLabel = findChild(toast, "toastText")
+        verify(toastLabel)
+
+        timerStub.taskAutoCompleteFailed(7)
+        compare(toast.shown, true)
+        compare(toastLabel.text, "专注记录已保存，但任务自动完成失败，请手动检查")
     }
 
 }

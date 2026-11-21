@@ -4,6 +4,8 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtTest
 import "../../qml"
+import "../../qml/components"
+import "../../qml/mobile"
 import "fixtures"
 import "TestWaits.js" as TestWaits
 
@@ -285,6 +287,26 @@ TestCase {
         id: exportService
     }
 
+    QtObject {
+        id: logicalDayService
+        signal changed
+    }
+
+    ListModel {
+        id: auditCountdownModel
+        Component.onCompleted: append({ goalId: 1, name: "研究生初试", targetDate: new Date(2026, 11, 23), displayOrder: 0, daysRemaining: 196 })
+    }
+
+    QtObject {
+        id: countdownService
+        signal goalsChanged
+        signal operationFailed(string message)
+        property var model: auditCountdownModel
+        property var primaryGoal: ({ goalId: 1, name: "研究生初试", targetDate: new Date(2026, 11, 23), daysRemaining: 196 })
+        function reload() { return true }
+        function addGoal() { return true }
+    }
+
     // 最小快捷键注册表：只给一条应用内动作，够验证「弹窗打开时整体让路」这条接线。
     // 键位规则本身由 ShortcutRegistryTests 与 tst_shortcuts.qml 覆盖。
     QtObject {
@@ -403,6 +425,8 @@ TestCase {
         focusTimerRef: focusTimer
         shortcutRegistryRef: shortcutRegistry
         scheduleServiceRef: scheduleService
+        countdownServiceRef: countdownService
+        logicalDayServiceRef: logicalDayService
     }
 
     // 目前没有例外。加一条进来必须是一次明确的产品决定，并写清「为什么可以这样」
@@ -495,24 +519,68 @@ TestCase {
         return slots ? slots : []
     }
 
-    // Control 的 background 与 contentItem 是兄弟而不是父子：只沿 parent 往上
-    // 会跳过按钮自己的底色，把页面底当成背景，得出一堆假的低对比。
+    function blendOver(top, bottom) {
+        var a = Number(top.a)
+        if (a >= 0.999) return top
+        if (a <= 0.001) return bottom
+        return Qt.rgba(
+            top.r * a + bottom.r * (1 - a),
+            top.g * a + bottom.g * (1 - a),
+            top.b * a + bottom.b * (1 - a),
+            1
+        )
+    }
+
+    // 合成真实透明玻璃链路与同父节点覆盖在后面的玻璃底板，按自底向上混合出像素落点的真实背景色，
+    // 不再只认 alpha >= 0.85 或无条件回退到不透明纸面 Theme.surface。
     function backdropOf(item, fallback) {
-        var node = item.parent, guard = 0
-        while (node && guard++ < 60) {
-            if (node.background !== undefined && node.background !== null
-                    && node.background.color !== undefined && node.background.color !== null
-                    && node.background.color.a >= 0.85) {
-                return node.background.color
+        var layers = []
+        var cur = item
+        var guard = 0
+        while (cur && guard++ < 60) {
+            var parentNode = cur.parent
+            if (parentNode && parentNode.children) {
+                for (var s = 0; s < parentNode.children.length; ++s) {
+                    var sib = parentNode.children[s]
+                    if (sib === cur) break
+                    // Control.background 在 children 中位于 contentItem 之前，交由下方 parentNode.background 统一计入一次，
+                    // 否则 SidebarItem/按钮 会叠加 2–3 次半透明底色。
+                    if (parentNode.background !== undefined && sib === parentNode.background) continue
+                    if (sib && sib.visible && sib.opacity > 0.01
+                            && sib.width > 0 && sib.height > 0
+                            && sib.color !== undefined && sib.color !== null
+                            && sib.border !== undefined && sib.text === undefined
+                            && sib.color.a > 0.01) {
+                        var pt = item.mapToItem(sib, item.width / 2, item.height / 2)
+                        if (pt.x >= 0 && pt.x <= sib.width && pt.y >= 0 && pt.y <= sib.height) {
+                            layers.push(sib.color)
+                        }
+                    }
+                }
             }
-            if (node.color !== undefined && node.color !== null
-                    && node.border !== undefined && node.text === undefined
-                    && node.color.a >= 0.85) {
-                return node.color
+            if (parentNode) {
+                var pushedParentBg = false
+                if (parentNode.background !== undefined && parentNode.background !== null
+                        && parentNode.background.color !== undefined && parentNode.background.color !== null
+                        && parentNode.background.color.a > 0.01) {
+                    layers.push(parentNode.background.color)
+                    pushedParentBg = true
+                    if (parentNode.background.color.a >= 0.99) break
+                }
+                if (!pushedParentBg && parentNode.color !== undefined && parentNode.color !== null
+                        && parentNode.border !== undefined && parentNode.text === undefined
+                        && parentNode.color.a > 0.01) {
+                    layers.push(parentNode.color)
+                    if (parentNode.color.a >= 0.99) break
+                }
             }
-            node = node.parent
+            cur = parentNode
         }
-        return fallback
+        var acc = fallback
+        for (var i = layers.length - 1; i >= 0; --i) {
+            acc = blendOver(layers[i], acc)
+        }
+        return acc
     }
 
     property var findings: []
@@ -528,7 +596,8 @@ TestCase {
     }
 
     function walk(item, tag, fallback, depth) {
-        if (!item || depth > 40) return
+        // 不可见子树（未激活页、折叠行等）不参与视觉对比度扫描，避免用未布局坐标误撞兄弟容器。
+        if (!item || !item.visible || item.opacity <= 0.05 || depth > 40) return
         // 必须真的是文字渲染类型：委托根节点常常同时有 text 属性和背景 color，
         // 不加判据会把「带标题属性的背景矩形」当成低对比文字。
         // 光看 font 还不够：Control 自带 font 与 text，再给它一个背景色 alias（侧栏条目就是这样），
@@ -538,6 +607,8 @@ TestCase {
                 && String(item.text).length > 0 && item.opacity > 0.05
                 && item.width > 0 && item.height > 0
                 && item.color.a > 0.15
+                && !(item.parent && item.parent.placeholderText !== undefined && item.text === item.parent.placeholderText)
+                && !(item.text === "✓" && item.parent && String(item.parent.objectName).indexOf("colorSwatch-") === 0)
                 && !inDisabledControl(item) && !isExempt(item)) {
             var bg = backdropOf(item, fallback)
             if (bg) {
@@ -562,7 +633,12 @@ TestCase {
     }
 
     function sweep(themeId, tag) {
+        appSettings.backgroundTheme = themeId
         Theme.activeThemeId = themeId
+        var themeDef = Theme.resolveTheme(themeId)
+        var themeBase = themeDef.mode === "dark" && !appSettings.reduceTransparency
+                        ? Qt.color(themeDef.base)
+                        : Theme.surface
         // 这份清单必须与侧栏的入口一一对应。漏掉一页，那一页就完全在门禁之外——
         // 课表页曾经就这样漏了一整轮：正文说明用了只给「占位/禁用」的 inkMuted，
         // 全量测试照样全绿。
@@ -593,21 +669,21 @@ TestCase {
                 tryVerify(function () { return findChild(trashPage, "trashRow-9") !== null }, 3000, "前置：列表排好了")
                 verify(findChild(trashPage, "trashGroupHeading-2026-10-07"))
                 verify(findChild(trashPage, "trashMeta-6").text.indexOf("教三 204") > 0)
-                walk(mainWindow, tag + "·废纸篓列表", Theme.surface, 0)
+                walk(mainWindow, tag + "·废纸篓列表", themeBase, 0)
 
                 trashPage.actionError = "没能恢复「线性代数 第 4 讲」：10月6日 14:05–14:50 这段时间已有别的专注记录"
                 tryVerify(function () {
                     var t = findChild(trashPage, "trashActionErrorText")
                     return t !== null && t.width > 0 && t.height > 0
                 }, 3000, "前置：操作失败条排好了版")
-                walk(mainWindow, tag + "·废纸篓操作失败条", Theme.surface, 0)
+                walk(mainWindow, tag + "·废纸篓操作失败条", themeBase, 0)
                 trashPage.actionError = ""
 
                 trashService.empty = true
                 trashPage.reload()
                 tryVerify(function () { return trashPage.loaded && !trashPage.hasItems }, 3000)
                 verify(findChild(trashPage, "trashEmptyStateText").visible, "前置：空状态在")
-                walk(mainWindow, tag + "·废纸篓空状态", Theme.surface, 0)
+                walk(mainWindow, tag + "·废纸篓空状态", themeBase, 0)
                 trashService.empty = false
 
                 trashService.readOk = false
@@ -616,12 +692,12 @@ TestCase {
                     var t = findChild(trashPage, "trashLoadErrorText")
                     return trashPage.loadError.length > 0 && t !== null && t.width > 0 && t.height > 0
                 }, 3000, "前置：读取失败条排好了版")
-                walk(mainWindow, tag + "·废纸篓读取失败条", Theme.surface, 0)
+                walk(mainWindow, tag + "·废纸篓读取失败条", themeBase, 0)
                 trashService.readOk = true
                 trashPage.reload()
                 tryVerify(function () { return trashPage.hasItems }, 3000)
             }
-            walk(mainWindow, tag, Theme.surface, 0)
+            walk(mainWindow, tag, themeBase, 0)
             // 产品保证：出错提示条的文字同样要过对比度门禁。它只在出错时出现，平时这里一个字都扫不到——
             // 知识缺口页的错误条曾经是危险色字压在沉底色上，日间只有 4.44:1，全量测试照样全绿。
             // 这里给两页各摆出一条错误，只扫这一页再看一遍。
@@ -636,7 +712,7 @@ TestCase {
                     var text = findChild(errorPage, errorTextName)
                     return text !== null && text.width > 0 && text.height > 0
                 }, 3000, "前置：" + views[i] + " 的错误条排好了版")
-                walk(errorPage, tag + "·出错提示", Theme.surface, 0)
+                walk(errorPage, tag + "·出错提示", themeBase, 0)
                 errorPage[errorProperty] = ""
             }
         }
@@ -661,7 +737,7 @@ TestCase {
             // 防止空扫：卡片确实带着这组内容。
             verify(reviewCard.implicitHeight > 100, reviewStates[r].name)
             compare(reviewCard.errorState, reviewStates[r].review.loadState === "error", reviewStates[r].name)
-            walk(mainWindow, tag + "周复盘·" + reviewStates[r].name, Theme.surface, 0)
+            walk(mainWindow, tag + "周复盘·" + reviewStates[r].name, themeBase, 0)
         }
         statsView.currentTimeRange = "today"
         statisticsService.weeklyReviewData = ({ loadState: "ready", hasDisplayContent: false })
@@ -677,15 +753,54 @@ TestCase {
             focusTimer.hasActiveSession = mode !== 2
             focusTimer.isRunning = true
             TestWaits.letElapse(testCase, 100, "计时状态改变后让各处文字、按钮换到计时态并排好版再扫；没有单一可等的状态")
-            walk(mainWindow, tag + "计时模式" + mode, Theme.surface, 0)
+            walk(mainWindow, tag + "计时模式" + mode, themeBase, 0)
             focusTimer.isRunning = false
             TestWaits.letElapse(testCase, 100, "切到暂停后让文字与按钮换到暂停态并排好版再扫；没有单一可等的状态")
-            walk(mainWindow, tag + "暂停模式" + mode, Theme.surface, 0)
+            walk(mainWindow, tag + "暂停模式" + mode, themeBase, 0)
         }
         focusTimer.hasActiveSession = false
         focusTimer.isRunning = false
         focusTimer.mode = 0
         focusTimer.phase = 0
+    }
+
+    Component { id: auditAddTaskDialog; AddTaskDialog { categoryManagerRef: categoryManager } }
+    Component { id: auditCategoryDialog; CategoryDialog { manager: categoryManager } }
+    Component { id: auditCountdownDialog; CountdownDialog { countdownServiceRef: countdownService } }
+    Component { id: auditGapDialog; KnowledgeGapDialog { categoryManagerRef: categoryManager } }
+    Component { id: auditSettingsDialog; SettingsDialog { appSettingsRef: appSettings } }
+    Component { id: auditManualSessionDialog; ManualSessionDialog {} }
+    Component { id: auditCompanionWindow; CompanionWindow { width: 390; height: 844; taskManagerRef: taskManager; focusTimerRef: focusTimer; appSettingsRef: appSettings; logicalDayServiceRef: logicalDayService } }
+
+    function sweepPopupsAndCompanion(themeId, tag) {
+        appSettings.backgroundTheme = themeId
+        Theme.activeThemeId = themeId
+        var themeDef = Theme.resolveTheme(themeId)
+        var themeBase = themeDef.mode === "dark" && !appSettings.reduceTransparency
+                        ? Qt.color(themeDef.base)
+                        : Theme.surface
+
+        var popups = [
+            { name: "AddTaskDialog", comp: auditAddTaskDialog, open: function(d) { d.open() } },
+            { name: "CategoryDialog", comp: auditCategoryDialog, open: function(d) { d.open() } },
+            { name: "CountdownDialog", comp: auditCountdownDialog, open: function(d) { d.openForAdd() } },
+            { name: "KnowledgeGapDialog", comp: auditGapDialog, open: function(d) { d.openForAdd() } },
+            { name: "SettingsDialog", comp: auditSettingsDialog, open: function(d) { d.open() } },
+            { name: "ManualSessionDialog", comp: auditManualSessionDialog, open: function(d) { d.openForAdd("2026-09-16", []) } }
+        ]
+        for (var i = 0; i < popups.length; ++i) {
+            var p = createTemporaryObject(popups[i].comp, testCase)
+            verify(p, popups[i].name)
+            popups[i].open(p)
+            tryCompare(p, "opened", true, 3000)
+            walk(p.contentItem || p, tag + "·" + popups[i].name, p.background && p.background.color ? blendOver(p.background.color, themeBase) : themeBase, 0)
+            p.close()
+        }
+
+        var companion = createTemporaryObject(auditCompanionWindow, testCase)
+        verify(companion, "CompanionWindow")
+        TestWaits.letElapse(testCase, 50, "等待移动端随身伴侣视图排版完成")
+        walk(companion, tag + "·CompanionWindow", themeBase, 0)
     }
 
     // 门禁量的是每个文字最终停下来的颜色，必须关掉颜色渐变。
@@ -701,14 +816,19 @@ TestCase {
     }
 
     function cleanupTestCase() {
+        appSettings.backgroundTheme = "warm"
         Theme.activeThemeId = "warm"
         Theme.reduceMotion = false
     }
 
     function test_no_unreadable_text_in_any_view() {
         testCase.findings = []
-        sweep("starry", "夜间")
-        sweep("warm", "日间")
+        appSettings.reduceTransparency = false
+        for (var i = 0; i < Theme.themes.length; ++i) {
+            var t = Theme.themes[i]
+            sweep(t.id, t.name)
+            sweepPopupsAndCompanion(t.id, t.name)
+        }
 
         var seen = ({})
         var uniq = []

@@ -634,9 +634,18 @@ Item {
                             Layout.preferredWidth: 32
                             Layout.preferredHeight: 32
                             radius: Theme.radiusMd
+                            activeFocusOnTab: true
+                            Accessible.role: Accessible.Button
+                            Accessible.name: qsTr("上一统计周期")
+                            Accessible.onPressAction: root.goToPreviousPeriod()
+                            Keys.onReturnPressed: root.goToPreviousPeriod()
+                            Keys.onEnterPressed: root.goToPreviousPeriod()
+                            Keys.onSpacePressed: root.goToPreviousPeriod()
                             color: previousPeriodMouseArea.containsMouse ? Theme.glassHover : Theme.glassCard
-                            border.width: 1
-                            border.color: previousPeriodMouseArea.containsMouse ? Theme.accent : Theme.border
+                            border.width: previousPeriodButton.activeFocus ? 2 : 1
+                            border.color: previousPeriodButton.activeFocus
+                                          ? Theme.focusRing
+                                          : (previousPeriodMouseArea.containsMouse ? Theme.accent : Theme.border)
 
                             Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 120; easing.type: Easing.OutQuad } }
                             Behavior on border.color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 120; easing.type: Easing.OutQuad } }
@@ -682,13 +691,22 @@ Item {
                             Layout.preferredWidth: 32
                             Layout.preferredHeight: 32
                             radius: Theme.radiusMd
+                            activeFocusOnTab: root.canGoForward
+                            Accessible.role: Accessible.Button
+                            Accessible.name: qsTr("下一统计周期")
+                            Accessible.onPressAction: { if (root.canGoForward) root.goToNextPeriod() }
+                            Keys.onReturnPressed: { if (root.canGoForward) root.goToNextPeriod() }
+                            Keys.onEnterPressed: { if (root.canGoForward) root.goToNextPeriod() }
+                            Keys.onSpacePressed: { if (root.canGoForward) root.goToNextPeriod() }
                             color: root.canGoForward
                                    ? (nextPeriodMouseArea.containsMouse ? Theme.glassHover : Theme.glassCard)
                                    : Theme.glassCard
-                            border.width: 1
-                            border.color: root.canGoForward
-                                          ? (nextPeriodMouseArea.containsMouse ? Theme.accent : Theme.border)
-                                          : Theme.borderSubtle
+                            border.width: nextPeriodButton.activeFocus ? 2 : 1
+                            border.color: nextPeriodButton.activeFocus
+                                          ? Theme.focusRing
+                                          : (root.canGoForward
+                                             ? (nextPeriodMouseArea.containsMouse ? Theme.accent : Theme.border)
+                                             : Theme.borderSubtle)
                             opacity: root.canGoForward ? 1.0 : 0.55
 
                             Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 120; easing.type: Easing.OutQuad } }

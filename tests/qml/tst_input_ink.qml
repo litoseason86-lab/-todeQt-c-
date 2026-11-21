@@ -34,6 +34,19 @@ TestCase {
     Component { id: routineComponent; RoutineDialog {} }
     Component { id: countdownComponent; CountdownDialog {} }
     Component { id: exportComponent; ExportDialog {} }
+    Component { id: taskToolsComponent; TaskToolsDialog {} }
+    Component { id: knowledgeGapComponent; KnowledgeGapDialog {} }
+    Component { id: completeTaskComponent; CompleteTaskDialog {} }
+    Component { id: manualSessionComponent; ManualSessionDialog {} }
+    Component { id: scheduleEntryComponent; ScheduleEntryDialog {} }
+    Component { id: scheduleSettingsComponent; ScheduleSettingsDialog {} }
+    Component { id: serverSpaceComponent; ServerSpaceDialog {} }
+    Component { id: gapCapturePopupComponent; KnowledgeGapCapturePopup {} }
+    Component { id: newCategoryPromptComponent; NewCategoryPrompt {} }
+    Component { id: restoreConfirmComponent; RestoreConfirmDialog {} }
+    Component { id: longFreeConfirmComponent; LongFreeFocusConfirmDialog {} }
+    Component { id: syncLogComponent; SyncLogDialog {} }
+    Component { id: settingsDialogComponent; SettingsDialog {} }
     Component { id: taskItemComponent; TaskItem { width: 400 } }
     Component { id: settingsGeneralComponent; SettingsGeneralPage {} }
 
@@ -61,6 +74,19 @@ TestCase {
             { name: "RoutineDialog", comp: routineComponent },
             { name: "CountdownDialog", comp: countdownComponent },
             { name: "ExportDialog", comp: exportComponent },
+            { name: "TaskToolsDialog", comp: taskToolsComponent },
+            { name: "KnowledgeGapDialog", comp: knowledgeGapComponent },
+            { name: "CompleteTaskDialog", comp: completeTaskComponent },
+            { name: "ManualSessionDialog", comp: manualSessionComponent },
+            { name: "ScheduleEntryDialog", comp: scheduleEntryComponent },
+            { name: "ScheduleSettingsDialog", comp: scheduleSettingsComponent },
+            { name: "ServerSpaceDialog", comp: serverSpaceComponent },
+            { name: "KnowledgeGapCapturePopup", comp: gapCapturePopupComponent },
+            { name: "NewCategoryPrompt", comp: newCategoryPromptComponent },
+            { name: "RestoreConfirmDialog", comp: restoreConfirmComponent },
+            { name: "LongFreeFocusConfirmDialog", comp: longFreeConfirmComponent },
+            { name: "SyncLogDialog", comp: syncLogComponent },
+            { name: "SettingsDialog", comp: settingsDialogComponent },
             { name: "TaskItem", comp: taskItemComponent },
             { name: "SettingsGeneralPage", comp: settingsGeneralComponent }
         ]
@@ -227,8 +253,35 @@ TestCase {
         verify(Theme.modalScrim.a > Theme.dialogScrim.a,
                row.tag + "阻断遮罩(" + Theme.modalScrim.a.toFixed(2)
                + ") 没有比普通弹窗遮罩(" + Theme.dialogScrim.a.toFixed(2) + ") 更重")
-        // 也不能淡到压不住：普通弹窗至少要盖掉背景四成。
+        // 重点保证普通弹窗遮罩仍至少四成不透明。
         verify(Theme.dialogScrim.a >= 0.4,
                row.tag + "普通弹窗遮罩只有 " + Theme.dialogScrim.a.toFixed(2))
+    }
+
+    // 产品保证：任务工具弹窗在夜间主题下选区与高亮对比度达到 4.5:1，知识缺口编辑弹窗的科目下拉面板对比度同样达标。
+    function test_task_tools_and_knowledge_gap_dark_palette_contrast() {
+        Theme.activeThemeId = "starry"
+
+        var tools = createTemporaryObject(taskToolsComponent, testCase)
+        verify(tools)
+        tools.open()
+        var highlightContrast = contrastRatio(tools.palette.highlightedText, tools.palette.highlight)
+        verify(highlightContrast >= 4.5,
+               "TaskToolsDialog 夜间选中文本对比度只有 " + highlightContrast.toFixed(2) + ":1")
+        tools.close()
+
+        var gapDialog = createTemporaryObject(knowledgeGapComponent, testCase,
+                                              { categoryManagerRef: categoryManagerMock })
+        verify(gapDialog)
+        gapDialog.openForAdd()
+        var categoryBox = findChild(gapDialog, "knowledgeGapCategoryBox")
+        verify(categoryBox)
+        categoryBox.popup.open()
+        var panel = categoryBox.popup.background.color
+        var itemContrast = contrastRatio(Theme.ink, panel)
+        verify(itemContrast >= 4.5,
+               "KnowledgeGapDialog 夜间科目下拉文字对比度只有 " + itemContrast.toFixed(2) + ":1")
+        categoryBox.popup.close()
+        gapDialog.close()
     }
 }

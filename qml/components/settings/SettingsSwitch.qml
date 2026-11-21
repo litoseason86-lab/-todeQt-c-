@@ -33,8 +33,8 @@ Switch {
         implicitHeight: 24
         radius: height / 2
         color: root.checked ? Theme.accent : Theme.surfaceSunken
-        border.color: root.activeFocus ? Theme.focusRing : Theme.border
-        border.width: root.activeFocus ? 2 : 1
+        border.color: root.visualFocus ? Theme.focusRing : Theme.border
+        border.width: root.visualFocus ? 2 : 1
 
         Rectangle {
             x: root.checked ? parent.width - width - 3 : 3

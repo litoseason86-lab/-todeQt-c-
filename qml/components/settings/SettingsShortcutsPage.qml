@@ -181,8 +181,8 @@ FocusScope {
                 background: Rectangle {
                     radius: Theme.radiusMd
                     color: resetAllButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                    border.color: resetAllButton.activeFocus ? Theme.focusRing : Theme.border
-                    border.width: resetAllButton.activeFocus ? 2 : 1
+                    border.color: resetAllButton.visualFocus ? Theme.focusRing : Theme.border
+                    border.width: resetAllButton.visualFocus ? 2 : 1
                 }
 
                 contentItem: Text {

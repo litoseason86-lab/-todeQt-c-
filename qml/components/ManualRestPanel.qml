@@ -87,6 +87,8 @@ Item {
 
                 background: Rectangle {
                     color: Theme.inkSoft
+                    border.color: pauseResumeButton.visualFocus ? Theme.focusRing : "transparent"
+                    border.width: pauseResumeButton.visualFocus ? 2 : 0
                     radius: Theme.radiusMd
                 }
 
@@ -111,6 +113,8 @@ Item {
 
                 background: Rectangle {
                     color: Theme.accentFill
+                    border.color: endButton.visualFocus ? Theme.focusRing : "transparent"
+                    border.width: endButton.visualFocus ? 2 : 0
                     radius: Theme.radiusMd
                 }
 

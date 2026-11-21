@@ -13,6 +13,19 @@ Popup {
 
     objectName: "syncLogDialog"
 
+    palette.text: Theme.inputInk
+    palette.placeholderText: Theme.inputPlaceholderInk
+    palette.highlight: Theme.inputSelection
+    palette.highlightedText: Theme.inputSelectedInk
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
+    palette.base: Theme.controlSurface
+    palette.button: Theme.controlSurface
+    palette.buttonText: Theme.controlInk
+    palette.windowText: Theme.controlInk
+
     property var syncControllerRef: null
     // 打开时读一次；开着的时候日志又有新记录（控制器发 logChanged），再读一次。
     property var entries: []

@@ -101,6 +101,25 @@ TestCase {
         compare(dialog.currentSection, 0)
     }
 
+    // 产品保证：只聚焦昵称输入框期间收到远端更新，失焦时保留远端昵称。
+    function test_focusedNicknameWithoutLocalEditPreservesRemoteUpdate() {
+        appSettingsMock.nickname = "旧昵称"
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        dialog.requestSection(2)
+        const pageLoader = findChild(dialog, "settingsPageLoader")
+        tryCompare(pageLoader, "status", Loader.Ready)
+        const field = findChild(pageLoader.item, "settingsNicknameField")
+        verify(field)
+        compare(field.text, "旧昵称")
+        field.forceActiveFocus()
+        tryCompare(field, "activeFocus", true)
+        appSettingsMock.nickname = "远端新昵称"
+        dialog.requestSection(0)
+        compare(dialog.currentSection, 0)
+        compare(appSettingsMock.nickname, "远端新昵称")
+    }
+
     function test_categoryButtonIsKeyboardFocusable() {
         dialog.open()
         tryCompare(dialog, "opened", true)
@@ -254,6 +273,51 @@ TestCase {
             item = item.parent
         }
         return false
+    }
+
+    // 产品保证：停留在通用设置页且用户未改昵称时，远端同步更新的昵称在切走标签或关闭窗口时不会被旧草稿反向覆盖。
+    function test_generalPageRemoteNicknameNotOverwrittenOnTabSwitch() {
+        appSettingsMock.nickname = ""
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        dialog.requestSection(2)
+
+        var pageLoader = findChild(dialog, "settingsPageLoader")
+        verify(pageLoader)
+        tryCompare(pageLoader, "status", Loader.Ready)
+
+        appSettingsMock.nickname = "云端同步昵称"
+        appSettingsMock.nicknameChanged()
+        compare(pageLoader.item.nicknameDraft, "云端同步昵称")
+
+        dialog.requestSection(0)
+        compare(appSettingsMock.nickname, "云端同步昵称")
+    }
+
+    // 产品保证：设置弹窗关闭期间发生的后台写入状态不污染页脚提示，重新打开后不残留上一轮结果或错误。
+    function test_hiddenWriteFailureDoesNotLeakAndCloseClearsStatus() {
+        dialog.close()
+        tryCompare(dialog, "visible", false)
+        dialog.statusText = ""
+        dialog.statusIsError = false
+
+        appSettingsMock.settingsWriteFailed("appearance/reduceMotion", "后台设置失败")
+        compare(dialog.statusText, "")
+        compare(dialog.statusIsError, false)
+
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        compare(dialog.statusText, "")
+        compare(dialog.statusIsError, false)
+
+        appSettingsMock.settingsWriteFailed("appearance/reduceMotion", "设置文件不可写")
+        compare(dialog.statusIsError, true)
+        verify(dialog.statusText.length > 0)
+
+        dialog.close()
+        tryCompare(dialog, "visible", false)
+        compare(dialog.statusText, "")
+        compare(dialog.statusIsError, false)
     }
 
 }

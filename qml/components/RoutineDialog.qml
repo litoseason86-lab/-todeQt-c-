@@ -40,6 +40,10 @@ Popup {
         }
     ]
     property string errorText: ""
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
     // 写入及本弹窗读取共用认领区间，重复日子弹窗和别处失败不能污染父表单。
     property bool serviceCallActive: false
     function callService(operation) {
@@ -218,6 +222,9 @@ Popup {
     }
 
     function submit() {
+        if (root.submissionClosed) {
+            return false
+        }
         var isEditing = root.editingRoutine
         var operationAvailable = root.routineManagerRef
                 && (isEditing ? root.routineManagerRef.updateRoutineChanges : root.routineManagerRef.addRoutine)
@@ -263,6 +270,9 @@ Popup {
     }
 
     function setRoutineActive(routineId, active) {
+        if (root.submissionClosed) {
+            return false
+        }
         if (!root.routineManagerRef || !root.routineManagerRef.setRoutineActive) {
             root.errorText = "每日例行服务不可用"
             return
@@ -292,6 +302,9 @@ Popup {
     }
 
     function commitRoutineDeletion(routineId) {
+        if (root.submissionClosed) {
+            return false
+        }
         if (Number(routineId) <= 0)
             return
         if (!root.routineManagerRef || !root.routineManagerRef.deleteRoutine) {

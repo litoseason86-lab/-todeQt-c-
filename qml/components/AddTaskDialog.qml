@@ -36,7 +36,8 @@ Popup {
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     width: Math.min(460, parent ? Math.max(280, parent.width - 64) : 460)
-    height: panel.implicitHeight
+    // 620px 最矮窗口下限制高度，配合内部 Flickable 避免上下被窗口边裁切。
+    height: Math.min(panel.implicitHeight, parent ? Math.max(360, parent.height - 48) : panel.implicitHeight)
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round((parent.height - height) / 2) : 0
     padding: 0
@@ -91,12 +92,16 @@ Popup {
         }
     }
 
+    property var settingsRef: null
     property date selectedDate: {
-        // 凌晨日界点前创建的任务仍属于前一逻辑日。
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        // 凌晨日界点前创建的任务仍属于前一逻辑日；优先读注入的 settingsRef，兼容独立测试回落。
+        var settings = root.settingsRef
+        if (!settings) {
+            // qmllint disable unqualified
+            settings = (typeof appSettings !== "undefined" && appSettings) ? appSettings : null
+            // qmllint enable unqualified
+        }
+        var hour = settings ? settings.dayStartHour : 4
         return LogicalDay.todayDate(hour, new Date())
     }
     // “今日”入口每次打开都要重算逻辑日；周计划入口不注入此函数，保留用户点选的日期。
@@ -357,11 +362,17 @@ Popup {
         }
     }
 
-    contentItem: ColumnLayout {
-        id: contentColumn
+    contentItem: Flickable {
+        contentWidth: width
+        contentHeight: contentColumn.implicitHeight
+        boundsBehavior: Flickable.StopAtBounds
+        clip: true
 
-        width: root.width
-        spacing: Theme.space12
+        ColumnLayout {
+            id: contentColumn
+
+            width: root.width
+            spacing: Theme.space12
 
         Rectangle {
             Layout.fillWidth: true
@@ -607,9 +618,12 @@ Popup {
                 accessiblePrefix: "预计用时"
                 compact: true
                 totalMinutes: root.estimatedMinutes
+                // 优先读取注入的 taskManagerRef，未注入时回落兼容独立测试。
                 // qmllint disable unqualified
-                maximumMinutes: (typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedMinutes)
-                    ? taskManager.maxEstimatedMinutes : 24 * 60
+                maximumMinutes: (root.taskManagerRef && root.taskManagerRef.maxEstimatedMinutes)
+                    ? root.taskManagerRef.maxEstimatedMinutes
+                    : ((typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedMinutes)
+                       ? taskManager.maxEstimatedMinutes : 24 * 60)
                 // qmllint enable unqualified
                 onAccepted: root.submit()
             }
@@ -618,7 +632,7 @@ Popup {
                 Layout.fillWidth: true
                 text: estimateFields.enteredMinutes > 0 ? "" : "未设置"
                 textFormat: Text.PlainText
-                color: Theme.inkMuted
+                color: Theme.inkSoft
                 font.pixelSize: Theme.fontSm
                 verticalAlignment: Text.AlignVCenter
             }
@@ -666,6 +680,16 @@ Popup {
                 font.pixelSize: Theme.fontMd
                 wrapMode: TextArea.Wrap
                 selectByMouse: true
+                // TextArea 默认把 Tab 当制表符吞掉，必须在控件消费前拦截，避免键盘用户陷死在多行框内。
+                KeyNavigation.priority: KeyNavigation.BeforeItem
+                KeyNavigation.tab: cancelButton
+                Keys.onPressed: function (event) {
+                    if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                            && (event.modifiers & Qt.ControlModifier)) {
+                        event.accepted = true
+                        root.submit()
+                    }
+                }
 
                 background: Rectangle {
                     radius: Theme.radiusMd
@@ -679,6 +703,7 @@ Popup {
         Label {
             id: errorLabel
             objectName: "addTaskErrorLabel"
+            textFormat: Text.PlainText
 
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
@@ -711,8 +736,10 @@ Popup {
                 background: Rectangle {
                     objectName: "cancelButtonBackground"
                     color: cancelButton.pressed ? Theme.glassHover : (cancelButton.hovered ? Theme.glassHover : Theme.glassCard)
-                    border.color: cancelButton.hovered || cancelButton.pressed ? Theme.accent : Theme.border
-                    border.width: 1
+                    border.color: cancelButton.visualFocus
+                                  ? Theme.focusRing
+                                  : (cancelButton.hovered || cancelButton.pressed ? Theme.accent : Theme.border)
+                    border.width: cancelButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
 
                     Behavior on color {
@@ -764,8 +791,10 @@ Popup {
                 background: Rectangle {
                     objectName: "saveAndContinueButtonBackground"
                     color: saveAndContinueButton.pressed || saveAndContinueButton.hovered ? Theme.glassHover : Theme.glassCard
-                    border.color: saveAndContinueButton.hovered || saveAndContinueButton.pressed ? Theme.accent : Theme.border
-                    border.width: 1
+                    border.color: saveAndContinueButton.visualFocus
+                                  ? Theme.focusRing
+                                  : (saveAndContinueButton.hovered || saveAndContinueButton.pressed ? Theme.accent : Theme.border)
+                    border.width: saveAndContinueButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
 
                     Behavior on color {
@@ -801,8 +830,10 @@ Popup {
                 background: Rectangle {
                     objectName: "submitButtonBackground"
                     color: submitButton.pressed ? Theme.accentFillStrong : (submitButton.hovered ? Theme.accentFillStrong : Theme.accentFill)
-                    border.color: submitButton.hovered || submitButton.pressed ? Theme.accentStrong : Theme.accent
-                    border.width: 1
+                    border.color: submitButton.visualFocus
+                                  ? Theme.focusRing
+                                  : (submitButton.hovered || submitButton.pressed ? Theme.accentStrong : Theme.accent)
+                    border.width: submitButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
 
                     Behavior on color {
@@ -842,6 +873,7 @@ Popup {
 
                 onClicked: root.submit()
             }
+        }
         }
     }
 

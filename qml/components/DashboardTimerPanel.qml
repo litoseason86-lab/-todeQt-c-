@@ -166,11 +166,20 @@ Item {
             }
 
             Text {
+                id: focusLink
                 objectName: "dashboardTimerFocusLink"
 
                 text: "专注页 ›"
                 font.pixelSize: Theme.fontSm
-                color: focusLinkArea.containsMouse ? Theme.accentInk : Theme.inkSoft
+                color: focusLinkArea.containsMouse || focusLink.activeFocus ? Theme.accentInk : Theme.inkSoft
+                font.underline: focusLink.activeFocus
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "打开专注页"
+                Accessible.onPressAction: root.openFocusRequested()
+                Keys.onReturnPressed: root.openFocusRequested()
+                Keys.onEnterPressed: root.openFocusRequested()
+                Keys.onSpacePressed: root.openFocusRequested()
 
                 MouseArea {
                     id: focusLinkArea
@@ -184,11 +193,17 @@ Item {
             }
 
             Text {
+                id: hideLink
                 objectName: "dashboardTimerHideLink"
 
                 text: "隐藏 »"
                 font.pixelSize: Theme.fontSm
-                color: hideLinkArea.containsMouse ? Theme.accentInk : Theme.inkSoft
+                color: hideLinkArea.containsMouse || hideLink.activeFocus ? Theme.accentInk : Theme.inkSoft
+                font.underline: hideLink.activeFocus
+                activeFocusOnTab: true
+                Keys.onReturnPressed: root.hideRequested()
+                Keys.onEnterPressed: root.hideRequested()
+                Keys.onSpacePressed: root.hideRequested()
 
                 MouseArea {
                     id: hideLinkArea
@@ -304,6 +319,8 @@ Item {
                 background: GlassPanel {
                     color: primaryButton.pressed ? Theme.glassAccent
                            : (primaryButton.hovered ? Theme.glassHover : Theme.glassCard)
+                    border.color: primaryButton.visualFocus ? Theme.focusRing : Theme.glassBorder
+                    border.width: primaryButton.visualFocus ? 2 : 1
                     panelShadowEnabled: false
 
                     Behavior on color {
@@ -340,7 +357,9 @@ Item {
                 onClicked: root.stopRequested()
 
                 background: GlassPanel {
-                    color: stopButton.hovered ? Theme.glassHover : Qt.rgba(1, 1, 1, 0)
+                    color: stopButton.hovered ? Theme.glassHover : Theme.glassHoverIdle
+                    border.color: stopButton.visualFocus ? Theme.focusRing : Theme.glassBorder
+                    border.width: stopButton.visualFocus ? 2 : 1
                     specularEnabled: false
                     panelShadowEnabled: false
 

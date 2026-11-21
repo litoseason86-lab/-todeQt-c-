@@ -180,7 +180,7 @@ GlassPanel {
             font.pixelSize: root.compact ? Theme.fontSm : Theme.fontMd
             color: {
                 if (root.comparisonTrend > 0) {
-                    return Theme.success
+                    return Theme.successInk
                 }
                 if (root.comparisonTrend < 0) {
                     return Theme.danger

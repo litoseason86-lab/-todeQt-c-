@@ -284,9 +284,12 @@ Item {
         var deleteMessage = isRoutine
                 ? "已删除今天的例行任务「" + title + "」"
                 : "已删除「" + title + "」"
+        // 绑定本次入槽代次：若换库或新删除已顶替单槽，迟到的撤销点击为安全空操作。
+        const deleteGen = root.pendingDeletionRef.generation !== undefined
+                ? Number(root.pendingDeletionRef.generation) : -1
         // 直接走 globalToast：showToast 会把“已有待删任务”先提交，撤销条自己不能触发这条规则。
         root.pendingDeleteUndoAction = function() {
-            root.cancelPendingDelete()
+            root.cancelPendingDelete(deleteGen)
         }
         globalToast.show(deleteMessage, "撤销", root.pendingDeleteUndoAction)
         return true
@@ -297,12 +300,19 @@ Item {
         const rest = Boolean(isRest)
         if (!root.pendingDeletionRef || !root.pendingDeletionRef.requestSession(sessionId, sessionTitle, rest))
             return false
+        const deleteGen = root.pendingDeletionRef.generation !== undefined
+                ? Number(root.pendingDeletionRef.generation) : -1
         root.pendingDeleteUndoAction = function() {
-            root.cancelPendingDelete()
+            root.cancelPendingDelete(deleteGen)
         }
         globalToast.show(qsTr("已删除%1记录「%2」").arg(rest ? qsTr("休息") : qsTr("专注")).arg(sessionTitle), qsTr("撤销"), root.pendingDeleteUndoAction)
         return true
     }
+
+    // 整库替换代次：每次备份恢复或远端整库快照替换递增，用于拦截跨库迟到的「完成撤销」回调。
+    property int databaseGeneration: 0
+    // 当前挂在提示条上的「完成撤销」回调，换库时通过它精确收起旧库撤销条而不误伤无关提示。
+    property var activeCompletionUndoAction: null
 
     // 完成撤销：完成已即时写库，撤销时把完成态翻回。5 秒撤销条内点击即可恢复完成前状态，
     // 任务 ID、排序、字段都不变（只改了 completed 一列）。
@@ -310,11 +320,19 @@ Item {
     // 再次完成时弹窗会预填回来，免得一次误触就把刚写的内容丢掉。
     // 完成时顺带结束的专注也不恢复：那段记录已经按正常结束保存，撤销只管任务的完成态。
     function showCompletionUndoToast(taskId, message) {
-        showToast(message, "撤销", function() {
+        const capturedGeneration = root.databaseGeneration
+        const undoCallback = function() {
+            root.activeCompletionUndoAction = null
+            // 若在撤销窗口内发生换库，新库可能存在同主键任务，必须拒绝跨库回写。
+            if (root.databaseGeneration !== capturedGeneration) {
+                return
+            }
             if (!root.taskManagerRef || !root.taskManagerRef.setTaskCompleted(taskId, false)) {
                 root.showToast("撤销完成失败，请重试")
             }
-        })
+        }
+        root.activeCompletionUndoAction = undoCallback
+        showToast(message, "撤销", undoCallback)
     }
 
     // 当前待删除项的「撤销」回调。提前提交后要凭它收起那条撤销条（见 commitPendingDelete）。
@@ -332,10 +350,16 @@ Item {
         return !root.pendingDeletionRef || root.pendingDeletionRef.commit()
     }
 
-    function cancelPendingDelete() {
+    function cancelPendingDelete(expectedGeneration) {
         root.pendingDeleteUndoAction = null
-        if (root.pendingDeletionRef)
+        if (!root.pendingDeletionRef)
+            return
+        if (expectedGeneration !== undefined && expectedGeneration >= 0
+                && typeof root.pendingDeletionRef.cancelGeneration === "function") {
+            root.pendingDeletionRef.cancelGeneration(expectedGeneration)
+        } else {
             root.pendingDeletionRef.cancel()
+        }
     }
 
     // 今日任务、本周计划、仪表盘三个任务入口都从这里分流。
@@ -429,19 +453,8 @@ Item {
         settingsDialog.requestSection(settingsDialog.shortcutSectionIndex)
     }
 
-    function toggleFocusFromShortcut() {
-        if (!root.focusTimerRef) {
-            return
-        }
-        if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
-            // 失败原因已由服务同步交给提示条，不能再按未变化的状态覆盖成成功提示。
-            if (!focusView.togglePause())
-                return
-            // togglePause 是同步的，这里读到的已经是切换之后的状态。
-            var manualRest = root.isManualRestActive()
-            root.showToast(root.focusTimerRef.isRunning
-                           ? (manualRest ? "已继续休息" : "已继续专注")
-                           : (manualRest ? "已暂停休息" : "已暂停专注"))
+    function startDefaultFocus() {
+        if (!root.focusTimerRef || root.backupOperationBlocksInput) {
             return
         }
 
@@ -464,6 +477,25 @@ Item {
         })
     }
 
+    function toggleFocusFromShortcut() {
+        if (!root.focusTimerRef) {
+            return
+        }
+        if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
+            // 失败原因已由服务同步交给提示条，不能再按未变化的状态覆盖成成功提示。
+            if (!focusView.togglePause())
+                return
+            // togglePause 是同步的，这里读到的已经是切换之后的状态。
+            var manualRest = root.isManualRestActive()
+            root.showToast(root.focusTimerRef.isRunning
+                           ? (manualRest ? "已继续休息" : "已继续专注")
+                           : (manualRest ? "已暂停休息" : "已暂停专注"))
+            return
+        }
+
+        root.startDefaultFocus()
+    }
+
     function stopFocusFromShortcut() {
         if (!root.focusTimerRef) {
             return
@@ -482,9 +514,10 @@ Item {
             if (root.backupOperationBlocksInput) {
                 return
             }
-            if (focusView.state === "manualRest") {
+            // 按真实计时器模式分发而非专注页本地页签，避免自由计时中页签停在番茄时误清番茄循环计数。
+            if (root.focusTimerRef && root.focusTimerRef.mode === 2 && root.focusTimerRef.phase === 3) {
                 focusView.endManualRest()
-            } else if (focusView.pomodoroModeSelected) {
+            } else if (root.focusTimerRef && root.focusTimerRef.mode === 1) {
                 focusView.endPomodoro()
             } else {
                 focusView.endFreeFocus()
@@ -746,7 +779,8 @@ Item {
 
             anchors.fill: parent
             visible: false
-            live: Theme.glassBlurAllowed
+            // 侧栏收起或进入全屏沉浸时停止实时壁纸重采样，避免后台 GPU 空转。
+            live: Theme.glassBlurAllowed && sidebarFrost.visible && root.sidebarVisible && !root.focusImmersiveActive
             sourceItem: wallpaperLayer
             sourceRect: Qt.rect(0, 0, Math.max(1, width), height)
         }
@@ -816,6 +850,10 @@ Item {
 
                 width: root.sidebarExpandedWidth
                 height: parent.height
+                // 收起后关闭交互与可见性（挂在内部 Sidebar 而非外层 sidebarShell，避免 RowLayout 排除壳容器），
+                // 防止键盘 Tab 钻入 0 宽隐藏侧栏以及后台脉冲动画持续运行。
+                enabled: root.sidebarVisible
+                visible: root.sidebarVisible || sidebarShell.width > 0
                 // 收起末段略淡出，展开先淡入，减少硬切。
                 opacity: root.sidebarVisible ? 1 : 0
                 currentView: root.currentView
@@ -1016,7 +1054,9 @@ Item {
 
                 CountdownView {
                     objectName: "countdownViewPage"
+                    pageActive: root.currentView === "countdown"
                     countdownServiceRef: root.countdownServiceRef
+                    settingsRef: root.appSettingsRef
                 }
 
                 DashboardView {
@@ -1028,11 +1068,16 @@ Item {
                     statisticsServiceRef: root.statisticsServiceRef
                     routineManagerRef: root.routineManagerRef
                     focusTimerRef: root.focusTimerRef
+                    logicalDayServiceRef: root.logicalDayServiceRef
                     categoryManagerRef: root.categoryManagerRef
                     countdownServiceRef: root.countdownServiceRef
                     settingsRef: root.appSettingsRef
                     wallpaperRef: wallpaperLayer
                     pendingDeleteTaskId: root.pendingDeleteTaskId
+                    // 仪表盘「开始专注」与快捷键、专注页统一走 FocusSessionController::autoStartCandidate 口径。
+                    defaultFocusStarter: function() {
+                        root.startDefaultFocus()
+                    }
 
                     onStartFocus: function (taskId, taskTitle) {
                         root.startFocusForTask(taskId, taskTitle);
@@ -1265,6 +1310,7 @@ Item {
         anchors.fill: parent
         visible: root.focusImmersiveActive
         active: root.focusImmersiveActive
+        inputBlocked: root.backupOperationBlocksInput
         focusViewRef: focusView
         timerRef: root.focusTimerRef
         settingsRef: root.appSettingsRef
@@ -1381,9 +1427,11 @@ Item {
 
     ExportDialog {
         id: exportDialog
+        objectName: "exportDialog"
 
         parent: root
         exportServiceRef: root.exportServiceRef
+        settingsRef: root.appSettingsRef
     }
 
     SettingsDialog {
@@ -1397,12 +1445,24 @@ Item {
         backupServiceRef: root.backupServiceRef
         syncControllerRef: root.syncControllerRef
         shortcutRegistryRef: root.shortcutRegistryRef
+        beforeSyncMutation: function() {
+            return root.flushMemoEdits() && root.commitPendingDelete()
+        }
 
         onRoutineRequested: routineDialog.open()
         onCategoryRequested: categoryDialog.open()
-        onExportRequested: exportDialog.open()
-        onBackupRequested: root.openBackupSaveDialog()
-        onRestoreRequested: restoreOpenDialog.open()
+        onExportRequested: {
+            if (root.flushMemoEdits() && root.commitPendingDelete())
+                exportDialog.open()
+        }
+        onBackupRequested: {
+            if (root.flushMemoEdits() && root.commitPendingDelete())
+                root.openBackupSaveDialog()
+        }
+        onRestoreRequested: {
+            if (root.flushMemoEdits() && root.commitPendingDelete())
+                restoreOpenDialog.open()
+        }
         onSyncLogRequested: syncLogDialog.open()
     }
 
@@ -1422,6 +1482,19 @@ Item {
         function onNotice(message) {
             root.showToast(String(message))
         }
+
+        function onSnapshotReplaced() {
+            root.resetViewsForDatabaseReplacement()
+        }
+    }
+
+    function localFileUrl(path) {
+        // 对路径分段编码，避免目录含 # / ? / % 时 Qt.resolvedUrl 把它截成 URL 片段或查询串。
+        var normalized = String(path || "")
+        var encoded = normalized.split("/").map(function(segment) {
+            return encodeURIComponent(segment)
+        }).join("/")
+        return Qt.resolvedUrl("file://" + encoded)
     }
 
     function openBackupSaveDialog() {
@@ -1430,16 +1503,42 @@ Item {
         if (!root.backupServiceRef)
             return
         var directory = root.backupServiceRef.backupsDirectory()
-        backupSaveDialog.currentFolder = Qt.resolvedUrl("file://" + directory)
-        backupSaveDialog.selectedFile = Qt.resolvedUrl(
-                    "file://" + directory + "/" + root.backupServiceRef.suggestedBackupFileName())
+        backupSaveDialog.currentFolder = root.localFileUrl(directory)
+        backupSaveDialog.selectedFile = root.localFileUrl(
+                    directory + "/" + root.backupServiceRef.suggestedBackupFileName())
         backupSaveDialog.open()
     }
 
     function backupLocalPath(urlValue) {
-        // FileDialog 返回 URL，服务层需要真实本地路径。
+        // FileDialog 返回 URL，服务层需要真实本地路径；畸形百分号编码时回退原始路径避免抛异常。
         var value = String(urlValue)
-        return value.startsWith("file://") ? decodeURIComponent(value.substring(7)) : value
+        if (!value.startsWith("file://"))
+            return value
+        var stripped = value.substring(7)
+        try {
+            return decodeURIComponent(stripped)
+        } catch (error) {
+            return stripped
+        }
+    }
+
+    function performBackupToPath(path) {
+        if (root.backupServiceRef && root.flushMemoEdits() && root.commitPendingDelete())
+            root.backupServiceRef.requestBackup(String(path))
+    }
+
+    function resetViewsForDatabaseReplacement() {
+        // 递增换库代次并立即收起旧库的「完成撤销」提示，避免 5 秒内点撤销误改新库同主键任务。
+        root.databaseGeneration += 1
+        globalToast.dismissAction(root.activeCompletionUndoAction)
+        root.activeCompletionUndoAction = null
+        // 不同数据库或远端快照可以有相同任务和备忘编号，整库替换时清理选中、待续动作与脏草稿。
+        focusView.clearSelectedTask()
+        focusView.pendingSwitch = null
+        focusView.cancelAutoAdvance()
+        // 旧库的撤销删除命令不能跨过数据库整体替换边界，否则相同主键会删错恢复数据。
+        root.cancelPendingDelete()
+        memoView.resetForDatabaseRestore()
     }
 
     FileDialog {
@@ -1448,10 +1547,7 @@ Item {
         title: "保存备份"
         fileMode: FileDialog.SaveFile
         nameFilters: ["番茄Todo 备份 (*.tomatobackup)"]
-        onAccepted: {
-            if (root.backupServiceRef && root.commitPendingDelete())
-                root.backupServiceRef.requestBackup(root.backupLocalPath(selectedFile))
-        }
+        onAccepted: root.performBackupToPath(root.backupLocalPath(selectedFile))
     }
 
     FileDialog {
@@ -1475,7 +1571,7 @@ Item {
 
         parent: root
         onConfirmed: function (path) {
-            if (root.backupServiceRef && root.commitPendingDelete())
+            if (root.backupServiceRef && root.flushMemoEdits() && root.commitPendingDelete())
                 root.backupServiceRef.requestRestore(path)
         }
     }
@@ -1508,12 +1604,7 @@ Item {
             restoreConfirmDialog.open()
         }
         function onRestoreStarted() {
-            // 不同数据库可以有相同任务编号，换库前清理选择及所有待续动作，不能按旧编号重新绑定。
-            focusView.clearSelectedTask()
-            focusView.pendingSwitch = null
-            focusView.cancelAutoAdvance()
-            // 旧库的撤销删除命令不能跨过数据库整体替换边界，否则相同主键会删错恢复数据。
-            root.cancelPendingDelete()
+            root.resetViewsForDatabaseReplacement()
         }
         function onRestoreCompleted(success, message) {
             root.showToast(String(message || (success ? "恢复完成" : "恢复失败")))

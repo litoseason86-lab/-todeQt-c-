@@ -21,6 +21,7 @@ QtObject {
     // 为真时读取科目失败：getAllCategories 像真实服务一样在读取函数内部同步发失败信号、返回空列表；
     // readAllCategories 把失败放在返回值里。
     property bool failRead: false
+    property bool failSave: false
     signal categoriesChanged
     signal operationFailed(string message)
     function getAllCategories() {
@@ -44,12 +45,16 @@ QtObject {
         };
     }
     function getCategories() {
-        return records;
+        return getAllCategories();
     }
     function getActiveCategories() {
-        return records;
+        return getAllCategories();
     }
     function addCategory(name, color) {
+        if (failSave) {
+            operationFailed("新建科目失败: 磁盘不可写");
+            return -1;
+        }
         var id = records.length + 1;
         records = records.concat([
             {

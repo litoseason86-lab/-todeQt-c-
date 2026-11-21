@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import ".."
+import "../LogicalDay.js" as LogicalDay
 
 // 玻璃卡的底色、白色描边、圆角、顶部高光和落影都由 GlassPanel 统一提供，与各页面的玻璃框同一套。
 GlassPanel {
@@ -62,8 +63,9 @@ GlassPanel {
             return fallback[indexValue % fallback.length]
         }
 
-        var parsed = dateValue instanceof Date ? dateValue : new Date(dateValue)
-        if (isNaN(parsed.getTime())) {
+        // 经 LogicalDay.toLocalDate 解析，避免负时区下 ISO 日期串或 QDate 的星期提前一天。
+        var parsed = LogicalDay.toLocalDate(dateValue)
+        if (!parsed) {
             return fallback[indexValue % fallback.length]
         }
 

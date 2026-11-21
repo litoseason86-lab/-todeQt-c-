@@ -16,6 +16,10 @@ Item {
 
         function onPhaseCompleted(phase) {
             if (!root.settingsRef || root.settingsRef.raiseOnPhaseComplete) {
+                // 启用「关闭窗口隐藏到菜单栏」时，窗口处于 hide 状态；仅 raise/requestActivate 无法唤出，须先 show。
+                if (root.windowRef && !root.windowRef.visible && typeof root.windowRef.show === "function") {
+                    root.windowRef.show()
+                }
                 root.windowRef.raise()
                 root.windowRef.requestActivate()
             }

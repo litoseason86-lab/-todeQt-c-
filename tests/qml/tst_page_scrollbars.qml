@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtTest
 import "../../qml"
+import "fixtures"
 
 // 各页面的竖向滚动条统一贴窗口最右缘（仪表盘贴任务面板右边线外侧），玻璃框的左右下边距统一 24。
 // 这类问题只在整页里才看得出来：组件单测里滚动条贴的是组件自己的右缘，挪进页面后它离窗口右缘
@@ -314,11 +315,47 @@ TestCase {
         function normalize(key, modifiers) { return "" }
     }
 
+    MemoCategoryMock { id: memoCategories }
+    MemoServiceMock {
+        id: memoService
+        records: [
+            makeRecord(1, "长篇备忘录",
+                "第一行\n第二行\n第三行\n第四行\n第五行\n第六行\n第七行\n第八行\n第九行\n第十行\n" +
+                "第十一行\n第十二行\n第十三行\n第十四行\n第十五行\n第十六行\n第十七行\n第十八行\n" +
+                "第十九行\n第二十行\n第二十一行\n第二十二行\n第二十三行\n第二十四行\n第二十五行\n" +
+                "第二十六行\n第二十七行\n第二十八行\n第二十九行\n第三十行\n第三十一行\n第三十二行", 1)
+        ]
+    }
+
+    QtObject {
+        id: trashService
+        signal trashChanged
+        function purgeExpired() { return 0 }
+        function emptyTrash() { return { ok: true, error: "", count: 0 } }
+        function deleteItem(id) { return { ok: true, error: "" } }
+        function restoreItem(id) { return { ok: true, error: "", kind: "", title: "", conflict: "" } }
+        function readItems() {
+            var rows = []
+            for (var i = 1; i <= 12; ++i) {
+                rows.push({
+                    id: i, kind: "task", title: "废纸篓条目 " + i,
+                    deletedDate: "2026-10-07", remainingDays: 30 - i,
+                    categoryName: "数学", categoryColor: "#d4a574",
+                    restorable: true, blockedReason: "",
+                    details: { date: "2026-10-06" }
+                })
+            }
+            return { ok: true, error: "", today: "2026-10-07", items: rows }
+        }
+    }
+
     MainWindow {
         id: mainWindow
 
         width: testCase.width
         height: testCase.height
+        memoServiceRef: memoService
+        trashServiceRef: trashService
         taskManagerRef: taskManager
         categoryManagerRef: categoryManager
         routineManagerRef: routineManager
@@ -358,7 +395,9 @@ TestCase {
             { tag: "专注历史", view: "month", bar: "monthPageScrollBar", scroll: "monthPageScrollView" },
             { tag: "数据统计", view: "stats", bar: "statisticsScrollBar", scroll: "statisticsScrollView" },
             { tag: "知识缺口", view: "knowledgeGaps", bar: "knowledgeGapScrollBar", scroll: "knowledgeGapScrollView" },
-            { tag: "目标倒计时", view: "countdown", bar: "countdownScrollBar", scroll: "countdownSecondaryList" }
+            { tag: "目标倒计时", view: "countdown", bar: "countdownScrollBar", scroll: "countdownSecondaryList" },
+            { tag: "备忘录", view: "memo", bar: "memoScrollBar", scroll: "memoBodyScroll" },
+            { tag: "废纸篓", view: "trash", bar: "trashScrollBar", scroll: "trashScrollView" }
         ]
     }
 
@@ -427,7 +466,9 @@ TestCase {
             { tag: "课表", view: "schedule", frame: "scheduleGridGlass", right: 24, fillsPage: true },
             { tag: "仪表盘", view: "dashboard", frame: "dashboardTaskPanel", right: 24, fillsPage: true },
             { tag: "专注历史", view: "month", frame: "monthCalendarContainer", right: 24, fillsPage: false },
-            { tag: "目标倒计时", view: "countdown", frame: "countdownHeroCard", right: 24, fillsPage: false }
+            { tag: "目标倒计时", view: "countdown", frame: "countdownHeroCard", right: 24, fillsPage: false },
+            { tag: "备忘录", view: "memo", frame: "memoGlass", right: 24, fillsPage: true },
+            { tag: "废纸篓", view: "trash", frame: "trashPanel", right: 24, fillsPage: true }
         ]
     }
 

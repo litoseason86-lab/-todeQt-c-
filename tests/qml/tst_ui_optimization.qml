@@ -821,31 +821,27 @@ TestCase {
         verify(button !== null, context + "需要存在按钮");
         verify(background !== null, context + "需要存在背景");
         verify(label !== null, context + "需要存在文字");
-        compare(background.layer.enabled, true);
-        verify(background.layer.effect !== null, context + "需要存在按钮背景 MultiEffect");
-        verifyWarmShadow(background, 0.08, 0.14, 2, context + "普通状态");
+        // 行内按钮复用 TaskItem 整行阴影，不再单独开启离屏 FBO 与 MultiEffect，避免每行双重 GPU pass。
+        compare(background.layer.enabled, false);
         verifyNear(background.y, 0, 0.05, context + "普通状态背景 y");
         verifyNear(label.scale, 1.0, 0.005, context + "普通状态文字缩放");
 
         button.down = true;
         tryCompare(button, "down", true, testCase.uiTimeout);
-        tryCompare(background.layer, "enabled", true, testCase.uiTimeout);
         settle(function () {
-            return testCase.warmShadowSettled(background, 0.04, 0.10, 1)
-                    && Math.abs(background.y - 1) <= 0.05;
+            return Math.abs(background.y - 1) <= 0.05
+                    && Math.abs(label.scale - 0.98) <= 0.005;
         }, context + "按下态未落位");
-        verifyWarmShadow(background, 0.04, 0.10, 1, context + "按下状态");
         verifyNear(background.y, 1, 0.05, context + "按下状态背景 y");
         verifyNear(label.scale, 0.98, 0.005, context + "按下状态文字缩放");
 
         button.down = false;
         tryCompare(button, "down", false, testCase.uiTimeout);
         settle(function () {
-            return testCase.warmShadowSettled(background, 0.08, 0.14, 2)
-                    && Math.abs(background.y - 0) <= 0.05;
+            return Math.abs(background.y - 0) <= 0.05
+                    && Math.abs(label.scale - 1.0) <= 0.005;
         }, context + "释放态未落位");
-        compare(background.layer.enabled, true);
-        verifyWarmShadow(background, 0.08, 0.14, 2, context + "释放后");
+        compare(background.layer.enabled, false);
         verifyNear(background.y, 0, 0.05, context + "释放后背景 y");
         verifyNear(label.scale, 1.0, 0.005, context + "释放后文字缩放");
     }

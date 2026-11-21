@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import ".."
 
@@ -23,7 +22,7 @@ Rectangle {
         if (!root.timer)
             return "unavailable"
         if (root.companion.timerActive)
-            return root.phase === 2 ? "break" : "work"
+            return (root.phase === 2 || root.phase === 3) ? "break" : "work"
         if (root.companion.justCompletedPhase === 1)
             return "workDone"
         if (root.companion.justCompletedPhase === 2)
@@ -102,7 +101,8 @@ Rectangle {
             visible: root.counting
             text: root.companion.formatClock(root.remainingSeconds)
             textFormat: Text.PlainText
-            color: root.running ? Theme.inkStrong : Theme.inkMuted
+            // 暂停态只由标题文案区分，不压暗计时数字本身，保持高对比度可读（与完整界面同口径）。
+            color: Theme.inkStrong
             font.family: Theme.fontFamilyClock
             font.pixelSize: 56
             Accessible.name: qsTr("剩余 %1 分 %2 秒").arg(Math.floor(root.remainingSeconds / 60))
@@ -182,7 +182,7 @@ Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: Theme.controlHeightLg
                 text: root.cardState === "break" ? qsTr("结束休息") : qsTr("结束专注")
-                onClicked: root.timer.stopFocus()
+                onClicked: root.companion.stopCurrentTimer()
             }
         }
 
@@ -202,10 +202,11 @@ Rectangle {
             }
 
             CompanionButton {
+                objectName: "companionSkipBreakButton"
                 Layout.fillWidth: true
                 implicitHeight: Theme.controlHeightLg
                 text: qsTr("先不休息")
-                onClicked: root.companion.justCompletedPhase = 0
+                onClicked: root.companion.dismissCompletedPhase()
             }
         }
 
@@ -227,10 +228,11 @@ Rectangle {
             }
 
             CompanionButton {
+                objectName: "companionBreakDoneDismissButton"
                 Layout.fillWidth: true
                 implicitHeight: Theme.controlHeightLg
                 text: qsTr("好的")
-                onClicked: root.companion.justCompletedPhase = 0
+                onClicked: root.companion.dismissCompletedPhase()
             }
         }
     }

@@ -142,6 +142,7 @@ TestCase {
         signal operationFailed(string message)
         function addCategory(name, color) { operationFailed("新增科目失败：T32 写入被拒绝"); return -1 }
         function updateCategory(id, name, color) { operationFailed("修改科目失败：T32 写入被拒绝"); return false }
+        function updateCategoryChanges(id, changes) { operationFailed("修改科目失败：T32 写入被拒绝"); return false }
         function deleteCategory(id) { operationFailed("删除科目失败：T32 写入被拒绝"); return false }
         property bool failDeleteCheck: false
         function canDeleteCategory(id) {
@@ -273,7 +274,12 @@ TestCase {
         var observer = openDialog(editComponent)
         if (data.tag === "add") {
             dialog.beginAdd(); findChild(dialog,"categoryNameInput").text="新科目"
-        } else dialog.beginEdit({id:7,name:"原科目",color:"#123456"})
+        } else {
+            dialog.beginEdit({id:7,name:"原科目",color:"#123456"})
+            // 字段级编辑在无任何改动时直接收起不写库；修改失败用例需真实修改字段以触发写库。
+            if (data.tag === "update")
+                findChild(dialog, "categoryNameInput").text = "修改后科目"
+        }
         observer.errorText = "原消息"
         if (data.tag === "add") dialog.addCategory()
         else if (data.tag === "update") dialog.updateCategory()
@@ -472,6 +478,122 @@ TestCase {
         compare(item[key],"原结果")
         taskManager.operationFailed("删除失败：T33-2 batch blocked")
         compare(item[key],"删除失败：T33-2 batch blocked")
+    }
+
+    // 产品保证：倒计时页非活跃时不吸收其它页面的写入失败，切回页面时按最新状态重新加载。
+    QtObject {
+        id: countdownServiceStub
+
+        signal operationFailed(string message)
+        signal goalsReloaded()
+
+        property var primaryGoal: null
+        property int reloadCalls: 0
+        property bool failReload: false
+        property ListModel model: ListModel {}
+
+        function reload() {
+            reloadCalls += 1
+            if (failReload) {
+                operationFailed("倒计时加载失败：T32")
+                return false
+            }
+            goalsReloaded()
+            return true
+        }
+    }
+    Component {
+        id: countdownViewComponent
+
+        CountdownView {
+            width: 800
+            height: 600
+            pageActive: false
+            countdownServiceRef: countdownServiceStub
+        }
+    }
+    function test_countdownViewGatesFailuresByPageActiveAndReloads() {
+        countdownServiceStub.failReload = false
+        countdownServiceStub.reloadCalls = 0
+        var view = createTemporaryObject(countdownViewComponent, testCase)
+        verify(view)
+
+        countdownServiceStub.operationFailed("别处的倒计时写入失败")
+        compare(view.loadError, "")
+
+        countdownServiceStub.failReload = true
+        view.pageActive = true
+        verify(countdownServiceStub.reloadCalls >= 1)
+        compare(view.loadError, "倒计时加载失败：T32")
+    }
+
+    // 产品保证：专注历史清理无效记录失败后即使随后重读月度列表成功，仍保留具体清理错误提示而不被清空覆盖。
+    QtObject {
+        id: focusHistoryCleanupStub
+
+        property string currentError: ""
+        property int invalidCount: 2
+
+        function invalidSessionCount() { return invalidCount }
+        function getMonthSessions(year, month) {
+            currentError = ""
+            return []
+        }
+        function cleanupInvalidSessions() {
+            currentError = "数据库已只读"
+            return 0
+        }
+        function lastError() { return currentError }
+        function formatDuration(sec) { return "0分钟" }
+        function bandForMinutes(minutes) { return 0 }
+    }
+    Component {
+        id: monthGoalViewComponent
+
+        MonthGoalView {
+            width: 800
+            height: 600
+            pageActive: true
+            focusHistoryServiceRef: focusHistoryCleanupStub
+        }
+    }
+    function test_monthGoalCleanupFailurePreservedAcrossRefresh() {
+        var view = createTemporaryObject(monthGoalViewComponent, testCase)
+        verify(view)
+        compare(view.loadError, "")
+        view.cleanupInvalidSessions()
+        verify(view.loadError.indexOf("数据库已只读") >= 0,
+               "清理失败信息被后续 refresh 清空：" + view.loadError)
+    }
+
+    // 产品保证：知识缺口快速捕获框在任何页面打开时都能原地展示服务的具体失败原因，不依赖缺口页处于活跃态。
+    QtObject {
+        id: failingGapCaptureService
+
+        signal operationFailed(string message)
+        property int maxTitleLength: 100
+
+        function captureGap(title, categoryId, sourceTaskId) {
+            operationFailed("记入知识缺口失败：T32 写入被拒绝")
+            return -1
+        }
+    }
+    Component {
+        id: gapCaptureComponent
+
+        KnowledgeGapCapturePopup {
+            gapServiceRef: failingGapCaptureService
+        }
+    }
+    function test_knowledgeGapCapturePopupShowsOperationFailureOutsideGapPage() {
+        var popup = openDialog(gapCaptureComponent)
+        popup.openWithSource(7, "来源任务", 1)
+        tryCompare(popup, "opened", true)
+        var field = findChild(popup, "knowledgeGapCaptureField")
+        verify(field)
+        field.text = "具体错误测试"
+        popup.submit()
+        compare(popup.errorText, "记入知识缺口失败：T32 写入被拒绝")
     }
 
 }

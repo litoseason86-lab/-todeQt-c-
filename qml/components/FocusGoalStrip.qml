@@ -48,6 +48,9 @@ GlassPanel {
     readonly property string quickFillLabel: root.quickFillFromYesterday
         ? qsTr("沿用昨天 · %1").arg(root.formatTarget(root.quickFillMinutes))
         : qsTr("推荐 · 4:00")
+    // 860px 窄窗且含「已排」时单行总最小宽会越出卡片，自动折成两行避免右侧「任务完成」被顶出。
+    readonly property bool compactDisplay: stripContent.width > 0
+                                           && stripContent.width < (root.hasPlan ? 740 : 620)
 
     implicitHeight: Math.max(56, stripContent.implicitHeight + Theme.space16)
 
@@ -250,6 +253,8 @@ GlassPanel {
                 background: GlassPanel {
                     color: setGoalButton.pressed ? Theme.glassAccent
                                                  : (setGoalButton.hovered ? Theme.glassHover : Theme.glassCard)
+                    border.color: setGoalButton.visualFocus ? Theme.focusRing : Theme.glassBorder
+                    border.width: setGoalButton.visualFocus ? 2 : 1
                     panelShadowEnabled: false
                 }
 
@@ -296,152 +301,191 @@ GlassPanel {
         }
 
         // —— 展示 ——
-        RowLayout {
+        // 宽屏单行两列并排；窄窗（如 860px 含「已排」时）自动折为上下两行，且全局保持单一 PlannedLoad/DoneCount 实例。
+        GridLayout {
             id: displayRow
 
             anchors.fill: parent
             visible: !root.editing && root.hasGoal
-            spacing: Theme.space12
-
-            Label {
-                text: qsTr("今日专注")
-                color: Theme.inkSoft
-                font.pixelSize: Theme.fontSm
-            }
+            columns: root.compactDisplay ? 1 : 2
+            columnSpacing: Theme.space12
+            rowSpacing: Theme.space8
 
             RowLayout {
-                spacing: 1
+                Layout.fillWidth: true
+                spacing: root.compactDisplay ? Theme.space8 : Theme.space12
 
-                Repeater {
-                    model: [
-                        { value: root.twoDigits(Math.floor(root.safeSeconds / 3600)), colon: false },
-                        { value: ":", colon: true },
-                        { value: root.twoDigits(Math.floor((root.safeSeconds % 3600) / 60)), colon: false },
-                        { value: ":", colon: true },
-                        { value: root.twoDigits(root.safeSeconds % 60), colon: false }
-                    ]
+                Label {
+                    text: qsTr("今日专注")
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontSm
+                }
+
+                // 使用静态 5 段 Label 直接绑定文本，避免 Repeater 随 safeSeconds 每秒销毁重建整组节点。
+                RowLayout {
+                    spacing: 1
 
                     Label {
-                        id: clockSegment
-
-                        required property var modelData
-
-                        objectName: clockSegment.modelData.colon ? "" : "focusGoalClockSegment"
-                        text: clockSegment.modelData.value
+                        objectName: "focusGoalClockSegment"
+                        text: root.twoDigits(Math.floor(root.safeSeconds / 3600))
                         textFormat: Text.PlainText
                         font.pixelSize: 22
                         font.family: Theme.fontFamilyClock
                         font.weight: Font.Medium
-                        color: clockSegment.modelData.colon ? Theme.focusColonMuted : Theme.inkStrong
+                        color: Theme.inkStrong
+                    }
+
+                    Label {
+                        text: ":"
+                        textFormat: Text.PlainText
+                        font.pixelSize: 22
+                        font.family: Theme.fontFamilyClock
+                        font.weight: Font.Medium
+                        color: Theme.focusColonMuted
+                    }
+
+                    Label {
+                        objectName: "focusGoalClockSegment"
+                        text: root.twoDigits(Math.floor((root.safeSeconds % 3600) / 60))
+                        textFormat: Text.PlainText
+                        font.pixelSize: 22
+                        font.family: Theme.fontFamilyClock
+                        font.weight: Font.Medium
+                        color: Theme.inkStrong
+                    }
+
+                    Label {
+                        text: ":"
+                        textFormat: Text.PlainText
+                        font.pixelSize: 22
+                        font.family: Theme.fontFamilyClock
+                        font.weight: Font.Medium
+                        color: Theme.focusColonMuted
+                    }
+
+                    Label {
+                        objectName: "focusGoalClockSegment"
+                        text: root.twoDigits(root.safeSeconds % 60)
+                        textFormat: Text.PlainText
+                        font.pixelSize: 22
+                        font.family: Theme.fontFamilyClock
+                        font.weight: Font.Medium
+                        color: Theme.inkStrong
                     }
                 }
-            }
 
-            Button {
-                id: modifyGoalButton
-                objectName: "focusGoalModifyButton"
+                Button {
+                    id: modifyGoalButton
+                    objectName: "focusGoalModifyButton"
 
-                text: qsTr("目标 %1 · 修改 ›").arg(root.targetText)
-                activeFocusOnTab: true
-                flat: true
-                onClicked: root.beginEditing()
+                    text: qsTr("目标 %1 · 修改 ›").arg(root.targetText)
+                    activeFocusOnTab: true
+                    flat: true
+                    onClicked: root.beginEditing()
 
-                contentItem: Text {
-                    text: modifyGoalButton.text
-                    textFormat: Text.PlainText
-                    color: modifyGoalButton.hovered ? Theme.accentInk : Theme.inkSoft
-                    font.pixelSize: Theme.fontSm
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                    contentItem: Text {
+                        text: modifyGoalButton.text
+                        textFormat: Text.PlainText
+                        color: modifyGoalButton.hovered ? Theme.accentInk : Theme.inkSoft
+                        font.pixelSize: Theme.fontSm
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    background: Rectangle {
+                        radius: Theme.radiusMd
+                        color: modifyGoalButton.hovered ? Theme.glassHover : Theme.glassHoverIdle
+                        border.width: modifyGoalButton.visualFocus ? 2 : 0
+                        border.color: Theme.focusRing
+                    }
                 }
-
-                background: Rectangle {
-                    radius: Theme.radiusMd
-                    color: modifyGoalButton.hovered ? Theme.glassHover : Qt.rgba(1, 1, 1, 0)
-                    border.width: modifyGoalButton.visualFocus ? 2 : 0
-                    border.color: Theme.accent
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.minimumWidth: 120
-                implicitHeight: 6
-                radius: 3
-                color: Theme.surfaceSunken
-                border.color: Theme.borderSubtle
-                border.width: 1
 
                 Rectangle {
-                    objectName: "focusGoalFill"
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    width: parent.width * root.percent / 100
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: root.compactDisplay ? 56 : 120
+                    implicitHeight: 6
                     radius: 3
-                    color: root.goalReached ? Theme.focusBreakAccent : Theme.accent
+                    color: Theme.surfaceSunken
+                    border.color: Theme.borderSubtle
+                    border.width: 1
 
-                    Behavior on width {
-                        enabled: !root.reduceMotion
-                        NumberAnimation {
-                            duration: Theme.reduceMotion ? 0 : 300
-                            easing.type: Easing.OutCubic
+                    Rectangle {
+                        objectName: "focusGoalFill"
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: parent.width * root.percent / 100
+                        radius: 3
+                        color: root.goalReached ? Theme.focusBreakAccent : Theme.accent
+
+                        Behavior on width {
+                            enabled: !root.reduceMotion
+                            NumberAnimation {
+                                duration: Theme.reduceMotion ? 0 : 300
+                                easing.type: Easing.OutCubic
+                            }
                         }
                     }
                 }
-            }
 
-            RowLayout {
-                visible: root.goalReached
-                spacing: Theme.space4
+                RowLayout {
+                    visible: root.goalReached
+                    spacing: Theme.space4
 
-                Rectangle {
-                    Layout.preferredWidth: 15
-                    Layout.preferredHeight: 15
-                    radius: 8
-                    color: Theme.focusBreakAccent
+                    Rectangle {
+                        Layout.preferredWidth: 15
+                        Layout.preferredHeight: 15
+                        radius: 8
+                        color: Theme.focusBreakAccent
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: "✓"
+                            color: Theme.accentForeground
+                            font.pixelSize: Theme.fontXs
+                            Accessible.ignored: true
+                        }
+                    }
 
                     Label {
-                        anchors.centerIn: parent
-                        text: "✓"
-                        color: Theme.accentForeground
-                        font.pixelSize: Theme.fontXs
-                        Accessible.ignored: true
+                        objectName: "focusGoalReachedLabel"
+                        text: qsTr("目标达成")
+                        color: Theme.focusBreakInk
+                        font.pixelSize: Theme.fontSm
+                        font.weight: Font.Bold
                     }
                 }
 
                 Label {
-                    objectName: "focusGoalReachedLabel"
-                    text: qsTr("目标达成")
-                    color: Theme.focusBreakInk
+                    objectName: "focusGoalPercent"
+                    visible: !root.goalReached
+                    text: root.percent + "%"
+                    textFormat: Text.PlainText
+                    color: Theme.accentInk
                     font.pixelSize: Theme.fontSm
+                    font.family: Theme.fontFamilyData
                     font.weight: Font.Bold
+                }
+
+                Label {
+                    visible: root.saveError.length > 0
+                    text: root.saveError
+                    textFormat: Text.PlainText
+                    color: Theme.danger
+                    font.pixelSize: Theme.fontXs
+                    elide: Text.ElideRight
                 }
             }
 
-            Label {
-                objectName: "focusGoalPercent"
-                visible: !root.goalReached
-                text: root.percent + "%"
-                textFormat: Text.PlainText
-                color: Theme.accentInk
-                font.pixelSize: Theme.fontSm
-                font.family: Theme.fontFamilyData
-                font.weight: Font.Bold
+            RowLayout {
+                Layout.fillWidth: root.compactDisplay
+                Layout.alignment: root.compactDisplay ? Qt.AlignRight : Qt.AlignVCenter
+                spacing: Theme.space12
+
+                PlannedLoad {}
+
+                DoneCount {}
             }
-
-            Label {
-                visible: root.saveError.length > 0
-                text: root.saveError
-                textFormat: Text.PlainText
-                color: Theme.danger
-                font.pixelSize: Theme.fontXs
-                elide: Text.ElideRight
-            }
-
-            PlannedLoad {}
-
-            DoneCount {}
         }
     }
 

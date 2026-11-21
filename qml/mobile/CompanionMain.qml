@@ -27,38 +27,38 @@ ApplicationWindow {
     // 延伸到状态栏与底部横条之下：壁纸铺满整屏，内容按 SafeArea 让开系统区域。
     flags: Qt.Window | Qt.ExpandedClientAreaHint
 
+    // qmllint disable unqualified
+    property var taskManagerRef: typeof taskManager === "undefined" ? null : taskManager
+    property var focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
+    property var appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
+    property var logicalDayServiceRef: typeof logicalDayService === "undefined" ? null : logicalDayService
+    property var backupServiceRef: typeof backupService === "undefined" ? null : backupService
+    // qmllint enable unqualified
+
     // 主题令牌与完整界面同一来源：壁纸主题决定明暗，「减少透明度」「减少动效」照常生效。
     Binding {
         target: Theme
         property: "activeThemeId"
-        // qmllint disable unqualified
-        value: typeof appSettings !== "undefined" && appSettings
-               ? Theme.migrateThemeId(appSettings.backgroundTheme) : "warm"
-        // qmllint enable unqualified
+        value: root.appSettingsRef && root.appSettingsRef.backgroundTheme
+               ? Theme.migrateThemeId(root.appSettingsRef.backgroundTheme) : "warm"
     }
 
     Binding {
         target: Theme
         property: "glassBlurAllowed"
-        // qmllint disable unqualified
-        value: typeof appSettings !== "undefined" && appSettings ? !appSettings.reduceTransparency : true
-        // qmllint enable unqualified
+        value: root.appSettingsRef ? !root.appSettingsRef.reduceTransparency : true
     }
 
     Binding {
         target: Theme
         property: "reduceMotion"
-        // qmllint disable unqualified
-        value: typeof appSettings !== "undefined" && appSettings ? Boolean(appSettings.reduceMotion) : false
-        // qmllint enable unqualified
+        value: root.appSettingsRef ? Boolean(root.appSettingsRef.reduceMotion) : false
     }
 
     BackgroundWallpaper {
         anchors.fill: parent
-        // qmllint disable unqualified
-        themeId: typeof appSettings !== "undefined" && appSettings
-                 ? Theme.migrateThemeId(appSettings.backgroundTheme) : "warm"
-        // qmllint enable unqualified
+        themeId: root.appSettingsRef && root.appSettingsRef.backgroundTheme
+                 ? Theme.migrateThemeId(root.appSettingsRef.backgroundTheme) : "warm"
     }
 
     CompanionWindow {
@@ -71,18 +71,17 @@ ApplicationWindow {
         anchors.leftMargin: parent.SafeArea.margins.left + Theme.space16
         anchors.rightMargin: parent.SafeArea.margins.right + Theme.space16
         // 上下文属性只在入口解包，伴侣页内部只用显式引用。
-        // qmllint disable unqualified
-        taskManagerRef: typeof taskManager === "undefined" ? null : taskManager
-        focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
-        appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
-        logicalDayServiceRef: typeof logicalDayService === "undefined" ? null : logicalDayService
-        // qmllint enable unqualified
+        taskManagerRef: root.taskManagerRef
+        focusTimerRef: root.focusTimerRef
+        appSettingsRef: root.appSettingsRef
+        logicalDayServiceRef: root.logicalDayServiceRef
 
         onToastRequested: function (message) { toast.show(message) }
     }
 
     Toast {
         id: toast
+        objectName: "companionToast"
 
         z: 100
         anchors.horizontalCenter: parent.horizontalCenter
@@ -94,16 +93,12 @@ ApplicationWindow {
     // main.cpp 装配，伴侣页同样生效。
     PhaseCompletionCoordinator {
         windowRef: root
-        // qmllint disable unqualified
-        focusTimerRef: focusTimer
-        settingsRef: typeof appSettings === "undefined" ? null : appSettings
-        // qmllint enable unqualified
+        focusTimerRef: root.focusTimerRef
+        settingsRef: root.appSettingsRef
     }
 
     Connections {
-        // qmllint disable unqualified
-        target: typeof focusTimer === "undefined" ? null : focusTimer
-        // qmllint enable unqualified
+        target: root.focusTimerRef
         ignoreUnknownSignals: true
 
         // 离开期间到点、回来才结算：说明发生了什么，不自动开始下一阶段。
@@ -113,11 +108,36 @@ ApplicationWindow {
         }
 
         function onSessionDiscarded(duration) {
+            if (companion.endingFocusForCompletion)
+                return
             toast.show(qsTr("专注不足 3 分钟，没有计入记录"))
         }
 
         function onOperationFailed(message) {
             if (!companion.timerFailureCall) toast.show(message)
+        }
+
+        // 番茄专注结束自动完成任务失败时，与桌面端同口径提示用户手动核查。
+        function onTaskAutoCompleteFailed(taskId) {
+            toast.show(qsTr("专注记录已保存，但任务自动完成失败，请手动检查"))
+        }
+    }
+
+    Loader {
+        id: companionBackupOverlayLoader
+        objectName: "companionBackupOverlayLoader"
+
+        anchors.fill: parent
+        z: 10000
+        active: Boolean(root.backupServiceRef && root.backupServiceRef.operationBlocksUi)
+
+        sourceComponent: Component {
+            BackupOperationOverlay {
+                // qmllint disable unqualified
+                message: root.backupServiceRef ? String(root.backupServiceRef.operationText || "") : ""
+                // qmllint enable unqualified
+                reduceMotion: Theme.reduceMotion
+            }
         }
     }
 

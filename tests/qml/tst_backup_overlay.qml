@@ -9,8 +9,47 @@ TestCase {
     id: testCase
     name: "BackupOverlay"
     when: windowShown
+    visible: true
     width: 480
     height: 320
+
+    Component {
+        id: guardedHostComponent
+
+        Item {
+            id: host
+
+            property int escapeLeaked: 0
+            property alias overlayItem: overlay
+            width: 480
+            height: 320
+            focus: true
+
+            Keys.onPressed: function (event) {
+                if (event.key === Qt.Key_Escape) {
+                    host.escapeLeaked += 1
+                }
+            }
+
+            BackupOperationOverlay {
+                id: overlay
+
+                anchors.fill: parent
+                message: "正在恢复数据"
+                reduceMotion: true
+            }
+        }
+    }
+
+    function test_escape_stays_swallowed() {
+        var host = createTemporaryObject(guardedHostComponent, testCase)
+        verify(host)
+        verify(host.overlayItem)
+        tryVerify(function () { return host.overlayItem.activeFocus }, 3000)
+        // 恢复事务不能被 Escape 透传到下层快捷键或父项；改坏 Keys.onPressed 会让 escapeLeaked > 0。
+        keyClick(Qt.Key_Escape)
+        compare(host.escapeLeaked, 0)
+    }
 
     Component {
         id: overlayComponent
@@ -73,14 +112,5 @@ TestCase {
 
         overlay.elapsedSeconds = 7
         compare(readout.text, "已用 7 秒")
-    }
-
-    function test_escape_stays_swallowed() {
-        var overlay = createTemporaryObject(overlayComponent, testCase, { reduceMotion: true })
-        verify(overlay)
-        overlay.forceActiveFocus()
-        // 恢复事务不能被界面层中断；这条断言保证上面的改动没有顺手放开按键。
-        keyClick(Qt.Key_Escape)
-        compare(overlay.parent, testCase)
     }
 }

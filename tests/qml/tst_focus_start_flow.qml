@@ -2060,28 +2060,29 @@ TestCase {
     }
 
     function test_captureDoesNotFireWhileADialogHoldsFocus() {
-        mainWindow.currentView = "today"
-        // 弹窗接管焦点时应用内快捷键整体让路；全局热键不经过 AppShortcuts 的 suspended，
-        // 所以捕获入口要自己判一次，否则会在弹窗背后弹出第二个框。
-        var switchDialog = findChild(mainWindow, "focusSwitchDialog")
-        verify(switchDialog)
-        switchDialog.open()
+        withVisibleHost(function () {
+            mainWindow.currentView = "today"
+            // 弹窗接管焦点时应用内快捷键整体让路；全局热键不经过 AppShortcuts 的 suspended，
+            // 所以捕获入口要自己判一次，否则会在弹窗背后弹出第二个框。
+            var switchDialog = findChild(mainWindow, "focusSwitchDialog")
+            verify(switchDialog)
+            if (testCase.Window.window && testCase.Window.window.requestActivate) {
+                testCase.Window.window.requestActivate()
+            }
+            switchDialog.open()
+            if (switchDialog.contentItem) {
+                switchDialog.contentItem.forceActiveFocus()
+            }
+            tryCompare(mainWindow, "overlayHoldsFocus", true, 3000)
 
-        if (!mainWindow.overlayHoldsFocus) {
-            // 离屏平台下弹窗不一定真的拿到焦点；拿不到就不断言这条，
-            // 免得变成一条看着绿、其实什么都没验的用例。
+            mainWindow.triggerShortcutAction("global.captureGap")
+
+            var popup = findChild(mainWindow, "globalKnowledgeGapCapturePopup")
+            verify(popup)
+            compare(popup.opened, false)
+            compare(mainWindow.pendingGapCapture, false)
             switchDialog.close()
-            skip("离屏平台未把焦点交给弹窗，无法验证让路")
-            return
-        }
-
-        mainWindow.triggerShortcutAction("global.captureGap")
-
-        var popup = findChild(mainWindow, "globalKnowledgeGapCapturePopup")
-        verify(popup)
-        compare(popup.opened, false)
-        compare(mainWindow.pendingGapCapture, false)
-        switchDialog.close()
+        })
     }
 
     // —— 审查修复：失效选中项（2026-09-14）——
@@ -2187,24 +2188,27 @@ TestCase {
     }
 
     function test_pendingCaptureRechecksDialogOnActivation() {
-        mainWindow.currentView = "today"
-        mainWindow.windowActive = false
-        mainWindow.triggerShortcutAction("global.captureGap")
-        compare(mainWindow.pendingGapCapture, true)
+        withVisibleHost(function () {
+            mainWindow.currentView = "today"
+            mainWindow.windowActive = false
+            mainWindow.triggerShortcutAction("global.captureGap")
+            compare(mainWindow.pendingGapCapture, true)
 
-        var switchDialog = findChild(mainWindow, "focusSwitchDialog")
-        switchDialog.open()
-        if (!mainWindow.overlayHoldsFocus) {
+            var switchDialog = findChild(mainWindow, "focusSwitchDialog")
+            if (testCase.Window.window && testCase.Window.window.requestActivate) {
+                testCase.Window.window.requestActivate()
+            }
+            switchDialog.open()
+            if (switchDialog.contentItem) {
+                switchDialog.contentItem.forceActiveFocus()
+            }
+            tryCompare(mainWindow, "overlayHoldsFocus", true, 3000)
+
+            mainWindow.windowActive = true
+            compare(findChild(mainWindow, "globalKnowledgeGapCapturePopup").opened, false)
+            compare(mainWindow.pendingGapCapture, false)
             switchDialog.close()
-            mainWindow.cancelPendingGapCapture()
-            skip("离屏平台未把焦点交给弹窗，无法验证让路")
-            return
-        }
-
-        mainWindow.windowActive = true
-        compare(findChild(mainWindow, "globalKnowledgeGapCapturePopup").opened, false)
-        compare(mainWindow.pendingGapCapture, false)
-        switchDialog.close()
+        })
     }
 
     function pendingCaptureStaysBlockedByBackup(viewName) {
@@ -2778,7 +2782,7 @@ TestCase {
             compare(focusTimer.currentTaskId, taskBefore); compare(focusTimer.hasActiveSession, activeBefore)
         } finally { spy.destroy() }
     }
-    // 产品保证：仪表盘、菜单栏和快捷键的停表及主动休息启动失败在现有全局提示条只显示一次具体原因。
+    // 产品保证：仪表盘与菜单栏的停表及主动休息启动失败在现有全局提示条只显示一次具体原因（快捷键统一路由到专注页，由下行用例覆盖）。
     function test_t33ExternalFailureHasOneToast_data() {
         return ["dashboard", "menu", "manual"].map(function(action) { return {tag: action, action: action} })
     }
@@ -2796,7 +2800,6 @@ TestCase {
         focusTimer.t33Failure = "计时操作失败：T33 storage blocked"
         try {
             if (data.action === "dashboard") mainWindow.endFocusFromDashboard()
-            else if (data.action === "shortcut") mainWindow.triggerShortcutAction("focus.stop")
             else if (data.action === "menu") { focusTimer.operationFailed(focusTimer.t33Failure); mainWindow.showTrayStopFailure("通用结束失败") }
             else mainWindow.startManualRest()
             compare(label.text, focusTimer.t33Failure); compare(spy.count, 1)
@@ -2902,6 +2905,66 @@ TestCase {
         const call = focusPage().callTimer(function() { return pendingDeletion.commit() })
         compare(call.value,false); compare(call.error,"")
         compare(toastText(),"删除「原标题」失败：T33-2 QML storage blocked")
+    }
+
+    // 产品保证：整库替换（备份恢复或快照替换）立即收起旧库的「完成撤销」提示，且旧撤销回调即使触发也不会把新库同主键任务取消完成。
+    function test_databaseReplacementInvalidatesCompletionUndoToast() {
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+        taskManager.setCompletedCalls = 0
+
+        mainWindow.showCompletionUndoToast(42, "已完成「旧库任务」")
+        compare(toast.shown, true)
+        compare(toast.actionText, "撤销")
+        var staleCallback = toast.actionCallback
+        verify(staleCallback !== null)
+
+        // 发生换库：撤销提示条立即被收起，且即使直接调用旧回调也不允许写新库。
+        mainWindow.resetViewsForDatabaseReplacement()
+        compare(toast.shown, false)
+        compare(toast.actionCallback, null)
+        staleCallback()
+        compare(taskManager.setCompletedCalls, 0)
+    }
+
+    // 产品保证：专注页在休息结束态（breakDone）启动下一轮番茄失败时，不提前清零 justCompletedPhase，保留 breakDone 重试状态。
+    function test_focusViewFailedStartPomodoroRetainsBreakDoneState() {
+        var page = focusPage()
+        verify(page)
+        page.selectedTaskId = 7
+        page.selectedTaskTitle = "番茄续轮测试"
+        page.pomodoroModeSelected = true
+        focusTimer.mode = 0
+        focusTimer.phase = 0
+        focusTimer.hasActiveSession = false
+        page.justCompletedPhase = 2
+        compare(page.state, "breakDone")
+
+        focusTimer.t33Failure = "启动番茄失败：存储锁死"
+        compare(page.startPomodoro(), false)
+        compare(page.justCompletedPhase, 2)
+        compare(page.state, "breakDone")
+    }
+
+    // 产品保证：停止专注快捷键按真实计时器运行模式（focusTimer.mode）而非专注页本地页签分发，自由计时中页签停在番茄时不会误清番茄循环计数。
+    function test_stopShortcutDispatchesByActualTimerModeInsteadOfSelectedTab() {
+        var page = focusPage()
+        verify(page)
+        // 真实计时器跑在自由计时（mode === 0），但专注页本地页签切在番茄（pomodoroModeSelected === true）。
+        focusTimer.currentTaskId = 7
+        focusTimer.currentTaskTitle = "自由计时中的任务"
+        focusTimer.mode = 0
+        focusTimer.phase = 1
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.completedPomodoros = 3
+        page.pomodoroModeSelected = true
+        focusSessionController.endCurrentCalls = 0
+
+        mainWindow.stopFocusFromShortcut()
+        tryCompare(focusSessionController, "endCurrentCalls", 1)
+        compare(focusTimer.hasActiveSession, false)
+        compare(focusTimer.completedPomodoros, 3)
     }
 
 }

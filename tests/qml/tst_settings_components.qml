@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../../qml/components/settings"
+import "../../qml/components"
 import "../../qml"
 
 TestCase {
@@ -320,5 +321,39 @@ TestCase {
         var versionText = findChild(aboutPage, "settingsAboutVersion")
         verify(versionText)
         compare(versionText.text, Qt.application.version)
+    }
+
+    GlyphIcon {
+        id: glyphProbe
+    }
+
+    // 产品保证：设置项与界面中引用到的每一个线性图标名都在 GlyphIcon 中有对应绘制分支，不静默画成空白。
+    function test_allProductionGlyphIconsSupported() {
+        const iconNames = [
+            "search", "plus", "check", "appearance", "focus", "keyboard", "general",
+            "data", "about", "spark", "layers", "target", "pause", "moon", "hash",
+            "play", "next", "bolt", "bell", "front", "person", "sunrise", "calendar",
+            "grid", "list", "gap", "expand", "export", "sync", "folder", "trash",
+            "edit", "round"
+        ]
+        verify(typeof glyphProbe.supportsIcon === "function", "GlyphIcon 应暴露图标支持查询契约")
+        for (let i = 0; i < iconNames.length; ++i) {
+            verify(glyphProbe.supportsIcon(iconNames[i]),
+                   "GlyphIcon 缺少生产图标分支：" + iconNames[i])
+        }
+    }
+
+    // 产品保证：通用设置页在无未保存草稿且未获焦点时跟随 AppSettings::nicknameChanged 同步远端昵称，不保留过期草稿导致反向覆盖。
+    function test_generalPageFollowsRemoteNicknameSyncWhenNotDirty() {
+        appSettingsMock.nickname = "初始昵称"
+        generalPage.appSettingsRef = null
+        generalPage.appSettingsRef = appSettingsMock
+        compare(generalPage.nicknameDraft, "初始昵称")
+
+        appSettingsMock.nickname = "同步后的新昵称"
+        appSettingsMock.nicknameChanged()
+        compare(generalPage.nicknameDraft, "同步后的新昵称")
+        verify(generalPage.commitPendingEdits())
+        compare(appSettingsMock.nickname, "同步后的新昵称")
     }
 }

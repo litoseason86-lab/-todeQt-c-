@@ -10,12 +10,27 @@ import "settings"
 Popup {
     id: root
 
+    // 输入框与下拉列表字色接管，确保单独实例化离屏测试与夜间主题下字色达标。
+    palette.text: Theme.inputInk
+    palette.placeholderText: Theme.inputPlaceholderInk
+    palette.highlight: Theme.inputSelection
+    palette.highlightedText: Theme.inputSelectedInk
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
+    palette.base: Theme.controlSurface
+    palette.button: Theme.controlSurface
+    palette.buttonText: Theme.controlInk
+    palette.windowText: Theme.controlInk
+
     property var ipadUiPreferencesRef: null
     property var appSettingsRef: null
     property var backupServiceRef: null
     property var mcpAccessRef: null
     property var syncControllerRef: null
     property var shortcutRegistryRef: null
+    property var beforeSyncMutation: null
     property int currentSection: 0
     // 静息态留空：「设置将自动保存到本机」是一句永远为真的话，占一整行却零信息量。
     // 只有真正发生过写入（成功或失败）时这一行才有内容。
@@ -116,8 +131,10 @@ Popup {
         root.contentItem.forceActiveFocus()
     }
 
-    // 设置页上的切回 iCloud 等失败只属于本轮操作，关窗后经控制器清理。
+    // 设置页上的切回 iCloud 等失败只属于本轮操作，关窗后经控制器清理；本轮保存状态也随关窗复位。
     onClosed: {
+        root.statusIsError = false
+        root.statusText = ""
         if (root.syncControllerRef && typeof root.syncControllerRef.clearTransportProblem === "function")
             root.syncControllerRef.clearTransportProblem()
     }
@@ -272,6 +289,9 @@ Popup {
                                 if (item.hasOwnProperty("syncControllerRef")) {
                                     item.syncControllerRef = Qt.binding(function() { return root.syncControllerRef })
                                 }
+                                if (item.hasOwnProperty("beforeSyncMutation")) {
+                                    item.beforeSyncMutation = Qt.binding(function() { return root.beforeSyncMutation })
+                                }
                                 // 快捷键页需要注册表引用；其余页面没有该属性，跳过即可。
                                 if (item.hasOwnProperty("shortcutRegistryRef")) {
                                     item.shortcutRegistryRef = Qt.binding(function() { return root.shortcutRegistryRef })
@@ -326,8 +346,8 @@ Popup {
                         background: Rectangle {
                             implicitWidth: 92
                             color: closeButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                            border.color: closeButton.activeFocus ? Theme.focusRing : Theme.border
-                            border.width: closeButton.activeFocus ? 2 : 1
+                            border.color: closeButton.visualFocus ? Theme.focusRing : Theme.border
+                            border.width: closeButton.visualFocus ? 2 : 1
                             radius: Theme.radiusMd
                         }
 
@@ -390,11 +410,15 @@ Popup {
         ignoreUnknownSignals: true
 
         function onSettingsWriteSucceeded(key) {
+            if (!root.opened)
+                return
             root.statusIsError = false
             root.statusText = "所有设置已保存到本机"
         }
 
         function onSettingsWriteFailed(key, message) {
+            if (!root.opened)
+                return
             // 后端错误详情可能随平台变化；界面给出稳定动作指引，错误态保持到下一次成功写入。
             root.statusIsError = true
             root.statusText = "无法保存设置，请检查系统权限后重试"

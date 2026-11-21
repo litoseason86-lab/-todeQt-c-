@@ -22,6 +22,8 @@ TestCase {
         signal trashChanged
         signal operationFailed(string message)
         property string purgeFailure: ""
+        property bool restoreProtected: false
+        property int purgedRowCount: 0
 
         // 调用记录：「方法名」或「方法名:参数」，按发生顺序。
         property var calls: []
@@ -51,7 +53,11 @@ TestCase {
 
         function purgeExpired() {
             calls.push("purgeExpired")
+            // 恢复不确定或恢复进行中时，服务层门禁静默返回 0、不触库也不发 operationFailed。
+            if (restoreProtected)
+                return 0
             if (purgeFailure.length > 0) { operationFailed(purgeFailure); return -1 }
+            purgedRowCount += 1
             return 0
         }
 
@@ -141,6 +147,8 @@ TestCase {
 
     function init() {
         service.purgeFailure = ""
+        service.restoreProtected = false
+        service.purgedRowCount = 0
         service.calls = []
         service.data = smallData()
         service.todayValue = "2026-10-07"
@@ -515,6 +523,24 @@ TestCase {
         view.actionError = "手动操作的错误"
         service.operationFailed("后台自动清理失败")
         compare(view.actionError, "手动操作的错误")
+    }
+
+    // 产品保证：恢复状态不确定期间激活废纸篓页，过期清理被服务门禁静默拦截（不写库、不报错），列表仍正常读取展示。
+    function test_activationWhileRestoreProtectedSkipsPurgeWriteAndStillLoadsList() {
+        service.restoreProtected = true
+        service.purgeFailure = "若未被门禁拦截则会触发的写库错误"
+        create({ trashServiceRef: service, pageActive: true })
+        compare(service.calls.join(","), "purgeExpired,readItems")
+        compare(service.purgedRowCount, 0)
+        compare(view.actionError, "")
+        compare(view.loadError, "")
+        compare(view.items.length, 2)
+
+        // 对照：解除恢复保护后再次激活，实际执行清理分支。
+        service.restoreProtected = false
+        service.purgeFailure = ""
+        view.activate()
+        compare(service.purgedRowCount, 1)
     }
 
 }

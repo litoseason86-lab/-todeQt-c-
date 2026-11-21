@@ -77,11 +77,30 @@ TestCase {
         verify(!sidebar.gradient, "侧栏渐变应已移除")
     }
 
-    function test_itemIdleIsWhiteBasedTransparent() {
-        verify(sidebar.sidebarItemIdleColor.a < 0.01, "idle 底色应全透明")
-        verify(sidebar.sidebarItemIdleColor.r > 0.99, "idle 底色必须白基")
-        verify(sidebar.sidebarItemIdleBorderColor.a < 0.01, "idle 边框应全透明")
-        verify(Qt.colorEqual(sidebar.sidebarItemHoverColor, Qt.rgba(1, 1, 1, 0.45)), "hover 应为半透明白")
+    // 产品保证：侧栏条目默认态与悬停态使用 Theme.glassHoverIdle / Theme.glassHover 语义令牌，
+    // 明暗两套主题下 idle 与 hover 同色零透明，避免过渡灰闪或暗色下发白失对比。
+    function test_itemIdleMatchesGlassHoverToken() {
+        var previousTheme = Theme.activeThemeId
+        try {
+            var modes = ["warm", "starry"]
+            for (var i = 0; i < modes.length; ++i) {
+                Theme.activeThemeId = modes[i]
+                verify(sidebar.sidebarItemIdleColor.a < 0.01, "idle 底色应全透明")
+                verify(sidebar.sidebarItemIdleBorderColor.a < 0.01, "idle 边框应全透明")
+                verify(Qt.colorEqual(sidebar.sidebarItemIdleColor, Theme.glassHoverIdle),
+                       "idle 底色应使用 Theme.glassHoverIdle")
+                verify(Qt.colorEqual(sidebar.sidebarItemIdleBorderColor, Theme.glassHoverIdle),
+                       "idle 边框应使用 Theme.glassHoverIdle")
+                verify(Qt.colorEqual(sidebar.sidebarItemHoverColor, Theme.glassHover),
+                       "hover 底色应使用 Theme.glassHover")
+                verify(Math.abs(sidebar.sidebarItemIdleColor.r - sidebar.sidebarItemHoverColor.r) < 0.01
+                       && Math.abs(sidebar.sidebarItemIdleColor.g - sidebar.sidebarItemHoverColor.g) < 0.01
+                       && Math.abs(sidebar.sidebarItemIdleColor.b - sidebar.sidebarItemHoverColor.b) < 0.01,
+                       "idle 与 hover 必须同色相零透明")
+            }
+        } finally {
+            Theme.activeThemeId = previousTheme
+        }
     }
 
     function test_keyboardCanActivateSidebar() {

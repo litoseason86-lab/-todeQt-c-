@@ -5,6 +5,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QSet>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QSettings>
 
@@ -341,16 +342,43 @@ void QmlFacadeTests::iosContextPropertiesMatchExpected()
 
 void QmlFacadeTests::bundledFontsRegistrationDoesNotCrash()
 {
-    // 保证打包字体注册流程可重复执行且不崩溃，且注册后所需字体族均可用。
+    // 先清掉已登记的应用字体再重新注册，确认产物里的四个打包字体文件真实可加载且无告警，而非靠宿主系统字体假绿。
+    const bool hadSpaceGroteskBefore = QFontDatabase::families().contains(QStringLiteral("Space Grotesk"));
+    QFontDatabase::removeAllApplicationFonts();
+    if (!hadSpaceGroteskBefore) {
+        QVERIFY(!QFontDatabase::families().contains(QStringLiteral("Space Grotesk")));
+    }
+
+    int warningCount = 0;
+    static int* activeWarnings = nullptr;
+    activeWarnings = &warningCount;
+    const QtMessageHandler previousHandler = qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& msg) {
+        if ((type == QtWarningMsg || type == QtCriticalMsg) && activeWarnings
+            && msg.contains(QStringLiteral("字体注册失败"))) {
+            ++(*activeWarnings);
+        }
+    });
+    const auto restoreHandler = qScopeGuard([&] {
+        qInstallMessageHandler(previousHandler);
+        activeWarnings = nullptr;
+    });
+
     QmlFacade::registerBundledFonts();
+    QCOMPARE(warningCount, 0);
+
     const QStringList firstFamilies = QFontDatabase::families();
     QVERIFY2(firstFamilies.contains(QStringLiteral("Space Grotesk")),
              "首次注册后缺少 Space Grotesk 字体族");
     QVERIFY2(firstFamilies.contains(QStringLiteral("Bricolage Grotesque")),
              "首次注册后缺少 Bricolage Grotesque 字体族");
+    QVERIFY2(!QFontDatabase::styles(QStringLiteral("Space Grotesk")).isEmpty(),
+             "Space Grotesk 缺少可用字重");
+    QVERIFY2(!QFontDatabase::styles(QStringLiteral("Bricolage Grotesque")).isEmpty(),
+             "Bricolage Grotesque 缺少可用字重");
 
     // 再次调用以验证幂等性与可重复执行性
     QmlFacade::registerBundledFonts();
+    QCOMPARE(warningCount, 0);
     const QStringList secondFamilies = QFontDatabase::families();
     QVERIFY2(secondFamilies.contains(QStringLiteral("Space Grotesk")),
              "重复注册后缺少 Space Grotesk 字体族");

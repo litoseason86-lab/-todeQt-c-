@@ -45,6 +45,8 @@ Item {
 
     // 捕获成功后由 MainWindow 统一弹 Toast：专注页自己不持有全局提示条。
     signal knowledgeGapCaptured(string title)
+    // 供测试直接取得非可视 Popup（QtTest findChild 不总能穿透视觉子项树）
+    readonly property alias knowledgeGapPopupItem: gapCapturePopup
 
     signal focusEnded()
     // 主动休息没有任务专注语义；结束后由 MainWindow 返回今日任务页。
@@ -805,7 +807,6 @@ Item {
 
     function startPomodoro() {
         root.cancelAutoAdvance()
-        root.justCompletedPhase = 0
         var taskId = root.selectedTaskId > 0 ? root.selectedTaskId : (root.timer ? root.timer.currentTaskId : -1)
         var taskTitle = root.pomodoroTitle()
         if (!root.timer) {
@@ -814,6 +815,8 @@ Item {
         }
         var call = root.callTimer(function() { return taskId > 0 && root.timer.startPomodoroWork(taskId, taskTitle, root.selectedWorkMinutes * 60) })
         if (call.value) {
+            // 仅在真正启动番茄后消费完成态，失败时保留「下一个番茄」重试入口与沉浸态。
+            root.justCompletedPhase = 0
             root.errorText = ""
             // 只在真正启动番茄后记忆模式；单纯切到番茄页不改变用户偏好。
             if (root.settings) {
@@ -968,6 +971,12 @@ Item {
                 autoAdvanceTimer.pendingPhase = phase
                 autoAdvanceTimer.restart()
             }
+        }
+
+        // 离线结算只切到对应完成态，不自动衔接下一阶段（与伴侣页及移动端口径一致）。
+        function onPhaseSettledOffline(phase) {
+            root.cancelAutoAdvance()
+            root.justCompletedPhase = phase
         }
     }
 
@@ -1173,8 +1182,10 @@ Item {
                 radius: height / 2
                 // 起点用 glassHoverIdle（与 glassHover 同色、全透明），渐变时不会插出灰影。
                 color: gapCaptureButton.hovered ? Theme.glassHover : Theme.glassHoverIdle
-                border.color: gapCaptureButton.hovered ? Theme.glassBorder : "transparent"
-                border.width: 1
+                border.color: gapCaptureButton.visualFocus
+                              ? Theme.focusRing
+                              : (gapCaptureButton.hovered ? Theme.glassBorder : "transparent")
+                border.width: gapCaptureButton.visualFocus ? 2 : 1
 
                 Behavior on color {
                     ColorAnimation { duration: Theme.reduceMotion ? 0 : 120 }
@@ -1448,8 +1459,10 @@ Item {
 
                 background: Rectangle {
                     color: root.panelExpanded ? Theme.accentSoft : Theme.surfaceRaised
-                    border.color: root.panelExpanded || durationPill.hovered ? Theme.accentStrong : Theme.border
-                    border.width: 1
+                    border.color: durationPill.visualFocus
+                                  ? Theme.focusRing
+                                  : (root.panelExpanded || durationPill.hovered ? Theme.accentStrong : Theme.border)
+                    border.width: durationPill.visualFocus ? 2 : 1
                     radius: height / 2
                 }
 
@@ -1649,6 +1662,8 @@ Item {
                                 return Theme.glassHover
                             return Theme.glassCard
                         }
+                        border.color: freeStartButton.visualFocus ? Theme.focusRing : Theme.glassBorder
+                        border.width: freeStartButton.visualFocus ? 2 : 1
                         panelShadowEnabled: false
                     }
 
@@ -1674,6 +1689,8 @@ Item {
 
                     background: Rectangle {
                         color: pauseButton.enabled ? Theme.inkSoft : Theme.border
+                        border.color: pauseButton.visualFocus ? Theme.focusRing : "transparent"
+                        border.width: pauseButton.visualFocus ? 2 : 0
                         radius: Theme.radiusMd
                     }
 
@@ -1699,6 +1716,8 @@ Item {
 
                     background: Rectangle {
                         color: freeStopButton.enabled ? Theme.accentFill : Theme.border
+                        border.color: freeStopButton.visualFocus ? Theme.focusRing : "transparent"
+                        border.width: freeStopButton.visualFocus ? 2 : 0
                         radius: Theme.radiusMd
                     }
 
@@ -1736,6 +1755,8 @@ Item {
                                 return Theme.glassHover
                             return Theme.glassCard
                         }
+                        border.color: pomodoroStartButton.visualFocus ? Theme.focusRing : Theme.glassBorder
+                        border.width: pomodoroStartButton.visualFocus ? 2 : 1
                         panelShadowEnabled: false
 
                         Behavior on color {
@@ -1770,6 +1791,8 @@ Item {
                         color: startBreakButton.pressed || startBreakButton.down
                                ? Theme.glassAccent
                                : (startBreakButton.hovered ? Theme.glassHover : Theme.glassCard)
+                        border.color: startBreakButton.visualFocus ? Theme.focusRing : Theme.glassBorder
+                        border.width: startBreakButton.visualFocus ? 2 : 1
                         panelShadowEnabled: false
 
                         Behavior on color {
@@ -1801,6 +1824,8 @@ Item {
 
                     background: Rectangle {
                         color: Theme.inkSoft
+                        border.color: pomodoroStopButton.visualFocus ? Theme.focusRing : "transparent"
+                        border.width: pomodoroStopButton.visualFocus ? 2 : 0
                         radius: Theme.radiusMd
                     }
 
@@ -1881,8 +1906,10 @@ Item {
             background: Rectangle {
                 radius: height / 2
                 color: immersiveButton.hovered ? Theme.glassHover : Theme.glassHoverIdle
-                border.color: immersiveButton.hovered ? Theme.glassBorder : "transparent"
-                border.width: 1
+                border.color: immersiveButton.visualFocus
+                              ? Theme.focusRing
+                              : (immersiveButton.hovered ? Theme.glassBorder : "transparent")
+                border.width: immersiveButton.visualFocus ? 2 : 1
 
                 Behavior on color {
                     ColorAnimation { duration: Theme.reduceMotion ? 0 : 120 }

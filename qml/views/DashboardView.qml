@@ -34,11 +34,15 @@ Item {
     property var statisticsServiceRef: null
     property var routineManagerRef: null
     property var focusTimerRef: null
+    property var logicalDayServiceRef: null
     property var categoryManagerRef: null
     property var countdownServiceRef: null
     property var settingsRef: null
     property var wallpaperRef: null
     property int pendingDeleteTaskId: -1
+    // 主窗口注入的默认开始专注入口（经 FocusSessionController::autoStartCandidate 统一口径）；
+    // 未注入（独立单测）时回落到 startFirstPendingTask()。
+    property var defaultFocusStarter: null
 
     property var tasks: []
     property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0,
@@ -262,9 +266,10 @@ Item {
     }
 
     Connections {
-        // 逻辑日翻转后所有“今日”口径的数据都要重查。
+        // 逻辑日翻转后所有“今日”口径的数据都要重查；优先用注入引用，兼容旧独立测试回落。
         // qmllint disable unqualified
-        target: typeof logicalDayService !== "undefined" ? logicalDayService : null
+        target: root.logicalDayServiceRef ? root.logicalDayServiceRef
+                                          : (typeof logicalDayService !== "undefined" ? logicalDayService : null)
         // qmllint enable unqualified
         ignoreUnknownSignals: true
 
@@ -693,13 +698,21 @@ Item {
                                 implicitWidth: filterLabel.implicitWidth + Theme.space16
                                 implicitHeight: 26
                                 radius: 13
+                                activeFocusOnTab: true
+                                Accessible.role: Accessible.RadioButton
+                                Accessible.name: filterChip.modelData.label
+                                Accessible.checked: filterChip.selected
+                                Accessible.onPressAction: root.filterMode = filterChip.modelData.key
+                                Keys.onReturnPressed: root.filterMode = filterChip.modelData.key
+                                Keys.onEnterPressed: root.filterMode = filterChip.modelData.key
+                                Keys.onSpacePressed: root.filterMode = filterChip.modelData.key
                                 color: filterChip.selected
                                        ? Theme.accentFill
-                                       : (filterArea.containsMouse ? Theme.glassHover : Qt.rgba(1, 1, 1, 0))
-                                border.color: filterChip.selected
-                                              ? Theme.accentFill
-                                              : Theme.borderSubtle
-                                border.width: filterChip.selected ? 0 : 1
+                                       : (filterArea.containsMouse ? Theme.glassHover : Theme.glassHoverIdle)
+                                border.color: filterChip.activeFocus
+                                              ? Theme.focusRing
+                                              : (filterChip.selected ? Theme.accentFill : Theme.borderSubtle)
+                                border.width: filterChip.activeFocus ? 2 : (filterChip.selected ? 0 : 1)
 
                                 Behavior on color {
                                     ColorAnimation {
@@ -765,6 +778,18 @@ Item {
                             visible: root.filterMode === "learning"
                             stats: root.todayTaskStats
                             scrollBarOverhang: root.taskScrollBarOverhang
+                        }
+
+                        // 今日全部任务为空时给出轻文案，避免主面板完全空白无反馈。
+                        Text {
+                            objectName: "dashboardTasksEmptyText"
+                            anchors.centerIn: parent
+                            visible: root.filterMode === "all" && root.filteredTasks.length === 0
+                                     && root.loadError.length === 0
+                            text: qsTr("今天还没有任务")
+                            textFormat: Text.PlainText
+                            font.pixelSize: Theme.fontMd
+                            color: Theme.inkSoft
                         }
 
                         ScrollView {
@@ -937,7 +962,15 @@ Item {
                 }
 
                 onOpenFocusRequested: root.focusPageRequested()
-                onStartRequested: root.startFirstPendingTask()
+                onStartRequested: {
+                    if (root.defaultFocusStarter) {
+                        // qmllint disable use-proper-function
+                        root.defaultFocusStarter()
+                        // qmllint enable use-proper-function
+                    } else {
+                        root.startFirstPendingTask()
+                    }
+                }
                 onStopRequested: root.stopFocusRequested()
                 // 仪表盘不承担目标设置：引导链接直接送用户去今日任务页。
                 onGoalSetupRequested: root.todayPageRequested()
@@ -1063,6 +1096,7 @@ Item {
 
     EditTaskDialog {
         taskManagerRef: root.taskManagerRef
+        settingsRef: root.settingsRef
         interactionCoordinatorRef: root.interactionCoordinatorRef
         interactionSource: "DashboardView.edit_dialog"
         onOpenFailed: function(message) { root.loadError = message }
@@ -1099,5 +1133,6 @@ Item {
 
         parent: root
         countdownServiceRef: root.countdownServiceRef
+        settingsRef: root.settingsRef
     }
 }

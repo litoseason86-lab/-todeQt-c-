@@ -14,9 +14,16 @@ FocusScope {
     property var backupServiceRef: null
     property var mcpAccessRef: null
     property var syncControllerRef: null
+    property var beforeSyncMutation: null
     property bool compact: false
     readonly property bool backupBusy: root.backupServiceRef
                                        ? root.backupServiceRef.busy : false
+
+    function canRunSyncMutation() {
+        // qmllint disable use-proper-function
+        return !root.beforeSyncMutation || Boolean(root.beforeSyncMutation())
+        // qmllint enable use-proper-function
+    }
     signal routineRequested
     signal categoryRequested
     signal exportRequested
@@ -69,7 +76,7 @@ FocusScope {
     }
 
     function requestICloudSwitch() {
-        if (root.syncControllerRef)
+        if (root.syncControllerRef && root.canRunSyncMutation())
             root.syncControllerRef.switchToICloud()
     }
 
@@ -180,7 +187,7 @@ FocusScope {
                         Accessible.description: root.syncIsServerTransport
                                                 ? "本机数据先自动备份，再换成 Mac 的数据"
                                                 : "本机数据先自动备份，再换成同步文件夹里的数据"
-                        onClicked: { if (root.syncControllerRef) root.syncControllerRef.confirmJoin() }
+                        onClicked: { if (root.syncControllerRef && root.canRunSyncMutation()) root.syncControllerRef.confirmJoin() }
                     }
                     SyncActionButton {
                         objectName: "settingsSyncDeclineJoin"
@@ -198,7 +205,7 @@ FocusScope {
                     Accessible.description: root.syncChoosesFolder
                                             ? "在「文件」里重新选 iCloud 云盘里的「番茄Todo同步」"
                                             : "在 iCloud 云盘里建一个新的同步文件夹，另一台设备要重新选择它"
-                    onClicked: { if (root.syncControllerRef) root.syncControllerRef.rebuildFolder() }
+                    onClicked: { if (root.syncControllerRef && root.canRunSyncMutation()) root.syncControllerRef.rebuildFolder() }
                 }
 
                 Text {

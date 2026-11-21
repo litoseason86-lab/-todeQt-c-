@@ -11,6 +11,18 @@ Canvas {
     property real size: 18
     property real lineW: 1.8
 
+    readonly property var supportedIconNames: [
+        "search", "plus", "check", "appearance", "focus", "keyboard", "general",
+        "data", "about", "spark", "layers", "target", "pause", "moon", "hash",
+        "play", "next", "bolt", "bell", "front", "person", "sunrise", "calendar",
+        "grid", "list", "gap", "expand", "export", "sync", "folder", "trash",
+        "edit", "round"
+    ]
+
+    function supportsIcon(iconName) {
+        return root.supportedIconNames.indexOf(String(iconName || "")) >= 0
+    }
+
     implicitWidth: size
     implicitHeight: size
     width: size
@@ -244,6 +256,17 @@ Canvas {
             stroke()
             line(10.2, 10.8, 10.2, 16.7)
             line(13.8, 10.8, 13.8, 16.7)
+            break
+        case "edit": // 允许 AI 修改任务：斜放的笔杆 + 底线
+            poly([15.2, 4.8, 19.2, 8.8, 9.2, 18.8, 5.2, 18.8, 5.2, 14.8], true)
+            line(13.2, 6.8, 17.2, 10.8)
+            line(4.5, 20.5, 19.5, 20.5)
+            break
+        case "round": // 自动备份：顺时针循环圆弧 + 箭头 + 表针
+            begin(); ctx.arc(12, 12, 8, -2.5, 2.35, false); stroke()
+            poly([16.8, 4.2, 18.4, 7.2, 15.2, 7.6], false)
+            line(12, 8, 12, 12)
+            line(12, 12, 15, 13.8)
             break
         default:
             break

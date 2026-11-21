@@ -39,6 +39,13 @@ Popup {
     property int editingCategoryId: -1
     // 编辑状态由 id 推导，让同一套表单同时服务新增和更新。
     property bool editingCategory: editingCategoryId > 0
+    // 打开编辑时记录原值：提交时只写发生变化的列，避免仅改颜色时覆盖远端刚同步过来的改名。
+    property string editingOriginalName: ""
+    property string editingOriginalColor: ""
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
 
     modal: true
     focus: true
@@ -115,6 +122,8 @@ Popup {
     function resetAddForm() {
         categoryNameInput.text = ""
         root.editingCategoryId = -1
+        root.editingOriginalName = ""
+        root.editingOriginalColor = ""
         root.newCategoryColor = "#d4a574"
         colorPicker.selectedColor = root.newCategoryColor
         root.errorText = ""
@@ -135,14 +144,21 @@ Popup {
 
         root.errorText = ""
         root.editingCategoryId = Number(category.id || -1)
-        categoryNameInput.text = category.name || ""
-        root.newCategoryColor = category.color || "#d4a574"
+        var initialName = String(category.name || "")
+        var initialColor = String(category.color || "#d4a574")
+        root.editingOriginalName = initialName
+        root.editingOriginalColor = initialColor
+        categoryNameInput.text = initialName
+        root.newCategoryColor = initialColor
         colorPicker.selectedColor = root.newCategoryColor
         addCategoryPanel.visible = true
         categoryNameInput.forceActiveFocus()
     }
 
     function saveCategory() {
+        if (root.submissionClosed) {
+            return false
+        }
         if (root.editingCategory) {
             root.updateCategory()
         } else {
@@ -151,6 +167,9 @@ Popup {
     }
 
     function addCategory() {
+        if (root.submissionClosed) {
+            return false
+        }
         if (!root.manager || !root.manager.addCategory) {
             root.errorText = "科目服务不可用"
             return
@@ -174,24 +193,60 @@ Popup {
     }
 
     function updateCategory() {
-        if (!root.manager || !root.manager.updateCategory) {
+        if (root.submissionClosed) {
+            return false
+        }
+        var hasPartialUpdate = root.manager && typeof root.manager.updateCategoryChanges === "function"
+        if (!root.manager || (!hasPartialUpdate && !root.manager.updateCategory)) {
             root.errorText = "科目服务不可用"
             return
         }
 
         var name = categoryNameInput.text.trim()
-        if (name.length === 0) {
-            root.errorText = "科目名称不能为空"
-            categoryNameInput.forceActiveFocus()
+        var nameChanged = name !== root.editingOriginalName.trim()
+        var colorChanged = root.newCategoryColor !== root.editingOriginalColor
+        if (nameChanged || !hasPartialUpdate) {
+            if (name.length === 0) {
+                root.errorText = "科目名称不能为空"
+                categoryNameInput.forceActiveFocus()
+                return
+            }
+        }
+
+        // 未改动任何字段时不写库、不制造多余同步版本。
+        if (!nameChanged && !colorChanged) {
+            root.resetAddForm()
             return
         }
 
+        // 仅当本次确实修改了名称时才做重名校验，避免只改颜色被远端/旧状态拦截。
+        if (nameChanged && typeof root.manager.categoryNameExists === "function") {
+            if (root.callService(function() { return root.manager.categoryNameExists(name, root.editingCategoryId) })) {
+                root.errorText = "科目名称已存在"
+                categoryNameInput.forceActiveFocus()
+                return
+            }
+        }
+
         root.errorText = ""
-        if (root.callService(function() { return root.manager.updateCategory(root.editingCategoryId, name, root.newCategoryColor) })) {
+        var ok = false
+        if (hasPartialUpdate) {
+            var changes = {}
+            if (nameChanged) {
+                changes.name = name
+            }
+            if (colorChanged) {
+                changes.color = root.newCategoryColor
+            }
+            ok = root.callService(function() { return root.manager.updateCategoryChanges(root.editingCategoryId, changes) })
+        } else {
+            ok = root.callService(function() { return root.manager.updateCategory(root.editingCategoryId, name, root.newCategoryColor) })
+        }
+        if (ok) {
             root.resetAddForm()
             root.refresh()
         } else {
-            if (root.errorText.length === 0) root.errorText = "科目更新失败，名称可能已存在"
+            if (root.errorText.length === 0) root.errorText = nameChanged ? "科目更新失败，名称可能已存在" : "科目更新失败，请重试"
         }
     }
 
@@ -202,6 +257,9 @@ Popup {
     }
 
     function commitCategoryDeletion(categoryId) {
+        if (root.submissionClosed) {
+            return false
+        }
         if (!root.manager || !root.manager.canDeleteCategory || !root.manager.deleteCategory) {
             root.errorText = "科目服务不可用"
             return
@@ -236,6 +294,7 @@ Popup {
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape
+        onOpened: deleteCategoryCancelButton.forceActiveFocus(Qt.PopupFocusReason)
         background: Rectangle {
             radius: Theme.radiusMd
             color: Theme.surfaceRaised
@@ -252,7 +311,7 @@ Popup {
             }
             Label {
                 Layout.fillWidth: true
-                text: qsTr("任务、例行、课表和知识缺口将失去这个科目关联。记录本身保留，此操作无法撤销。")
+                text: qsTr("任务、例行、课表、备忘录和知识缺口将失去这个科目关联。记录本身保留，此操作无法撤销。")
                 textFormat: Text.PlainText
                 color: Theme.ink
                 wrapMode: Text.WordWrap
@@ -268,7 +327,7 @@ Popup {
             }
             RowLayout {
                 Layout.alignment: Qt.AlignRight
-                PageActionButton { text: qsTr("取消"); onClicked: deleteConfirmation.close() }
+                PageActionButton { id: deleteCategoryCancelButton; text: qsTr("取消"); onClicked: deleteConfirmation.close() }
                 PageActionButton {
                     objectName: "confirmCategoryDeleteButton"
                     text: qsTr("确认删除")
@@ -362,6 +421,8 @@ Popup {
                 Layout.fillHeight: true
                 Layout.margins: Theme.space16
                 clip: true
+                // 顶部新增/编辑遮盖面板展开时禁用底层列表，阻断键盘 Tab 穿透到被遮盖的行内按钮。
+                enabled: !addCategoryPanel.visible
 
                 ListView {
                     id: categoryListView
@@ -523,6 +584,14 @@ Popup {
             color: Theme.surfaceRaised
             border.color: Theme.border
             border.width: 1
+
+            // 拦截空白区指针与滚轮事件，避免点击穿透到被遮盖的科目列表。
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.AllButtons
+                hoverEnabled: true
+                onWheel: function(wheel) { wheel.accepted = true }
+            }
 
             ColumnLayout {
                 anchors.fill: parent

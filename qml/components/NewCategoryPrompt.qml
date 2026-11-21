@@ -20,6 +20,14 @@ Popup {
     palette.placeholderText: Theme.inputPlaceholderInk
     palette.highlight: Theme.inputSelection
     palette.highlightedText: Theme.inputSelectedInk
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
+    palette.base: Theme.controlSurface
+    palette.button: Theme.controlSurface
+    palette.buttonText: Theme.controlInk
+    palette.windowText: Theme.controlInk
 
     property var categoryManagerRef: null
     // 与 ColorPicker 同一份暖色阶，保证内联建出来的科目和手动建的看起来是一家。

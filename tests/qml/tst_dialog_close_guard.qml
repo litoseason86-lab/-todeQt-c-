@@ -340,4 +340,151 @@ TestCase {
             },
             function() { completeTaskDialog.submit() })
     }
+
+    // ---- 9. 例行重复日 ----
+
+    QtObject {
+        id: weekdayRoutineManager
+
+        signal operationFailed(string message)
+        function setRoutineWeekdays(id, weekdays) {
+            return testCase.countWrite()
+        }
+    }
+
+    RoutineWeekdayDialog {
+        id: routineWeekdayDialog
+
+        parent: testCase
+        routineManagerRef: weekdayRoutineManager
+    }
+
+    function test_routineWeekdayDialogBlocksSaveWhileClosing() {
+        assertClosingBlocksSubmit(
+            routineWeekdayDialog,
+            function() { routineWeekdayDialog.openFor({ id: 7, title: "晨读", weekdays: 127 }) },
+            function() { routineWeekdayDialog.save() },
+            function() { routineWeekdayDialog.save() })
+    }
+
+    // ---- 10. 通用选项弹层 ----
+
+    ChoicePopup {
+        id: choicePopup
+
+        parent: testCase
+        options: [
+            { id: 1, name: "数学", color: "#d4a574", action: false },
+            { id: 2, name: "英语", color: "#6c9bd2", action: false }
+        ]
+        currentId: 1
+        onPicked: testCase.countWrite()
+    }
+
+    function test_choicePopupBlocksChooseWhileClosing() {
+        assertClosingBlocksSubmit(
+            choicePopup,
+            function() { choicePopup.open() },
+            function() { choicePopup.choose(1) },
+            function() { choicePopup.choose(0) })
+    }
+
+    // ---- 11. 科目管理 ----
+
+    QtObject {
+        id: guardedCategoryManager
+
+        signal categoriesChanged()
+        signal operationFailed(string message)
+
+        function getAllCategories() { return [ { id: 1, name: "数学", color: "#d4a574", isPreset: false } ] }
+        function addCategory(name, color) {
+            testCase.countWrite()
+            return 2
+        }
+        function updateCategoryChanges(id, changes) {
+            return testCase.countWrite()
+        }
+    }
+
+    CategoryDialog {
+        id: categoryDialog
+
+        parent: testCase
+        manager: guardedCategoryManager
+    }
+
+    function test_categoryDialogBlocksSaveWhileClosing() {
+        assertClosingBlocksSubmit(
+            categoryDialog,
+            function() { categoryDialog.open(); categoryDialog.beginAdd() },
+            function() {
+                findChild(categoryDialog, "categoryNameInput").text = "物理"
+                categoryDialog.saveCategory()
+                categoryDialog.close()
+            },
+            function() {
+                findChild(categoryDialog, "categoryNameInput").text = "化学"
+                categoryDialog.saveCategory()
+            })
+    }
+
+    // ---- 12. 每日例行 ----
+
+    QtObject {
+        id: guardedRoutineManager
+
+        signal routinesChanged()
+        signal operationFailed(string message)
+
+        function getRoutines() { return [] }
+        function addRoutine(title, categoryId) {
+            return testCase.countWrite()
+        }
+    }
+
+    RoutineDialog {
+        id: routineDialog
+
+        parent: testCase
+        routineManagerRef: guardedRoutineManager
+        categoryManagerRef: categoryManager
+    }
+
+    function test_routineDialogBlocksSubmitWhileClosing() {
+        assertClosingBlocksSubmit(
+            routineDialog,
+            function() { routineDialog.open() },
+            function() {
+                findChild(routineDialog, "routineTitleField").text = "晨读30分钟"
+                routineDialog.submit()
+                routineDialog.close()
+            },
+            function() {
+                findChild(routineDialog, "routineTitleField").text = "晚间复盘"
+                routineDialog.submit()
+            })
+    }
+
+    // ---- 13. 恢复确认 ----
+
+    RestoreConfirmDialog {
+        id: restoreConfirmDialog
+
+        parent: testCase
+        backupPath: "/tmp/backup.tomatobackup"
+        onConfirmed: testCase.countWrite()
+    }
+
+    function test_restoreConfirmDialogBlocksConfirmWhileClosing() {
+        assertClosingBlocksSubmit(
+            restoreConfirmDialog,
+            function() { restoreConfirmDialog.open() },
+            function() {
+                findChild(restoreConfirmDialog, "restoreConfirmButton").clicked()
+            },
+            function() {
+                findChild(restoreConfirmDialog, "restoreConfirmButton").clicked()
+            })
+    }
 }

@@ -582,7 +582,7 @@ TestCase {
         var comparisonText = findChild(thirdCard, "statCardComparisonText")
         verify(comparisonText !== null)
         compare(thirdCard.implicitHeight, 126)
-        verify(Qt.colorEqual(comparisonText.color, "#4caf50"))
+        verify(Qt.colorEqual(comparisonText.color, Theme.successInk))
 
         var yesterday = addDays(todaySnapshot, -1)
         statisticsService.resetTracking()

@@ -27,29 +27,57 @@ FocusScope {
     objectName: "settingsGeneralPage"
     property var appSettingsRef: null
     property bool compact: false
-    property string nicknameDraft: appSettingsRef ? appSettingsRef.nickname : ""
+    property string nicknameBaseline: ""
+    property string nicknameDraft: ""
 
     implicitHeight: contentColumn.implicitHeight
 
     function commitPendingEdits() {
-        var normalized = nicknameDraft.trim()
-        if (!appSettingsRef || normalized === appSettingsRef.nickname) {
-            nicknameDraft = normalized
+        if (!appSettingsRef)
+            return true
+        if (nicknameField.inputMethodComposing) {
+            // Qt 6.10.3 的类型描述把 Qt.inputMethod 标为 QObject，运行时由 QInputMethod 提供 commit()。
+            // qmllint disable missing-property
+            Qt.inputMethod.commit()
+            // qmllint enable missing-property
+        }
+        if (nicknameField.inputMethodComposing)
+            return false
+
+        const normalized = nicknameDraft.trim()
+        if (normalized === nicknameBaseline || normalized === appSettingsRef.nickname) {
+            resetNicknameDraft()
             return true
         }
 
         // AppSettings 写失败时会回滚旧值；用回读结果判定提交是否真实落盘，失败则保留草稿。
         appSettingsRef.nickname = normalized
         if (appSettingsRef.nickname === normalized) {
-            nicknameDraft = normalized
+            resetNicknameDraft()
             return true
         }
         return false
     }
 
-    onAppSettingsRefChanged: {
-        if (!nicknameField.activeFocus) {
-            nicknameDraft = appSettingsRef ? appSettingsRef.nickname : ""
+    function resetNicknameDraft() {
+        nicknameBaseline = appSettingsRef ? appSettingsRef.nickname : ""
+        nicknameDraft = nicknameBaseline
+    }
+
+    function followRemoteNickname() {
+        // 只聚焦时沿用远端变化；组合输入或改过的草稿保留开始编辑时的基准值。
+        if (!nicknameField.inputMethodComposing && nicknameDraft.trim() === nicknameBaseline)
+            resetNicknameDraft()
+    }
+
+    onAppSettingsRefChanged: resetNicknameDraft()
+
+    Connections {
+        target: root.appSettingsRef
+        ignoreUnknownSignals: true
+
+        function onNicknameChanged() {
+            root.followRemoteNickname()
         }
     }
 
@@ -83,6 +111,11 @@ FocusScope {
                     Accessible.name: "昵称"
                     onTextEdited: root.nicknameDraft = text
                     onEditingFinished: root.commitPendingEdits()
+                    onInputMethodComposingChanged: {
+                        // 等输入法完成本次上屏后再检查草稿是否仍与基准值一致。
+                        if (!inputMethodComposing)
+                            Qt.callLater(root.followRemoteNickname)
+                    }
 
                     background: Rectangle {
                         color: Theme.surfaceSunken

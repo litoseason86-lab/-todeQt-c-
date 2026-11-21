@@ -51,20 +51,24 @@ Dialog {
     height: Math.min(600, parent ? parent.height - 32 : 600)
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? (parent.height - height) / 2 : 0
-    palette.highlight: Theme.focusRing
-    palette.highlightedText: Theme.inputSelectedInk
     palette.text: Theme.inputInk
-    palette.windowText: Theme.ink
+    palette.placeholderText: Theme.inputPlaceholderInk
+    palette.highlight: Theme.inputSelection
+    palette.highlightedText: Theme.inputSelectedInk
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
     palette.base: Theme.controlSurface
     palette.button: Theme.controlSurface
     palette.buttonText: Theme.controlInk
-    palette.window: Theme.surfaceRaised
+    palette.windowText: Theme.controlInk
     background: Rectangle { color: Theme.surfaceRaised; radius: Theme.radiusLg; border.color: Theme.border }
     // 与其它弹窗同一块遮罩，不用 Basic 默认的半透明黑。
     Overlay.modal: Rectangle { color: Theme.dialogScrim }
 
     function dateText(value) {
-        return value instanceof Date ? Qt.formatDate(value, "yyyy-MM-dd") : String(value || "").substring(0, 10)
+        return LogicalDay.isoFromValue(value) || String(value || "").substring(0, 10)
     }
     onPendingDeleteTaskIdChanged: { if (root.opened) root.refresh(false) }
     function refresh(clearSelection) {
@@ -166,7 +170,7 @@ Dialog {
                 text: qsTr("选择逾期（当前结果）")
                 onClicked: root.selectOverdue()
             }
-            Label { text: qsTr("已选 %1 / %2 项").arg(root.selectedIds.length).arg(root.rows.length); color: Theme.inkSoft }
+            Label { text: qsTr("已选 %1 / %2 项").arg(root.selectedIds.length).arg(root.rows.length); textFormat: Text.PlainText; color: Theme.inkSoft }
         }
         ListView {
             id: list

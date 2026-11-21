@@ -28,6 +28,10 @@ Popup {
     property string errorText: ""
     // 重复日保存的原因只显示在本子弹窗，父表单和页面不重复接收。
     property bool saving: false
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
     Connections {
         target: root.routineManagerRef
         ignoreUnknownSignals: true
@@ -108,6 +112,9 @@ Popup {
     }
 
     function save() {
+        if (root.submissionClosed) {
+            return false
+        }
         if (!root.routineManagerRef || !root.routineManagerRef.setRoutineWeekdays) {
             root.errorText = "每日例行服务不可用"
             return

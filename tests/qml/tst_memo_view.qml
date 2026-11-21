@@ -1836,4 +1836,20 @@ TestCase {
             return findChild(view, "memoRow102") !== null;
         }, 3000);
     }
+
+    // 产品保证：恢复备份或被同步快照整库替换时，即使旧库中编辑到一半、有未保存修改且新库恰好复用相同 id 的备忘，也清空旧草稿并重新读取新库。
+    function test_resetForDatabaseRestoreClearsDirtySameIdDraft() {
+        typeBody("旧库未保存草稿");
+        compare(view.selectedId, 11);
+        compare(view.dirty, true);
+        verify(typeof view.resetForDatabaseRestore === "function", "MemoView 必须提供 resetForDatabaseRestore");
+
+        service.records = [service.makeRecord(11, "新库同名编号", "新库正文", 1)];
+        view.resetForDatabaseRestore();
+        compare(view.dirty, false);
+        compare(view.selectedId, 11);
+        compare(view.editorTitle, "新库同名编号");
+        compare(view.editorBody, "新库正文");
+        compare(service.updates.length, 0, "旧库未保存草稿不得写进新库同编号记录");
+    }
 }
