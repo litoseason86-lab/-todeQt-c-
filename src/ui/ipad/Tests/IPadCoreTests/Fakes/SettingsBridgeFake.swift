@@ -48,7 +48,11 @@ import IPadCore
     func setDayStartHour(_ value: Int) throws { try record("setDayStartHour", .integer(value)); result.dayStartHour = value; onDayStartHourChanged?() }
     func setNickname(_ value: String) throws { try record("setNickname", .string(value)); result.nickname = value; onNicknameChanged?() }
     func setSidebarVisible(_ value: Bool) throws { try record("setSidebarVisible", .boolean(value)); result.sidebarVisible = value; onSidebarVisibleChanged?() }
-    func setSidebarOrder(_ value: [String]) throws { try record("setSidebarOrder", .strings(value)); result.sidebarOrder = value; onSidebarOrderChanged?() }
+    func setSidebarOrder(_ value: [String]) throws {
+        try record("setSidebarOrder", .strings(value))
+        result.sidebarOrder = value; result.sidebarOrderIsDefault = false
+        onSidebarOrderChanged?(); onSidebarOrderIsDefaultChanged?(); onWriteSucceeded?("sidebarOrder")
+    }
     func setDashboardTimerVisible(_ value: Bool) throws { try record("setDashboardTimerVisible", .boolean(value)); result.dashboardTimerVisible = value; onDashboardTimerVisibleChanged?() }
     func setReduceTransparency(_ value: Bool) throws { try record("setReduceTransparency", .boolean(value)); result.reduceTransparency = value; onReduceTransparencyChanged?() }
     func setNaturalCompletionNoticeShown(_ value: Bool) throws { try record("setNaturalCompletionNoticeShown", .boolean(value)); result.naturalCompletionNoticeShown = value; onNaturalCompletionNoticeShownChanged?() }
@@ -59,7 +63,11 @@ import IPadCore
     func setLongBreakMinutes(_ value: Int) throws { try record("setLongBreakMinutes", .integer(value)); result.longBreakMinutes = value; onLongBreakMinutesChanged?() }
     func setLongBreakInterval(_ value: Int) throws { try record("setLongBreakInterval", .integer(value)); result.longBreakInterval = value; onLongBreakIntervalChanged?() }
     func setScheduleDisplayMode(_ value: String) throws { try record("setScheduleDisplayMode", .string(value)); result.scheduleDisplayMode = value; onScheduleDisplayModeChanged?() }
-    func resetSidebarOrder() throws { try record("resetSidebarOrder", .none) }
+    func resetSidebarOrder() throws {
+        try record("resetSidebarOrder", .none)
+        result.sidebarOrder = []; result.sidebarOrderIsDefault = true
+        onSidebarOrderChanged?(); onSidebarOrderIsDefaultChanged?(); onWriteSucceeded?("sidebarOrder")
+    }
     func dailyFocusGoal(date: String) -> Int { calls.append(("dailyFocusGoal", .string(date))); return goal }
     func setDailyFocusGoal(date: String, minutes: Int) throws { try record("setDailyFocusGoal", .goal(date, minutes)); goal = minutes; onDailyFocusGoalChanged?() }
 }

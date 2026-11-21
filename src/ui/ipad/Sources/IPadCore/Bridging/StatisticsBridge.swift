@@ -6,6 +6,8 @@ public struct DayStatistics: Equatable, Sendable {
     public var completionRate: Double = 0
     public var sessionCount: Int = 0
     public var pomodoroCount: Int = 0
+    public var goalMinutes: Int = 0
+    public var goalProgressPercent: Double = 0
     public init() {}
 }
 public struct MonthStatistics: Equatable, Sendable {

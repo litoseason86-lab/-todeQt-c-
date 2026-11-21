@@ -29,6 +29,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) void (^onTransportChanged)(void);
 @property(nonatomic, copy, nullable) void (^onSwitchingTransportChanged)(void);
 @property(nonatomic, copy, nullable) void (^onLogChanged)(void);
+@property(nonatomic, copy, nullable) void (^onSnapshotReplaced)(void);
 @property(nonatomic, copy, nullable) void (^onNotice)(NSString *message);
 @property(nonatomic, copy, nullable) void (^onCopyRequested)(NSString *text);
 @property(nonatomic, readonly) BOOL enabled;
@@ -57,6 +58,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)rebuildFolder:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (BOOL)joinWithPairingCode:(NSString *)code error:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (BOOL)switchToICloud:(NSError **)error __attribute__((swift_error(nonnull_error)));
+- (void)cancelTransportSwitch;
 - (void)clearTransportProblem;
 - (NSString *)joinWarning;
 - (PTSyncLogReadResult *)syncLog:(NSInteger)limit;

@@ -81,6 +81,8 @@ import XCTest
         store.requestAdd(); XCTAssertEqual(store.form, .add)
         store.dismissForm(); XCTAssertNil(store.form)
         XCTAssertEqual(bridge.calls, initialCalls); XCTAssertTrue(bridge.orders.isEmpty)
+        // 刷新倒计时仅读取一次 goals() 并从中派生主目标，不重复调用 primaryGoal()。
+        XCTAssertFalse(bridge.calls.contains("primary"))
     }
 
 }

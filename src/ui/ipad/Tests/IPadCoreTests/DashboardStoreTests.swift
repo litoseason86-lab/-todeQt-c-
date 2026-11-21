@@ -179,4 +179,26 @@ import XCTest
         XCTAssertEqual(r.tasks.calls.count, calls)
     }
 
+    // 产品保证：凌晨日界前（如 02:30 仍属前一天逻辑日），仪表盘页头副标题日期取逻辑今日而非系统物理时钟自然日。
+    func testSubtitleDateUsesServiceLogicalTodayBeforeDayBoundary() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let twoThirtyAM = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 10, hour: 2, minute: 30)))
+        let tasks = TaskBridgeFake(), statistics = StatisticsBridgeFake(), settings = SettingsBridgeFake()
+        let shell = ShellStore(bridge: ShellBridgeFake()), day = LogicalDayBridgeFake()
+        day.today = "2026-10-09"
+        day.dayStartHour = 4
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
+        let actions = TaskActions(tasks: tasks, pendingDeletion: pending, shell: shell)
+        let focus = FocusStore(focus: FocusBridgeFake(), settings: settings, tasks: tasks, pendingDeletion: pending, shell: shell)
+        let store = DashboardStore(tasks: tasks, statistics: statistics, settings: settings,
+                                   pendingDeletion: pending, actions: actions, shell: shell, focus: focus,
+                                   logicalDay: day, nowProvider: { twoThirtyAM })
+        store.start()
+        XCTAssertEqual(ContentDateFormat.isoDate(store.now), "2026-10-10")
+        XCTAssertEqual(store.today, "2026-10-09")
+        day.today = "2026-10-10"
+        XCTAssertEqual(store.today, "2026-10-10")
+    }
+
 }

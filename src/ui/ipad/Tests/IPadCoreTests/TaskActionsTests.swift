@@ -142,4 +142,24 @@ import XCTest
             XCTAssertEqual(shell.toast?.message, message); XCTAssertEqual(shell.selection, page)
         }
     }
+
+    // 产品保证：单条或批量完成任务后若发生恢复备份/远端快照换库，旧撤销提示被清空且触发撤销绝不改写新库同编号任务。
+    func testDatabaseChangeInvalidatesSingleAndBatchCompletionUndo() {
+        let (shell, tasks, actions) = fixture()
+        XCTAssertTrue(actions.complete(id: 7, title: "旧库任务"))
+        XCTAssertEqual(shell.toast?.actionTitle, "撤销")
+        shell.invalidateForDatabaseChange()
+        XCTAssertNil(shell.toast)
+        tasks.calls.removeAll()
+        shell.triggerToastAction()
+        XCTAssertTrue(tasks.calls.isEmpty)
+
+        XCTAssertTrue(actions.complete(ids: [4, 9]))
+        XCTAssertEqual(shell.toast?.actionTitle, "撤销")
+        shell.invalidateForDatabaseChange()
+        XCTAssertNil(shell.toast)
+        tasks.calls.removeAll()
+        shell.triggerToastAction()
+        XCTAssertTrue(tasks.calls.isEmpty)
+    }
 }

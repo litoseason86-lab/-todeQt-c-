@@ -77,6 +77,8 @@ using namespace PTBridgeSupport;
         _completionRate = map.value("completionRate").toDouble();
         _sessionCount = map.value("sessionCount").toLongLong();
         _pomodoroCount = map.value("pomodoroCount").toLongLong();
+        _goalMinutes = map.value("goalMinutes").toLongLong();
+        _goalProgressPercent = map.value("goalProgressPercent").toDouble();
     } return self;
 }
 @end
@@ -517,7 +519,12 @@ static QVariantMap monthMap(PTMonthStatisticsInput *value) {
     FailureCollector::Call scope(_failures);
     const auto value = StatisticsService::instance()->getWeeklyReview(date(iso), string(today));
     QString error = scope.error();
-    if (value.value("loadState").toString() == QStringLiteral("error")) error = value.value("errorMessage").toString();
+    if (value.value("loadState").toString() == QStringLiteral("error")) {
+        // loadState 报错时不能被空的 errorMessage 覆盖成空串，否则 valid 会误判为 YES。
+        const QString message = value.value("errorMessage").toString();
+        if (!message.isEmpty()) error = message;
+        else if (error.isEmpty()) error = QStringLiteral("读取周复盘失败");
+    }
     return [[PTStatisticsResult alloc] initWithMap:QVariantMap{{QStringLiteral("review"), value}} error:error];
 }
 - (PTStatisticsResult *)currentWeeklyReview {
@@ -525,7 +532,11 @@ static QVariantMap monthMap(PTMonthStatisticsInput *value) {
     FailureCollector::Call scope(_failures);
     const auto value = StatisticsService::instance()->getWeeklyReview();
     QString error = scope.error();
-    if (value.value("loadState").toString() == QStringLiteral("error")) error = value.value("errorMessage").toString();
+    if (value.value("loadState").toString() == QStringLiteral("error")) {
+        const QString message = value.value("errorMessage").toString();
+        if (!message.isEmpty()) error = message;
+        else if (error.isEmpty()) error = QStringLiteral("读取周复盘失败");
+    }
     return [[PTStatisticsResult alloc] initWithMap:QVariantMap{{QStringLiteral("review"), value}} error:error];
 }
 - (PTStatisticsResult *)focusSummary:(NSString *)from to:(NSString *)to dayStartHour:(NSInteger)hour {
@@ -534,7 +545,7 @@ static QVariantMap monthMap(PTMonthStatisticsInput *value) {
     FailureCollector::Call scope(_failures);
     const auto value = StatisticsService::instance()->readFocusSummary(date(from), date(to), h);
     QString error = scope.error();
-    if (!value.ok()) error = QStringLiteral("专注汇总读取失败");
+    if (!value.ok() && error.isEmpty()) error = QStringLiteral("专注汇总读取失败");
     return [[PTStatisticsResult alloc] initWithMap:QVariantMap{{QStringLiteral("summary"), value.value}} error:error];
 }
 @end

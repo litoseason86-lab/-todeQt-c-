@@ -12,6 +12,9 @@ struct MarkedTextEditor: UIViewRepresentable {
         view.font = .preferredFont(forTextStyle: .body)
         view.adjustsFontForContentSizeCategory = true
         view.backgroundColor = .clear
+        // 显式绑定语义文字色与光标色，保证深色/主题切换时正文与大标题颜色同步更新。
+        view.textColor = UIColor(ThemeColors.inputInk)
+        view.tintColor = UIColor(ThemeColors.accentInk)
         view.text = text
         view.delegate = context.coordinator
         view.accessibilityLabel = "正文"
@@ -19,6 +22,8 @@ struct MarkedTextEditor: UIViewRepresentable {
     }
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.editor = self
+        view.textColor = UIColor(ThemeColors.inputInk)
+        view.tintColor = UIColor(ThemeColors.accentInk)
         // 外部刷新不能覆盖组合中的拼音；上屏后再接受绑定值，保留光标位置并按 UTF-16 长度夹紧。
         guard view.markedTextRange == nil, view.text != text else { return }
         let selection = view.selectedRange

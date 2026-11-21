@@ -66,6 +66,8 @@ private slots:
     void automaticCommitDoesNotPolluteUnrelatedBridgeCall();
     void pendingCommitPreservesTitleAndReason_data();
     void pendingCommitPreservesTitleAndReason();
+    void categoryPartialUpdatePreservesUnchangedFieldsAndRejectsUnknownKeys();
+    void pendingDeletionGenerationGuardsStaleCommitAndCancel();
     void initTestCase();
     void init();
     void cleanup();
@@ -872,6 +874,8 @@ static void compareValue(PTDayStatistics *value, const QVariantMap &map) {
     QCOMPARE(value.completionRate, double(map.value("completionRate").toDouble()));
     QCOMPARE(value.sessionCount, NSInteger(map.value("sessionCount").toLongLong()));
     QCOMPARE(value.pomodoroCount, NSInteger(map.value("pomodoroCount").toLongLong()));
+    QCOMPARE(value.goalMinutes, NSInteger(map.value("goalMinutes").toLongLong()));
+    QCOMPARE(value.goalProgressPercent, double(map.value("goalProgressPercent").toDouble()));
 }
 static void compareValue(PTMonthStatistics *value, const QVariantMap &map) {
     QCOMPARE(value.totalDuration, NSInteger(map.value("totalDuration").toLongLong()));
@@ -1418,6 +1422,81 @@ void PTCoreBridgeTests::dateRelationsForSelectedDay() {
         QVERIFY(error); error = nil;
         [bridge relationOfDate:@"2024-2-28" toDate:@"2024-02-28" error:&error];
         QVERIFY(error); error = nil;
+    }
+}
+
+// 产品保证：PTCategoryBridge 字段级更新只改传入的名称或颜色，不覆盖另一方刚改好的值，空字典幂等成功，未知键报错拒绝。
+void PTCoreBridgeTests::categoryPartialUpdatePreservesUnchangedFieldsAndRejectsUnknownKeys() {
+    @autoreleasepool {
+        PTCategoryBridge *bridge = [PTCategoryBridge new];
+        NSError *error = nil;
+        const NSInteger catId = [bridge addCategory:@"原名" color:@"#112233" error:&error];
+        QVERIFY(catId > 0);
+        QVERIFY(error == nil);
+
+        // 模拟远端把名称改为「远端新名」，本地仅提交颜色修改：必须保留「远端新名」。
+        QVERIFY(CategoryManager::instance()->updateCategoryChanges(
+            static_cast<int>(catId), QVariantMap{{QStringLiteral("name"), QStringLiteral("远端新名")}}));
+        QVERIFY([bridge updateCategory:catId changes:@{@"color": @"#445566"} error:&error]);
+        QVERIFY(error == nil);
+        PTCategoryValue *afterColor = [bridge category:catId].categories.firstObject;
+        QVERIFY([afterColor.name isEqualToString:@"远端新名"]);
+        QVERIFY([afterColor.color isEqualToString:@"#445566"]);
+
+        // 仅提交名称修改：必须保留已有颜色「#445566」。
+        QVERIFY([bridge updateCategory:catId changes:@{@"name": @"本地新名"} error:&error]);
+        QVERIFY(error == nil);
+        PTCategoryValue *afterName = [bridge category:catId].categories.firstObject;
+        QVERIFY([afterName.name isEqualToString:@"本地新名"]);
+        QVERIFY([afterName.color isEqualToString:@"#445566"]);
+
+        // 空字典幂等返回成功；非法键返回失败并填充 NSError。
+        QVERIFY([bridge updateCategory:catId changes:@{} error:&error]);
+        QVERIFY(error == nil);
+        QVERIFY(![bridge updateCategory:catId changes:@{@"invalidKey": @"value"} error:&error]);
+        QVERIFY(error != nil);
+    }
+}
+
+// 产品保证：待删桥接暴露递增代次，携带过期代次的 commitGeneration 与 cancelGeneration 绝不误提交或误撤销新待删槽。
+void PTCoreBridgeTests::pendingDeletionGenerationGuardsStaleCommitAndCancel() {
+    @autoreleasepool {
+        auto *tasks = TaskManager::instance();
+        const int firstTask = tasks->createTask("任务一", LogicalDay::today(4), -1, 0, "");
+        const int secondTask = tasks->createTask("任务二", LogicalDay::today(4), -1, 0, "");
+        QVERIFY(firstTask > 0 && secondTask > 0 && firstTask != secondTask);
+
+        PendingDeletion pending(tasks, FocusHistoryService::instance());
+        pending.setDelayMs(60000);
+        PTBridgeSupport::registerService("pendingDeletion", &pending);
+        const auto unregister = qScopeGuard([&] { PTBridgeSupport::registerService("pendingDeletion", nullptr); });
+
+        PTPendingDeletionBridge *bridge = [PTPendingDeletionBridge new];
+        NSError *error = nil;
+        QVERIFY([bridge requestTask:firstTask title:@"任务一" error:&error]);
+        const int64_t gen1 = bridge.generation;
+        QVERIFY(gen1 > 0);
+
+        pending.retireForExternalReset();
+        QVERIFY(!bridge.active);
+
+        QVERIFY([bridge requestTask:secondTask title:@"任务二" error:&error]);
+        const int64_t gen2 = bridge.generation;
+        QVERIFY(gen2 > gen1);
+
+        // 过期代次 gen1 的提交与撤销必须被静默忽略，不影响当前槽里的 secondTask。
+        QVERIFY([bridge commitGeneration:gen1 error:&error]);
+        QVERIFY(error == nil);
+        QVERIFY(bridge.active);
+        QCOMPARE(bridge.taskId, NSInteger(secondTask));
+
+        [bridge cancelGeneration:gen1];
+        QVERIFY(bridge.active);
+        QCOMPARE(bridge.taskId, NSInteger(secondTask));
+
+        // 当前代次 gen2 的撤销正常清空待删槽。
+        [bridge cancelGeneration:gen2];
+        QVERIFY(!bridge.active);
     }
 }
 

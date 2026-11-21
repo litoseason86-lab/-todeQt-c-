@@ -9,7 +9,7 @@ final class ScheduleStoreTests: XCTestCase {
         bridge.settingsValue.semesterStartDate = "2026-08-31"
         bridge.weekdayDates = [5: "2026-10-09"]
         let day = LogicalDayBridgeFake(); day.today = "2026-10-09"
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), logicalDay: day)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), logicalDay: day); store.setActive(true)
         XCTAssertEqual(store.currentWeekIndex, 7)
         XCTAssertEqual(bridge.weekInputs.last?.1, day.today)
         XCTAssertEqual(store.selectedWeekday, 5)
@@ -27,7 +27,7 @@ final class ScheduleStoreTests: XCTestCase {
     @MainActor func testInjectedDayAndWeekNavigation() {
         let bridge = ScheduleBridgeFake(); bridge.weekValue = 7
         bridge.settingsValue = ScheduleSettings(semesterStartDate: "2026-08-31", semesterWeeks: 20)
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5); store.setActive(true)
         XCTAssertEqual(store.selectedWeekday, 5); XCTAssertEqual(store.weekIndex, 7)
         XCTAssertEqual(bridge.weekInputs.last?.1, "2026-10-09")
         store.goToWeek(9); XCTAssertEqual(bridge.requestedWeeks.last, 9)
@@ -51,7 +51,7 @@ final class ScheduleStoreTests: XCTestCase {
         bridge.settingsValue.showWeekend = false
         // 替身只把这一组明确的节次命中交给布局，不实现第二套相交业务规则。
         bridge.overlapResult = { start, _, _, _ in start == 480 }
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5); store.setActive(true)
         store.setDisplayMode(.period)
         XCTAssertEqual(store.hiddenWeekendEntries.map(\.id), [1])
         XCTAssertEqual(store.unplacedEntries.map(\.id), [2])
@@ -61,7 +61,7 @@ final class ScheduleStoreTests: XCTestCase {
     // 产品保证：任一步读取失败保留整份上一版快照，服务原因可以重试，不把失败画成空课表。
     @MainActor func testReadFailureRetainsSnapshotAndRetries() {
         let bridge = ScheduleBridgeFake(); var row = ScheduleEntry(); row.id = 17; bridge.entryValues = [row]
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5); store.setActive(true)
         XCTAssertEqual(store.entries.map(\.id), [17])
         bridge.entryValues = []; bridge.readError = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "课表 SQL 原文"])
         bridge.onScheduleChanged?(); XCTAssertEqual(store.entries.map(\.id), [17]); XCTAssertEqual(store.error, "课表 SQL 原文")
@@ -70,7 +70,7 @@ final class ScheduleStoreTests: XCTestCase {
     // 产品保证：编辑只提交修改字段，明确清空地点和科目不等于未改，失败保留草稿。
     @MainActor func testEntryChangesAndWriteFailure() {
         let bridge = ScheduleBridgeFake(); var original = ScheduleEntry(); original.id = 19; original.title = "旧名"; original.location = "教室"; original.categoryID = 4
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5); store.setActive(true)
         var draft = original; draft.title = "新名"; draft.location = ""; draft.categoryID = -1
         bridge.writeError = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "课程已被删除"])
         XCTAssertFalse(store.saveEntry(draft, original: original))
@@ -84,7 +84,7 @@ final class ScheduleStoreTests: XCTestCase {
     @MainActor func testSettingsFailureCompensatesPeriods() {
         let bridge = ScheduleBridgeFake()
         bridge.periodValues = [SchedulePeriod(index: 1, startMinutes: 480, endMinutes: 525)]
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5); store.setActive(true)
         let old = store.settings, oldPeriods = store.periods
         bridge.settingsError = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "设置写盘失败"])
         let changed = ScheduleSettings(semesterStartDate: "2026-09-07", semesterWeeks: 18, showWeekend: false)
@@ -98,7 +98,7 @@ final class ScheduleStoreTests: XCTestCase {
     // 产品保证：版式写入共用设置服务；失败保留原版式，外部设置变化能更新页面。
     @MainActor func testDisplayModePersistenceAndFailure() {
         let settings = SettingsBridgeFake(); settings.result.scheduleDisplayMode = "period"
-        let store = ScheduleStore(bridge: ScheduleBridgeFake(), settingsBridge: settings, todayDate: "2026-10-09", todayWeekday: 5)
+        let store = ScheduleStore(bridge: ScheduleBridgeFake(), settingsBridge: settings, todayDate: "2026-10-09", todayWeekday: 5); store.setActive(true)
         XCTAssertEqual(store.displayMode, .period)
         settings.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "版式写盘失败"])
         XCTAssertFalse(store.setDisplayMode(.time)); XCTAssertEqual(store.displayMode, .period)
@@ -112,7 +112,7 @@ final class ScheduleStoreTests: XCTestCase {
     @MainActor func testGridPrefillAndConflictForwarding() throws {
         let bridge = ScheduleBridgeFake()
         bridge.periodValues = [SchedulePeriod(index: 1, startMinutes: 600, endMinutes: 645), SchedulePeriod(index: 2, startMinutes: 660, endMinutes: 705)]
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5); store.setActive(true)
         XCTAssertEqual(store.minutesAtOffset(11, pixelsPerMinute: 1.1), 490)
         store.setDisplayMode(.period); XCTAssertEqual(store.minutesAtOffset(77), 660)
         var conflict = ScheduleEntry(); conflict.id = 22; bridge.conflictValues = [conflict]
@@ -124,7 +124,7 @@ final class ScheduleStoreTests: XCTestCase {
     // 产品保证：设置失败且节次补偿也失败时同时显示两个原因，不把部分写入说成全部成功。
     @MainActor func testCompensationFailureKeepsBothReasons() {
         let bridge = ScheduleBridgeFake()
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5); store.setActive(true)
         bridge.settingsError = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "写盘失败"])
         bridge.periodWriteErrorAfterFirst = NSError(domain: "test", code: 2, userInfo: [NSLocalizedDescriptionKey: "节次恢复失败"])
         XCTAssertFalse(store.saveSettings(ScheduleSettings(), periods: [SchedulePeriod(startMinutes: 600, endMinutes: 650)]))
@@ -140,7 +140,7 @@ final class ScheduleStoreTests: XCTestCase {
         bridge.entryValues = [weekend, outside, placed, other]
         bridge.periodValues = [SchedulePeriod(index: 3, startMinutes: 480, endMinutes: 525)]
         bridge.settingsValue.showWeekend = false; bridge.overlapResult = { start, _, _, _ in start == 480 }
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 3)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 3); store.setActive(true)
         store.setDisplayMode(.period)
         XCTAssertEqual(store.selectedDayEntries.map(\.id), [3])
         XCTAssertEqual(store.undisplayedEntryTitles, ["自习（周末隐藏）", "政治网课（不在节次内）"])
@@ -154,7 +154,7 @@ final class ScheduleStoreTests: XCTestCase {
     @MainActor func testFailedWeekNavigationPreservesWeekAndEntries() {
         let bridge = ScheduleBridgeFake(); bridge.weekValue = 7; var row = ScheduleEntry(); row.id = 9
         bridge.entryValues = [row]
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5); store.setActive(true)
         XCTAssertEqual(store.weekIndex, 7); XCTAssertEqual(store.entries.map(\.id), [9])
         bridge.readError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "查询失败"])
         store.goToWeek(8)
@@ -165,7 +165,7 @@ final class ScheduleStoreTests: XCTestCase {
         let bridge = ScheduleBridgeFake(); bridge.weekValue = 7; bridge.settingsValue.semesterWeeks = 20
         bridge.weekdayDates = [5: "2026-10-09"]
         let day = LogicalDayBridgeFake(); day.today = "2026-10-09"
-        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), logicalDay: day)
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), logicalDay: day); store.setActive(true)
         let calls = bridge.calls.count, weekdays = bridge.weekdayInputs.count
         store.goToWeek(8)
         XCTAssertEqual(Array(bridge.calls.dropFirst(calls)), ["entriesForWeek"])
@@ -181,5 +181,38 @@ final class ScheduleStoreTests: XCTestCase {
         XCTAssertEqual(store.entries.map(\.id), [19])
         bridge.weekdayDates = [1: "2026-10-12"]; day.today = "2026-10-12"
         XCTAssertEqual(store.todayWeekday, 1); XCTAssertEqual(store.todayDate, "2026-10-12")
+    }
+
+    // 产品保证：课表页未激活时不响应桥接变更查库、不接收后台失败污染错误；激活后读取最新数据，且写入同步信号不重复查询。
+    @MainActor func testInactiveScheduleSkipsBackgroundReadsAndIgnoresBackgroundFailure() {
+        let bridge = ScheduleBridgeFake(); bridge.weekValue = 3
+        bridge.settingsValue.semesterStartDate = "2026-08-31"
+        let day = LogicalDayBridgeFake(); day.today = "2026-10-09"
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), logicalDay: day)
+        XCTAssertTrue(bridge.calls.isEmpty)
+        bridge.onFailure?("后台未认领错误")
+        bridge.onScheduleChanged?()
+        day.today = "2026-10-12"
+        XCTAssertTrue(bridge.calls.isEmpty)
+        XCTAssertEqual(store.error, "")
+
+        var entry = ScheduleEntry(); entry.id = 5; entry.title = "高数"
+        bridge.entryValues = [entry]
+        store.setActive(true)
+        XCTAssertEqual(store.entries.map(\.id), [5])
+        XCTAssertEqual(store.todayDate, "2026-10-12")
+
+        store.setActive(false)
+        let countAfterDeactivate = bridge.calls.count
+        bridge.onScheduleChanged?()
+        bridge.onFailure?("隐藏后错误")
+        XCTAssertEqual(bridge.calls.count, countAfterDeactivate)
+        XCTAssertEqual(store.error, "")
+
+        // 活跃态保存课程触发桥接同步 onScheduleChanged 时，writing 门禁抑制重入，只重读一轮。
+        store.setActive(true)
+        let readsBeforeSave = bridge.calls.filter { $0 == "entriesForWeek" }.count
+        XCTAssertTrue(store.saveEntry(entry, original: nil))
+        XCTAssertEqual(bridge.calls.filter { $0 == "entriesForWeek" }.count, readsBeforeSave + 1)
     }
 }

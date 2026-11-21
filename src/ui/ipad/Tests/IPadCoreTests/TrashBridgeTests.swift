@@ -225,4 +225,62 @@ import XCTest
         store.cancelConfirmation()
         XCTAssertNil(store.confirmation); XCTAssertTrue(flag.changed)
     }
+
+    // 产品保证：单条与批量废纸篓恢复前必须先提交共享待删槽，提交失败时中止恢复并提示原因，防止刚删记录误报时间段冲突。
+    func testRestoreAndBatchRestoreCommitPendingDeletionFirst() {
+        var commitOK = false
+        var commitCalls = 0
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(4), item(9)]
+        let store = TrashStore(bridge: bridge, commitPending: { commitCalls += 1; return commitOK })
+        store.activate()
+        store.requestRestore(item(4)); store.confirmRestore()
+        XCTAssertEqual(commitCalls, 1)
+        XCTAssertEqual(store.actionError, "待删项提交失败，请重试")
+        XCTAssertFalse(bridge.calls.contains { $0.0 == "restore" })
+
+        store.beginSelection(); store.toggleSelectAll()
+        store.restoreSelection()
+        XCTAssertEqual(commitCalls, 2)
+        XCTAssertEqual(store.actionError, "待删项提交失败，请重试")
+        XCTAssertTrue(store.selecting)
+        XCTAssertFalse(bridge.calls.contains { $0.0 == "restore" })
+
+        commitOK = true
+        store.restoreSelection()
+        XCTAssertEqual(commitCalls, 3)
+        XCTAssertEqual(bridge.calls.filter { $0.0 == "restore" }.count, 2)
+        XCTAssertFalse(store.selecting)
+    }
+
+    // 产品保证：单条彻底删除在桥接层抛出异常时，原样保留失败原因且不把条目假装移除。
+    func testSingleDeletePropagatesThrownBridgeError() {
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(4)]
+        let store = TrashStore(bridge: bridge); store.activate()
+        XCTAssertEqual(store.items.map(\.id), [4])
+        bridge.actionError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "彻底删除抛错：磁盘故障"])
+        store.requestDelete(item(4))
+        store.confirmDelete()
+        XCTAssertEqual(store.actionError, "彻底删除抛错：磁盘故障")
+        XCTAssertEqual(store.items.map(\.id), [4])
+    }
+
+    // 产品保证：批量彻底删除遇到 gone（条目已被他端删除）时刷新列表；恢复保护期 purgeExpired 静默返回 0 时进页仍正常加载列表且无误报错误。
+    func testBatchDeleteGoneReloadsItemsAndBlockedPurgeStillLoadsTrash() {
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(9), item(4)]
+        let store = TrashStore(bridge: bridge); store.activate()
+        XCTAssertEqual(store.actionError, "")
+        XCTAssertEqual(store.items.map(\.id), [9, 4])
+
+        store.beginSelection(); store.toggleSelectAll(); store.requestDeleteSelection()
+        bridge.actionResult = TrashActionResult(error: "部分条目已被另一台设备删除", code: "gone")
+        bridge.result.items = [item(12)]
+        store.confirmDeleteSelection()
+        XCTAssertEqual(store.actionError, "部分条目已被另一台设备删除")
+        XCTAssertEqual(store.items.map(\.id), [12])
+
+        store.prepareForRestore()
+        XCTAssertFalse(store.selecting)
+        XCTAssertNil(store.confirmation)
+        XCTAssertEqual(store.actionError, "")
+    }
 }

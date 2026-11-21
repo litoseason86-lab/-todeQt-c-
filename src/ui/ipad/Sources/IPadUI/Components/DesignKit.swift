@@ -303,6 +303,7 @@ struct SheetChrome: ViewModifier {
             .scrollContentBackground(.hidden)
             .presentationBackground(ThemeColors.sheetBackground)
             .background { ThemeAppearance(themeID: previewThemeID ?? shell.selectedTheme ?? "").frame(width: 0, height: 0) }
+            .disabled(shell.operationBlocksUI)
     }
 }
 extension View {
@@ -321,6 +322,14 @@ private struct ShellSelectionObserver: ViewModifier {
 extension View {
     func onShellSelectionChange(_ shell: ShellStore, perform action: @escaping (PageID) -> Void) -> some View {
         modifier(ShellSelectionObserver(shell: shell, action: action))
+    }
+    // 只在允许拖动时挂载 .onDrag；多选、已完成分组或停留态不挂，避免返回空 NSItemProvider 仍拉起系统空拖影。
+    @ViewBuilder func conditionalDrag(enabled: Bool, _ provider: @escaping () -> NSItemProvider) -> some View {
+        if enabled {
+            self.onDrag(provider)
+        } else {
+            self
+        }
     }
 }
 

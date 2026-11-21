@@ -36,6 +36,8 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
     @ObservationIgnored private let interactions: any InteractionBridgeProtocol
     @ObservationIgnored private let weekDates: (String) throws -> [String]
     @ObservationIgnored private let weekStartProvider: (() throws -> String)?
+    @ObservationIgnored private weak var inlineEditor: InlineTaskEditor?
+    @ObservationIgnored private var active = false
     @ObservationIgnored private var refreshPending = false
     @ObservationIgnored private var dragToken: InteractionToken?
     @ObservationIgnored private var dragSessionID: UUID?
@@ -44,26 +46,47 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
     public init(tasks: any TaskBridgeProtocol, logicalDay: any LogicalDayBridgeProtocol,
                 pendingDeletion: PendingDeletionStore, interactions: any InteractionBridgeProtocol,
                 weekStart: String, weekDates: @escaping (String) throws -> [String],
-                weekStartProvider: (() throws -> String)? = nil) {
+                weekStartProvider: (() throws -> String)? = nil,
+                inlineEditor: InlineTaskEditor? = nil) {
         self.tasks = tasks; self.logicalDay = logicalDay; self.pendingDeletion = pendingDeletion
         self.interactions = interactions; self.weekStart = weekStart; logicalToday = logicalDay.today
-        self.weekDates = weekDates; self.weekStartProvider = weekStartProvider
-        logicalDay.onChanged = { [weak self] in self?.refresh() }
-        tasks.onChanged = { [weak self] in self?.refresh() }
+        self.weekDates = weekDates; self.weekStartProvider = weekStartProvider; self.inlineEditor = inlineEditor
+        logicalDay.onChanged = { [weak self] in
+            guard let self, self.active else { return }
+            self.refresh()
+        }
+        tasks.onChanged = { [weak self] in
+            guard let self, self.active else { return }
+            self.refresh()
+        }
         // 共用交互协调器冻结所有任务入口；最后一个令牌结束后只补一次读取。
         interactions.onChanged = { [weak self] in
-            guard let self, !self.interactions.refreshBlocked, self.refreshPending else { return }
+            guard let self, self.active, !self.interactions.refreshBlocked, self.refreshPending else { return }
             self.refresh()
         }
         observePendingDeletion()
-        refresh()
+    }
+
+    public func setActive(_ value: Bool) {
+        guard active != value else { return }
+        active = value
+        if value { refresh() }
+        else { refreshPending = false; cancelDrag(); endReschedule(); endSelection() }
+    }
+    public func prepareForRestore() {
+        refreshPending = false
+        cancelDrag()
+        endReschedule()
+        endSelection()
+        cursorTaskID = -1
+        shownWeekStart = nil
     }
 
     private func observePendingDeletion() {
         // Observation 的追踪是一次性的；变化回调发生在赋值前，排到主队列后读新槽并重新登记。
         withObservationTracking { _ = pendingDeletion.state } onChange: { [weak self] in
             Task { @MainActor in
-                self?.refresh()
+                if self?.active == true { self?.refresh() }
                 self?.observePendingDeletion()
             }
         }
@@ -108,6 +131,8 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
     public private(set) var showsCurrentWeek = true
     public func shiftWeek(_ delta: Int) {
         guard delta != 0 else { return }
+        // 翻周前先结束行内编辑并释放交互令牌，防止列表刷新被冻结而 showsCurrentWeek 被提前改乱。
+        _ = inlineEditor?.finish()
         endSelection()
         do {
             let period = try logicalDay.period(anchor: weekStart, range: "week", shift: delta, logicalToday: logicalDay.today)
@@ -126,7 +151,8 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
     public func isToday(_ date: String) -> Bool { date == logicalToday }
 
     public func beginSelection() {
-        // 先释放拖动和改期令牌，让被冻结的最新周列表补读后再进入多选。
+        // 先结束行内编辑并释放拖动和改期令牌，让被冻结的最新周列表补读后再进入多选。
+        _ = inlineEditor?.finish()
         cancelDrag(); endReschedule(); selecting = true; selection = []
     }
     public func endSelection() { selecting = false; selection = [] }
@@ -211,6 +237,7 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
         actions.openFocus(id: selected.id, title: selected.title); return true
     }
     public func beginReschedule(id: Int) -> TaskValue? {
+        _ = inlineEditor?.finish()
         guard rescheduleToken == nil else { return nil }
         do {
             let registration = try interactions.beginEdit(id: id, source: "ipad.week.reschedule")
@@ -224,6 +251,7 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
         let registration = rescheduleToken; rescheduleToken = nil; registration?.end()
     }
     public func beginDrag(id: Int) -> UUID? {
+        _ = inlineEditor?.finish()
         guard dragToken == nil, task(id: id) != nil else { return nil }
         do {
             dragToken = try interactions.beginDrag(id: id, source: "ipad.week.drag")

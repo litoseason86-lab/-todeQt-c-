@@ -1,4 +1,6 @@
 #import "../src/platform/ios/bridge/PTShellBridge.h"
+#import "../src/platform/ios/bridge/PTSettingsBridge.h"
+#import "../src/platform/ios/bridge/PTRoutineBridge.h"
 #import "../src/platform/ios/bridge/PTLifecycleBridge.h"
 #include <QCoreApplication>
 #import "../src/platform/ios/bridge/PTTaskBridge.h"
@@ -19,6 +21,7 @@
 #include "../src/services/FocusTimer.h"
 #include "../src/services/KnowledgeGapService.h"
 #include "../src/services/LogicalDay.h"
+#include "../src/services/RoutineManager.h"
 #include "../src/services/TaskManager.h"
 #include "../src/services/PendingDeletion.h"
 #include "../src/services/FocusHistoryService.h"
@@ -74,6 +77,7 @@ private slots:
     void bothUIEntrancesWriteTheSameLocalKey();
     void timerSnapshotDoesNotQueryStatistics();
     void operationStateDoesNotRequireOpenDatabase();
+    void selectThemeAndMaterializeTodayClaimFailuresWithoutLeaking();
 private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
@@ -246,15 +250,15 @@ void PTShellBridgeTests::closedDatabaseReturnsAnError()
         QVERIFY(snapshot.error.length > 0);
     }
 }
-// 产品保证：生命周期保存回调同步执行，调用返回前草稿已保存，未登记时可安全调用。
+// 产品保证：生命周期桥同步保存草稿并传回失败，尚未挂载原生界面时允许继续。
 void PTShellBridgeTests::lifecycleFlushIsSynchronous()
 {
     __block int calls = 0;
-    PTLifecycleBridge.flushHandler = ^{ ++calls; };
-    [PTLifecycleBridge flush];
+    PTLifecycleBridge.flushHandler = ^BOOL { ++calls; return NO; };
+    QVERIFY(![PTLifecycleBridge flush]);
     QCOMPARE(calls, 1);
     PTLifecycleBridge.flushHandler = nil;
-    [PTLifecycleBridge flush];
+    QVERIFY([PTLifecycleBridge flush]);
     QCOMPARE(calls, 1);
 }
 // 产品保证：外壳 tick 的刷新路径可计量，基准不靠耗时阈值判断正确性。
@@ -998,6 +1002,80 @@ void PTShellBridgeTests::operationStateDoesNotRequireOpenDatabase()
         QCOMPARE(QString::fromNSString(released.operationText), service->operationText());
         QVERIFY(!DatabaseManager::instance()->isOpen());
         QCOMPARE(failures, 0);
+    }
+}
+
+void PTShellBridgeTests::selectThemeAndMaterializeTodayClaimFailuresWithoutLeaking()
+{
+    // 产品保证：主题切换写失败只通过返回值与 NSError 报告而不触发设置桥接旁路报错，今日例行展开失败由栈式收集器统一收敛到单一外壳出口。
+    @autoreleasepool {
+        auto *appSettings = AppSettings::instance();
+        appSettings->setBackgroundTheme(QStringLiteral("warm"));
+        QCOMPARE(appSettings->backgroundTheme(), QStringLiteral("warm"));
+
+        QTemporaryDir blocked;
+        QVERIFY(blocked.isValid());
+        QFile blocker(blocked.filePath(QStringLiteral("PomodoroTodoTests")));
+        QVERIFY(blocker.open(QIODevice::WriteOnly));
+        blocker.close();
+        const auto restorePrefs = qScopeGuard([this, appSettings] {
+            QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+            appSettings->reload();
+        });
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, blocked.path());
+        appSettings->reload();
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+
+        PTShellBridge *shell = [PTShellBridge new];
+        PTSettingsBridge *settingsBridge = [PTSettingsBridge new];
+        __block int shellFailures = 0;
+        __block int settingsWriteFailures = 0;
+        shell.onFailure = ^(NSString *) { ++shellFailures; };
+        settingsBridge.onWriteFailed = ^(NSString *, NSString *) { ++settingsWriteFailures; };
+
+        NSError *error = nil;
+        QVERIFY([shell setAppearance:@"light" error:&error]);
+        const BOOL themeSaved = [shell selectTheme:@"starry" error:&error];
+        QVERIFY(!themeSaved);
+        QVERIFY(error != nil);
+        QCOMPARE(settingsWriteFailures, 0);
+        QCOMPARE(shellFailures, 0);
+
+        // 即使没有任何 PTSettingsBridge 存活，PTShellBridge 自身也能独立认领 settingsWriteFailed 并通过 NSError 返回。
+        // 第一次写失败后 AppSettings 会按当前全局路径重建后端，需再次将服务后端切回不可写目录以复现独立写失败。
+        settingsBridge = nil;
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, blocked.path());
+        appSettings->reload();
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+        error = nil;
+        QVERIFY(![shell selectTheme:@"moon" error:&error]);
+        QVERIFY(error != nil);
+        QVERIFY(error.localizedDescription.length > 0);
+        QCOMPARE(shellFailures, 0);
+
+        // 默认初始化的 PTSettingsSnapshot 保证所有字符串与数组非 nil。
+        PTSettingsSnapshot *emptySnapshot = [PTSettingsSnapshot new];
+        QVERIFY(emptySnapshot.backgroundTheme != nil);
+        QVERIFY(emptySnapshot.sidebarOrder != nil);
+
+        // 第二部分：materializeToday 失败不应使多个 PTRoutineBridge 同时弹出重复失败，只归集到唯一外壳出口。
+        PTRoutineBridge *caller = [PTRoutineBridge new];
+        PTRoutineBridge *observer = [PTRoutineBridge new];
+        __block int callerFailures = 0;
+        __block int observerFailures = 0;
+        caller.onFailure = ^(NSString *) { ++callerFailures; };
+        observer.onFailure = ^(NSString *) { ++observerFailures; };
+
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral("ALTER TABLE routines RENAME TO routines_unavailable")));
+        const auto restoreRoutines = qScopeGuard([&query] {
+            query.exec(QStringLiteral("ALTER TABLE routines_unavailable RENAME TO routines"));
+        });
+
+        QCOMPARE([caller materializeToday], NSInteger(0));
+        QCOMPARE(callerFailures, 0);
+        QCOMPARE(observerFailures, 0);
+        QCOMPARE(shellFailures, 1);
     }
 }
 

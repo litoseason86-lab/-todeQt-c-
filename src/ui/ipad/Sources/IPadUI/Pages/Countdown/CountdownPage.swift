@@ -20,7 +20,14 @@ import SwiftUI
                     }
                     if let main = store.primary {
                         Button { store.requestEdit(main) } label: { primaryCard(main, wide: wide) }
-                            .popover(isPresented: editPresented(main)) { CountdownSheet(store: store, opened: main) }
+                            // 仅在编辑当前目标时按需挂载浮层锚点，避免次要目标列表每行常驻 popover。
+                            .overlay {
+                                if isEditing(main) {
+                                    Color.clear
+                                        .popover(isPresented: editPresented(main)) { CountdownSheet(store: store, opened: main) }
+                                        .allowsHitTesting(false)
+                                }
+                            }
                             .buttonStyle(.plain).contextMenu { goalMenu(main) }
                             .accessibilityElement(children: .combine)
                     }
@@ -39,7 +46,13 @@ import SwiftUI
                                     }
                                     .padding(.horizontal, 20).frame(minHeight: 68).contentShape(Rectangle())
                                 }
-                                .popover(isPresented: editPresented(goal)) { CountdownSheet(store: store, opened: goal) }
+                                .overlay {
+                                    if isEditing(goal) {
+                                        Color.clear
+                                            .popover(isPresented: editPresented(goal)) { CountdownSheet(store: store, opened: goal) }
+                                            .allowsHitTesting(false)
+                                    }
+                                }
                                 .buttonStyle(.plain).contextMenu { goalMenu(goal) }
                                 .accessibilityElement(children: .combine)
                             }
@@ -66,9 +79,13 @@ import SwiftUI
     }
 
     // 新增与编辑都从点的那一处弹出浮层（10-12 对齐提醒事项，浮层不走表单的背景缩放）；窄窗系统改成整页表单。
+    private func isEditing(_ goal: CountdownValue) -> Bool {
+        if case .edit(let opened) = store.form { return opened.id == goal.id }
+        return false
+    }
     private func editPresented(_ goal: CountdownValue) -> Binding<Bool> {
-        Binding(get: { if case .edit(let opened) = store.form { return opened.id == goal.id }; return false },
-                set: { if !$0, case .edit(let opened) = store.form, opened.id == goal.id { store.dismissForm() } })
+        Binding(get: { isEditing(goal) },
+                set: { if !$0, isEditing(goal) { store.dismissForm() } })
     }
 
     // 定稿主目标卡：左边「主目标」、名称与日期，右边「还有 72 天」（数字 72 号焦糖）；过期写「已过 N 天」。
@@ -146,6 +163,8 @@ import SwiftUI
                 }
             }
         }
+        .tint(ThemeColors.accentInk)
         .frame(idealWidth: 400, idealHeight: 300)
+        .presentationDetents([.large])
     }
 }

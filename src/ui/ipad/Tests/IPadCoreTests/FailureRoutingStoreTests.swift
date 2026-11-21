@@ -66,6 +66,7 @@ import XCTest
         let tasks = TaskBridgeFake(), statistics = StatisticsBridgeFake(), shell = shell(), day = LogicalDayBridgeFake()
         let store = TimelineStore(history: FocusHistoryBridgeFake(), statistics: statistics,
                                   pendingDeletion: pending(tasks, shell), logicalDay: day, date: day.today)
+        store.setActive(true)
         XCTAssertEqual(store.error, "")
         statistics.onFailure?("后台统计失败")
         XCTAssertEqual(store.error, "")

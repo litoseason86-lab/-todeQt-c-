@@ -23,9 +23,9 @@ public enum CountdownForm: Equatable, Identifiable {
     @ObservationIgnored private let bridge: any CountdownBridging
     @ObservationIgnored private let logicalDay: any LogicalDayBridgeProtocol
     @ObservationIgnored private weak var shell: ShellStore?
-    private var active = false
-    private var reading = false
-    private var writing = false
+    @ObservationIgnored private var active = false
+    @ObservationIgnored private var reading = false
+    @ObservationIgnored private var writing = false
     public init(bridge: any CountdownBridging, logicalDay: any LogicalDayBridgeProtocol, shell: ShellStore? = nil) {
         self.bridge = bridge; self.logicalDay = logicalDay; self.shell = shell
         // 模型重载和主目标信号可能同步交错；刷新期间不重入，失败保留最后一次完整结果。
@@ -37,12 +37,14 @@ public enum CountdownForm: Equatable, Identifiable {
     public var secondary: [CountdownValue] { items.filter { $0.id != primary?.id } }
     public var logicalToday: String { logicalDay.today }
     public func setActive(_ value: Bool) { active = value; if value { refresh() } }
+    public func prepareForRestore() { form = nil; errorMessage = ""; lastNotice = "" }
     public func logicalDayChanged() { if active { refresh() } }
     public func refresh() {
         guard !reading && !writing else { return }; reading = true; defer { reading = false }
         do {
-            let rows = try bridge.goals(); let main = try bridge.primaryGoal()
-            items = rows; primary = main; errorMessage = ""
+            // 服务模型第一项即主目标；只读一次 goals()，避免 PTCountdownBridge.primaryGoal 重复触发整表 reload。
+            let rows = try bridge.goals()
+            items = rows; primary = rows.first; errorMessage = ""
         } catch { errorMessage = error.localizedDescription }
     }
     @discardableResult private func perform(_ action: () throws -> Void) -> Bool {

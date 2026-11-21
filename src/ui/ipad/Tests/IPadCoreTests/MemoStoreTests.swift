@@ -202,4 +202,75 @@ import XCTest
         XCTAssertEqual(bridge.creates.last?.2, 7)
     }
 
+    // 产品保证：恢复备份换库前必须清空旧库备忘选中项、未保存脏草稿与挂起冲刷回调，防止新库同主键记录被旧草稿跨库覆盖。
+    func testPrepareForRestoreClearsDirtyDraftPreventingCrossDatabaseOverwrite() {
+        let bridge = MemoFake(); bridge.rows = [memo(5, category: 1, title: "旧标题", body: "旧正文")]
+        let shell = ShellStore(bridge: ShellBridgeFake())
+        let store = MemoStore(bridge: bridge, categories: CategoryBridgeFake(), shell: shell)
+        store.setActive(true)
+        XCTAssertTrue(store.presentMemo(5))
+        store.editBody("旧库未落盘脏草稿")
+        bridge.writeError = failure
+        store.setActive(false)
+        XCTAssertTrue(store.dirty)
+        XCTAssertEqual(store.selectedID, 5)
+        XCTAssertFalse(store.errorMessage.isEmpty)
+
+        // 模拟备份恢复开始并切入也含 id=5 的新库。
+        store.prepareForRestore()
+        bridge.writeError = nil
+        bridge.rows = [memo(5, category: 0, title: "新库标题", body: "新库正文")]
+        XCTAssertTrue(shell.flushEdits())
+        XCTAssertTrue(bridge.updates.isEmpty)
+
+        store.setActive(true)
+        XCTAssertFalse(store.dirty)
+        XCTAssertEqual(store.editorTitle, "新库标题")
+        XCTAssertEqual(store.editorBody, "新库正文")
+        XCTAssertTrue(store.flush())
+        XCTAssertTrue(bridge.updates.isEmpty)
+        XCTAssertEqual(bridge.rows.first?.body, "新库正文")
+    }
+
+    // 产品保证：备忘录存在超长或保存失败的脏草稿时，外壳同步冲刷返回 false，阻止备份、恢复或加入同步在丢改动状态下继续。
+    func testShellFlushEditsReturnsFalseWhenMemoDraftFailsValidationOrWrite() {
+        let bridge = MemoFake(); bridge.rows = [memo(1, body: "原文")]
+        let shell = ShellStore(bridge: ShellBridgeFake())
+        let store = MemoStore(bridge: bridge, categories: CategoryBridgeFake(), shell: shell)
+        store.setActive(true)
+        store.editBody(String(repeating: "超", count: 10001))
+        store.setActive(false)
+        XCTAssertTrue(store.dirty)
+        XCTAssertFalse(shell.flushEdits())
+        store.setActive(true)
+        store.editBody("合法修改")
+        XCTAssertTrue(shell.flushEdits())
+        XCTAssertEqual(bridge.updates.last?.1.body, "合法修改")
+    }
+
+    // 产品保证：分钟级显示时钟推进（tickDisplayClock）仅在活跃态更新 displayNow，不触发数据库重查，也不打断进行中的拖拽会话；仅多条正常列表允许拖拽排序。
+    func testTickDisplayClockUpdatesOnlyWhenActiveWithoutQueryingOrCancellingDrag() {
+        let (store, bridge, _) = setup()
+        XCTAssertTrue(store.canReorder)
+        XCTAssertTrue(store.beginDrag(2))
+        XCTAssertEqual(store.draggingID, 2)
+        let readsBefore = bridge.calls.filter { $0 == "read" }.count
+        let nextTime = Date(timeIntervalSince1970: 1_800_000_000)
+        store.tickDisplayClock(now: nextTime)
+        XCTAssertEqual(store.displayNow, nextTime)
+        XCTAssertEqual(bridge.calls.filter { $0 == "read" }.count, readsBefore)
+        XCTAssertEqual(store.draggingID, 2)
+
+        store.cancelDrag()
+        store.setActive(false)
+        let laterTime = Date(timeIntervalSince1970: 1_800_000_600)
+        store.tickDisplayClock(now: laterTime)
+        XCTAssertEqual(store.displayNow, nextTime)
+
+        store.setActive(true)
+        XCTAssertTrue(store.selectFilter(2))
+        XCTAssertEqual(store.visibleItems.count, 1)
+        XCTAssertFalse(store.canReorder)
+    }
+
 }

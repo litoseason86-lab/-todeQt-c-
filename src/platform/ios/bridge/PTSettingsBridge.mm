@@ -11,6 +11,16 @@ using namespace PTBridgeSupport;
 - (instancetype)initWithSettings:(AppSettings *)settings;
 @end
 @implementation PTSettingsSnapshot
+- (instancetype)init {
+    if ((self = [super init])) {
+        _rolloverIgnoredDate = @"";
+        _backgroundTheme = @"";
+        _nickname = @"";
+        _sidebarOrder = @[];
+        _semesterStartDate = @"";
+        _scheduleDisplayMode = @"";
+    } return self;
+}
 - (instancetype)initWithSettings:(AppSettings *)settings {
     if ((self = [super init])) {
         _lastMode = settings->lastMode();
@@ -91,7 +101,9 @@ using namespace PTBridgeSupport;
     } return self;
 }
 - (PTSettingsSnapshot *)snapshot {
-    NSAssert(NSThread.isMainThread, @"设置读取必须在主线程"); NSAssert(_settings, @"设置服务已释放");
+    NSAssert(NSThread.isMainThread, @"设置读取必须在主线程");
+    // 登记或注入的设置对象已销毁时返回空快照，避免 Release 解引用空指针崩溃。
+    if (!_settings) return [PTSettingsSnapshot new];
     return [[PTSettingsSnapshot alloc] initWithSettings:_settings.data()];
 }
 - (BOOL)setLastMode:(NSInteger)value error:(NSError **)error {

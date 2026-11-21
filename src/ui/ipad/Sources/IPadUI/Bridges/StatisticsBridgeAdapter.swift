@@ -19,6 +19,8 @@ import PTBridge
         result.completionRate = item.completionRate
         result.sessionCount = item.sessionCount
         result.pomodoroCount = item.pomodoroCount
+        result.goalMinutes = item.goalMinutes
+        result.goalProgressPercent = item.goalProgressPercent
         return result
     }
     private func value(_ item: PTMonthStatistics) -> MonthStatistics {

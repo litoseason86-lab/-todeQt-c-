@@ -20,6 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (PTCategoryResult *)category:(NSInteger)categoryId;
 - (NSInteger)addCategory:(NSString *)name color:(NSString *)color error:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (BOOL)updateCategory:(NSInteger)categoryId name:(NSString *)name color:(NSString *)color error:(NSError **)error;
+- (BOOL)updateCategory:(NSInteger)categoryId changes:(NSDictionary *)changes error:(NSError **)error;
 - (BOOL)deleteCategory:(NSInteger)categoryId error:(NSError **)error;
 - (BOOL)canDeleteCategory:(NSInteger)categoryId;
 - (BOOL)nameExists:(NSString *)name excluding:(NSInteger)categoryId;

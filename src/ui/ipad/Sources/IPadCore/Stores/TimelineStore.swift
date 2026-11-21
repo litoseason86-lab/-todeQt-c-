@@ -45,7 +45,6 @@ public struct SessionEditorDraft: Equatable, Sendable {
     public private(set) var isFutureDate: Bool
     public private(set) var totalSeconds = 0
     public private(set) var statistics = DayStatistics()
-    public private(set) var taskOptions: [SessionTaskOption] = []
     public private(set) var error = ""
     public private(set) var relationAvailable = true
     public private(set) var categoryStatistics = CategoryStatistics()
@@ -76,6 +75,14 @@ public struct SessionEditorDraft: Equatable, Sendable {
         do { editorTaskOptions = try taskOptions(original: editorOriginal); editorOptionsLoaded = true; editorError = "" }
         catch { editorError = error.localizedDescription }
     }
+    public func prepareForRestore() {
+        editorDraft = nil
+        editorOriginal = nil
+        manualAddPresented = false
+        editorError = ""
+        editorOptionsLoaded = false
+        editorTaskOptions = []
+    }
 
     @ObservationIgnored private let history: any FocusHistoryBridgeProtocol
     @ObservationIgnored private let statisticsBridge: any StatisticsBridgeProtocol
@@ -83,6 +90,10 @@ public struct SessionEditorDraft: Equatable, Sendable {
     @ObservationIgnored private let logicalDay: any LogicalDayBridgeProtocol
     @ObservationIgnored private let focus: (any FocusBridgeProtocol)?
     @ObservationIgnored private var selectedRelation: DateRelation = .same
+    @ObservationIgnored private var active = false
+    @ObservationIgnored private var writing = false
+    @ObservationIgnored private var hasInitialRelation = false
+    @ObservationIgnored private var needsDayCheck = false
     public var canAddManualSession: Bool { relationAvailable && !isFutureDate }
     // 副标题「· 今天」只认服务的日期关系，不用设备日期比较。
     public var isSelectedToday: Bool { relationAvailable && selectedRelation == .same }
@@ -96,18 +107,35 @@ public struct SessionEditorDraft: Equatable, Sendable {
         self.history = history; statisticsBridge = statistics; self.pendingDeletion = pendingDeletion
         self.logicalDay = logicalDay; self.focus = focus; selectedDate = date
         isFutureDate = false
-        do { selectedRelation = try logicalDay.relation(date, to: logicalDay.today); isFutureDate = selectedRelation == .later }
-        catch { isFutureDate = false; relationAvailable = false; self.error = error.localizedDescription }
-        history.onChanged = { [weak self] in self?.refresh() }
+        // 页面在前台时才响应变更查库，隐藏期间只记日界待更新标记。
+        history.onChanged = { [weak self] in
+            guard let self, self.active, !self.writing else { return }
+            self.refresh()
+        }
         // 对照 Mac 的 TodayFocusView：完成信号在记录保存后发出，因此专注/休息完成都要立即重读；另有 historyChanged 和回页刷新。
-        focus?.onFocusCompleted = { [weak self] _ in self?.refresh() }
-        focus?.onRestCompleted = { [weak self] in self?.refresh() }
-        logicalDay.onChanged = { [weak self] in self?.logicalDayChanged() }
+        focus?.onFocusCompleted = { [weak self] _ in if self?.active == true { self?.refresh() } }
+        focus?.onRestCompleted = { [weak self] in if self?.active == true { self?.refresh() } }
+        logicalDay.onChanged = { [weak self] in
+            guard let self else { return }
+            if self.active { self.logicalDayChanged() } else { self.needsDayCheck = true }
+        }
         // 后台统计失败由外壳提示，时间轴自己的读取失败继续由 refresh 承接。
         statistics.onFailure = nil
-        refresh()
+    }
+    public func setActive(_ value: Bool) {
+        guard active != value else { return }
+        active = value
+        guard value else { return }
+        if needsDayCheck || !hasInitialRelation {
+            needsDayCheck = false
+            hasInitialRelation = true
+            logicalDayChanged()
+        } else {
+            refresh()
+        }
     }
     public func selectDate(_ date: String) {
+        hasInitialRelation = true; needsDayCheck = false
         do {
             selectedRelation = try logicalDay.relation(date, to: logicalDay.today)
             isFutureDate = selectedRelation == .later
@@ -119,8 +147,14 @@ public struct SessionEditorDraft: Equatable, Sendable {
         selectDate(date)
     }
     public func pageAppeared(shell: ShellStore) {
-        if shell.requestedFocusDate != nil { selectRequestedDate(from: shell) }
-        else { refresh() }
+        if shell.requestedFocusDate != nil {
+            active = true; hasInitialRelation = true; needsDayCheck = false
+            selectRequestedDate(from: shell)
+        } else if !active {
+            setActive(true)
+        } else {
+            refresh()
+        }
     }
     // 停在今日时随日界切到新的逻辑今日；正在查看历史日时保留所选日，只重新查询关系。
     public func logicalDayChanged() { selectDate(relationAvailable && selectedRelation == .same ? logicalDay.today : selectedDate) }
@@ -134,15 +168,16 @@ public struct SessionEditorDraft: Equatable, Sendable {
             let timeline = try history.dayTimeline(date: selectedDate)
             let total = try history.dayTotalDuration(date: selectedDate)
             let day = try statisticsBridge.dayStats(date: selectedDate)
-            let options = try history.taskOptions(date: selectedDate)
             let categories = try statisticsBridge.categoryStats(from: selectedDate, to: selectedDate)
-            sessions = timeline; totalSeconds = total; statistics = day; taskOptions = options; categoryStatistics = categories
+            // 任务候选只在打开补录/编辑表单时由 reloadEditorOptions 现查，不在每次切日刷新时全表扫描 tasks。
+            sessions = timeline; totalSeconds = total; statistics = day; categoryStatistics = categories
             if relationAvailable { error = "" }
         } catch { self.error = error.localizedDescription }
     }
     public func formatDuration(_ seconds: Int) -> String { history.formatDuration(seconds: seconds) }
     @discardableResult public func addManualSession(taskID: Int, startTime: String, durationMinutes: Int) -> Bool {
         guard canAddManualSession, pendingDeletion.commitIfNeeded() else { return false }
+        writing = true; defer { writing = false }
         do { _ = try history.addManualSession(taskID: taskID, startTime: startTime, durationMinutes: durationMinutes); refresh(); return true }
         catch { self.error = error.localizedDescription; return false }
     }
@@ -157,6 +192,7 @@ public struct SessionEditorDraft: Equatable, Sendable {
         }
         if draft.taskID != original.taskID && !draft.isRest { changes.task = draft.taskID > 0 ? .selected(draft.taskID) : SessionTaskChange.none }
         if draft.isRest != original.isRest { changes.isRest = draft.isRest }
+        writing = true; defer { writing = false }
         do {
             if original.isRest { try history.updateRestSession(id: original.id, changes: changes) }
             else { try history.updateSession(id: original.id, changes: changes) }

@@ -62,7 +62,7 @@ struct FocusView: View {
         }
         // 撤销条出现或收起：待删任务的选中项先收起，撤销后还回去。
         .onChange(of: core.pendingDeletion.pendingTaskID, initial: true) { _, _ in store.pendingDeletionChanged() }
-        .alert("结束当前计时并切换？", isPresented: .constant(store.switchPrompt != nil), presenting: store.switchPrompt) { prompt in
+        .alert("结束当前计时并切换？", isPresented: Binding(get: { store.switchPrompt != nil }, set: { if !$0 { store.cancelSwitch() } }), presenting: store.switchPrompt) { prompt in
             Button(prompt.confirmTitle) { store.confirmSwitch() }
             Button("继续当前计时", role: .cancel) { store.cancelSwitch() }
         } message: { prompt in
@@ -149,59 +149,9 @@ struct FocusView: View {
         }
     }
 
-    // 细线环：2 的底轨配 4 的进度弧。自由计时与主动休息是正计时，没有可消退的总量，只留底轨。
+    // 细线环独立成子视图：每秒跳字与进度变化只重算这一块，不带动外层 GeometryReader、工具栏和任务菜单每秒重建。
     private func clockArea(_ layout: FocusPageLayout) -> some View {
-        let countsUp = store.state == .free || store.state == .manualRest
-        let longText = store.primaryTimeText.count > 5
-        return FocusRingView(progress: countsUp ? 0 : store.ringProgress, tone: ringTone, dimmed: store.ringDimmed,
-                             reduceMotion: store.animationsReduced, lineWidth: 4, trackWidth: 2, glassFill: false,
-                             workColor: ThemeColors.accentInk, trackColor: ThemeColors.inkStrong.opacity(0.22)) {
-            VStack(spacing: layout.ring * 0.035) {
-                // 时:分:秒 比 分:秒 多三位，按直径换一档字号，两种写法都落在环内。
-                FocusClockText(text: store.primaryTimeText, size: layout.ring * (longText ? 0.15 : 0.23),
-                               slim: store.slimClockFont, color: timeColor)
-                if store.taskSelectorActive { modeMenu }
-                else {
-                    Text(store.ringStatusText).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
-                        .lineLimit(1).frame(height: 32)
-                }
-            }
-            .padding(layout.ring * 0.08)
-        }
-        .frame(width: layout.ring, height: layout.ring)
-    }
-    private var modeMenu: some View {
-        Menu {
-            ForEach([25, 45, 60], id: \.self) { minutes in
-                Button("番茄 · \(minutes) 分钟") { store.selectModePreset(minutes: minutes) }
-            }
-            if store.freeModeAvailable {
-                Button("自由计时") { store.selectModePreset(minutes: nil) }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Text(store.modeMenuTitle)
-                Image(systemName: "chevron.down").scaledSystemFont(size: 10, weight: .semibold)
-            }
-            .scaledSystemFont(size: 15, weight: .medium).foregroundStyle(ThemeColors.inkSoft)
-            .padding(.horizontal, 12).frame(height: 32)
-            .background(ThemeColors.accentInk.opacity(0.09), in: Capsule())
-        }
-        .accessibilityLabel("专注模式与时长，" + store.modeMenuTitle)
-    }
-    private var ringTone: FocusRingTone {
-        switch store.state {
-        case .workDone, .breakDone: .done
-        case .pomoBreak: .rest
-        default: .work
-        }
-    }
-    private var timeColor: Color {
-        switch store.state {
-        case .workDone, .breakDone: ThemeColors.successInk
-        case .pomoBreak: ThemeColors.focusBreakInk
-        default: store.ringDimmed ? ThemeColors.inkSoft : ThemeColors.inkStrong
-        }
+        FocusClockArea(store: store, layout: layout)
     }
 
     // 定稿：待机是玻璃胶囊「开始专注」；计时后是两枚细描边圆钮，不抢圆环的视线。
@@ -248,5 +198,66 @@ struct FocusView: View {
                 .opacity(enabled ? 1 : 0.45)
         }
         .buttonStyle(.plain).disabled(!enabled).accessibilityLabel(title)
+    }
+}
+
+// 细线环：2 的底轨配 4 的进度弧。自由计时与主动休息是正计时，没有可消退的总量，只留底轨。
+// 单独订阅计时秒数与环进度，隔离每秒刷新范围。
+private struct FocusClockArea: View {
+    let store: FocusStore
+    let layout: FocusPageLayout
+
+    var body: some View {
+        let countsUp = store.state == .free || store.state == .manualRest
+        let longText = store.primaryTimeText.count > 5
+        FocusRingView(progress: countsUp ? 0 : store.ringProgress, tone: ringTone, dimmed: store.ringDimmed,
+                      reduceMotion: store.animationsReduced, lineWidth: 4, trackWidth: 2, glassFill: false,
+                      workColor: ThemeColors.accentInk, trackColor: ThemeColors.inkStrong.opacity(0.22)) {
+            VStack(spacing: layout.ring * 0.035) {
+                // 时:分:秒 比 分:秒 多三位，按直径换一档字号，两种写法都落在环内。
+                FocusClockText(text: store.primaryTimeText, size: layout.ring * (longText ? 0.15 : 0.23),
+                               slim: store.slimClockFont, color: timeColor)
+                if store.taskSelectorActive { modeMenu }
+                else {
+                    Text(store.ringStatusText).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
+                        .lineLimit(1).frame(height: 32)
+                }
+            }
+            .padding(layout.ring * 0.08)
+        }
+        .frame(width: layout.ring, height: layout.ring)
+    }
+    private var modeMenu: some View {
+        Menu {
+            ForEach([25, 45, 60], id: \.self) { minutes in
+                Button("番茄 · \(minutes) 分钟") { store.selectModePreset(minutes: minutes) }
+            }
+            if store.freeModeAvailable {
+                Button("自由计时") { store.selectModePreset(minutes: nil) }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(store.modeMenuTitle)
+                Image(systemName: "chevron.down").scaledSystemFont(size: 10, weight: .semibold)
+            }
+            .scaledSystemFont(size: 15, weight: .medium).foregroundStyle(ThemeColors.inkSoft)
+            .padding(.horizontal, 12).frame(height: 32)
+            .background(ThemeColors.accentInk.opacity(0.09), in: Capsule())
+        }
+        .accessibilityLabel("专注模式与时长，" + store.modeMenuTitle)
+    }
+    private var ringTone: FocusRingTone {
+        switch store.state {
+        case .workDone, .breakDone: .done
+        case .pomoBreak: .rest
+        default: .work
+        }
+    }
+    private var timeColor: Color {
+        switch store.state {
+        case .workDone, .breakDone: ThemeColors.successInk
+        case .pomoBreak: ThemeColors.focusBreakInk
+        default: store.ringDimmed ? ThemeColors.inkSoft : ThemeColors.inkStrong
+        }
     }
 }

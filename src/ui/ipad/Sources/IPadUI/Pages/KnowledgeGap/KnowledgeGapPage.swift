@@ -31,7 +31,8 @@ import SwiftUI
                     ScrollView { detail(gap).padding(16) }
                         .modifier(PageBackground())
                         .navigationTitle("知识缺口")
-                        .onAppear { store.setActive(true) }.onDisappear { if shell.selection != .knowledgeGap { store.setActive(false) } }
+                        .onAppear { store.setActive(shell.selection == .knowledgeGap && !shell.searchShown) }
+                        .onDisappear { if shell.selection != .knowledgeGap || shell.searchShown { store.setActive(false) } }
                 }
             }
         }
@@ -54,12 +55,16 @@ import SwiftUI
             Button("删除", role: .destructive) { store.confirmDelete() }
             Button("取消", role: .cancel) { store.cancelDelete() }
         }
-        .onAppear { store.setActive(true) }
+        .onAppear { store.setActive(shell.selection == .knowledgeGap && !shell.searchShown) }
         .onDisappear {
-            // 内部推入详情仍是同一业务页面，不依赖父子 onAppear/onDisappear 的先后顺序停掉订阅。
-            if !store.detailPresented || shell.selection != .knowledgeGap { store.setActive(false) }
+            // 内部推入详情仍是同一业务页面，不依赖父子 onAppear/onDisappear 的先后顺序停掉订阅；打开搜索或切页时停用。
+            if !store.detailPresented || shell.selection != .knowledgeGap || shell.searchShown { store.setActive(false) }
         }
-        .onShellSelectionChange(shell) { page in store.setActive(page == .knowledgeGap) }
+        .onShellSelectionChange(shell) { page in store.setActive(page == .knowledgeGap && !shell.searchShown) }
+        .onChange(of: shell.searchShown) { _, shown in
+            if shown { store.setActive(false) }
+            else if shell.selection == .knowledgeGap { store.setActive(true) }
+        }
     }
 
     // 副标题：「5 条未解决 · 2 条到期」；到期数取外壳摘要（服务），已解决列表不写到期。
@@ -123,15 +128,20 @@ import SwiftUI
     private func detail(_ gap: GapValue) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(gap.title).scaledSystemFont(size: 26, weight: .bold).foregroundStyle(ThemeColors.inkStrong)
-            HStack(spacing: 8) {
-                tag {
-                    HStack(spacing: 6) {
-                        Circle().fill(TaskCategoryColor.value(gap.categoryColor)).frame(width: 7, height: 7)
-                        Text(gap.categoryName.isEmpty ? "未分类" : gap.categoryName)
+            // 窄窗或辅助大字号下一行放不下三枚胶囊时自动折为两行，避免挤压截断。
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    categoryTag(gap)
+                    priorityTag(gap)
+                    dueTag(gap)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    categoryTag(gap)
+                    HStack(spacing: 8) {
+                        priorityTag(gap)
+                        dueTag(gap)
                     }
                 }
-                tag { Text("优先级 " + priority(gap.priority)) }
-                tag { Text(dueText(gap)).fontWeight(gap.overdue || gap.dueToday ? .semibold : .regular).foregroundStyle(dueColor(gap)) }
             }
             if !store.errorMessage.isEmpty { errorRow }
             section("当时遇到了什么", gap.detail)
@@ -177,6 +187,20 @@ import SwiftUI
              if gap.status == 2 { store.reopen(gap) } else { store.requestForm(.resolve(gap)) }
          }),
          AnyView(action("编辑") { store.requestForm(.edit(gap)) })]
+    }
+    private func categoryTag(_ gap: GapValue) -> some View {
+        tag {
+            HStack(spacing: 6) {
+                Circle().fill(TaskCategoryColor.value(gap.categoryColor)).frame(width: 7, height: 7)
+                Text(gap.categoryName.isEmpty ? "未分类" : gap.categoryName).lineLimit(1)
+            }
+        }
+    }
+    private func priorityTag(_ gap: GapValue) -> some View {
+        tag { Text("优先级 " + priority(gap.priority)).lineLimit(1) }
+    }
+    private func dueTag(_ gap: GapValue) -> some View {
+        tag { Text(dueText(gap)).lineLimit(1).fontWeight(gap.overdue || gap.dueToday ? .semibold : .regular).foregroundStyle(dueColor(gap)) }
     }
     private func tag<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content().scaledSystemFont(size: 14).foregroundStyle(ThemeColors.ink)

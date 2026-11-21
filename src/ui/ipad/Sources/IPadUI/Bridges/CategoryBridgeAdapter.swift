@@ -18,9 +18,20 @@ import PTBridge
         }
     }
     func allCategories() throws -> [CategoryValue] { try values(native.allCategories()) }
-    func category(id: Int) throws -> CategoryValue { try values(native.category(id)).first! }
+    func category(id: Int) throws -> CategoryValue {
+        guard let first = try values(native.category(id)).first else {
+            throw NSError(domain: "PTBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "科目读取失败或已不存在"])
+        }
+        return first
+    }
     func add(name: String, color: String) throws -> Int { try native.addCategory(name, color: color) }
     func update(id: Int, name: String, color: String) throws { try native.updateCategory(id, name: name, color: color) }
+    func update(id: Int, changes: CategoryChanges) throws {
+        var payload: [String: String] = [:]
+        if let name = changes.name { payload["name"] = name }
+        if let color = changes.color { payload["color"] = color }
+        try native.updateCategory(id, changes: payload)
+    }
     func delete(id: Int) throws { try native.deleteCategory(id) }
     func canDelete(id: Int) -> Bool { native.canDeleteCategory(id) }
     func nameExists(_ name: String, excluding id: Int) -> Bool { native.nameExists(name, excluding: id) }

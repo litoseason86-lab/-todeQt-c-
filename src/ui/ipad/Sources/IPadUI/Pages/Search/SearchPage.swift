@@ -36,11 +36,9 @@ import SwiftUI
                         VStack(spacing: 0) {
                             if index > 0 { CardDivider() }
                             Button { detailTaskID = task.id } label: { taskRow(task) }.buttonStyle(.plain)
-                                .popover(isPresented: Binding(get: { detailTaskID == task.id },
-                                                              set: { if !$0 && detailTaskID == task.id { detailTaskID = nil } })) {
-                                    // 详情改过之后结果里的标题、科目要跟着变：浮层收起、详情自己的保存跑完后（下一轮）按当前关键词重搜。
-                                    TaskDetailSheet(taskID: task.id, core: core, shell: shell)
-                                        .onDisappear { Task { @MainActor in store.search() } }
+                                // 仅在选中行按需挂载浮层锚点；任务保存后 SearchStore 已订阅 taskBridge.onChanged 自动重搜。
+                                .overlay(alignment: .trailing) {
+                                    TaskDetailAnchor(taskID: task.id, detailTaskID: $detailTaskID, core: core, shell: shell)
                                 }
                         }
                         .cardRow(position(index, store.tasks.count))
@@ -69,6 +67,8 @@ import SwiftUI
         .toolbarTitleDisplayMode(.inline)
         .searchable(text: $store.query, prompt: "搜索任务和知识缺口")
         .onChange(of: store.query) { store.search() }
+        .onAppear { store.setActive(true) }
+        .onDisappear { store.setActive(false) }
     }
 
     private var subtitle: String {

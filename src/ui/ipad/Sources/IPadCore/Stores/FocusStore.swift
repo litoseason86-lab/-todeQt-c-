@@ -69,7 +69,6 @@ public struct ActiveFocusSession: Equatable, Sendable {
     public private(set) var justCompletedPhase = 0
     public var errorText = ""
     public private(set) var todayTasks: [TaskValue] = []
-    public private(set) var taskNotes = ""
     public var panelExpanded = false
     public private(set) var switchPrompt: FocusSwitchPrompt?
     public private(set) var longFree: LongFreePrompt?
@@ -330,7 +329,7 @@ public struct ActiveFocusSession: Equatable, Sendable {
         }
         taskBridge.onChanged = { [weak self] in
             guard let self else { return }
-            reconcileSelectedTask(); refreshTaskNotes()
+            reconcileSelectedTask()
             if pageActive { reloadTodayTasks() }
         }
     }
@@ -354,12 +353,11 @@ public struct ActiveFocusSession: Equatable, Sendable {
         pomodoroModeSelected = usesPomodoro
         if !usesPomodoro {
             selectedTaskID = s.currentTaskID; selectedTaskTitle = s.currentTaskTitle
-            refreshTaskNotes(); return
+            return
         }
         // 休息阶段没有任务编号，保留刚完成工作阶段的缓存供下一轮继续使用。
         if s.currentTaskID > 0 { selectedTaskID = s.currentTaskID }
         if !s.currentTaskTitle.isEmpty { selectedTaskTitle = s.currentTaskTitle }
-        refreshTaskNotes()
     }
     private func phaseCompleted(_ phase: Int) {
         refreshSnapshot()
@@ -383,16 +381,24 @@ public struct ActiveFocusSession: Equatable, Sendable {
         }
     }
     private func autoAdvanced(_ phase: Int) {
-        // 用户正盯着专注页时切换本身可见，不必再提示。
-        guard shell?.selection != .focus else { return }
+        // 只有用户正停在专注页（且未切到全局搜索）时切换本身可见，其余情况弹提示告知。
+        guard shell?.selection != .focus || shell?.searchShown == true else { return }
         shell?.showToast(phase == 1 ? "专注完成，已自动开始休息" : "休息结束，已自动开始下一个番茄")
     }
-    // 不同数据库可能复用任务编号；恢复开始即丢弃旧库选择、确认框及待续动作，不等换库后按编号刷新。
+    // 不同数据库可能复用任务编号；恢复开始即丢弃旧库选择、确认框、选择器、沉浸态及待续动作，不等换库后按编号刷新。
     public func prepareForRestore() {
         cancelAutoAdvance()
         justCompletedPhase = 0
+        errorText = ""
+        newTaskTitle = ""
+        panelExpanded = false
         clearSelectedTask()
         switchPrompt = nil
+        longFree = nil
+        taskSelectorPresented = false
+        shortcutOpenedSelector = false
+        immersiveActive = false
+        wakeControls()
     }
     public func cancelAutoAdvance() {
         cancelAutoAdvanceAction?(); cancelAutoAdvanceAction = nil; autoAdvancePhase = 0
@@ -426,19 +432,13 @@ public struct ActiveFocusSession: Equatable, Sendable {
         do { return try taskBridge.task(id: id).id == id }
         catch { return error.localizedDescription != "任务已不存在" }
     }
-    private func refreshTaskNotes() {
-        let id = snapshot.hasActiveSession ? snapshot.currentTaskID : selectedTaskID
-        taskNotes = id > 0 ? ((try? taskBridge.task(id: id))?.notes ?? "") : ""
-    }
     public func selectTask(id: Int, title: String) {
         selectedTaskID = id; selectedTaskTitle = title; errorText = ""
-        refreshTaskNotes()
     }
     public func clearSelectedTask() {
         selectedTaskID = -1; selectedTaskTitle = ""
         // 显式清空意味着撤销后也不该再把它还回来。
         heldSelection = nil
-        refreshTaskNotes()
     }
     // 待删任务：选中项先收起，撤销或删除失败后还回去；任务真删掉了就丢弃。
     public func pendingDeletionChanged() {
@@ -446,7 +446,7 @@ public struct ActiveFocusSession: Equatable, Sendable {
         if let held = heldSelection, held.id != pendingID {
             heldSelection = nil
             if selectedTaskID <= 0 && !snapshot.hasActiveSession && taskExists(held.id) {
-                selectedTaskID = held.id; selectedTaskTitle = held.title; refreshTaskNotes()
+                selectedTaskID = held.id; selectedTaskTitle = held.title
             }
         }
         if pendingID > 0 && selectedTaskID == pendingID && !snapshot.hasActiveSession {
@@ -474,7 +474,6 @@ public struct ActiveFocusSession: Equatable, Sendable {
         reloadTodayTasks()
         selectedTaskID = newID
         selectedTaskTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        refreshTaskNotes()
         return startCurrentMode()
     }
     @discardableResult public func startFromShortcut() -> Bool {
@@ -483,7 +482,6 @@ public struct ActiveFocusSession: Equatable, Sendable {
             openTaskSelector(); shortcutOpenedSelector = true; return false
         }
         selectedTaskID = candidate.id; selectedTaskTitle = candidate.title
-        refreshTaskNotes()
         return startCurrentMode()
     }
     // 仪表盘开始按钮沿用自动候选口径，但成功后留在仪表盘；没有候选时才把用户送到专注页选择。
@@ -493,7 +491,7 @@ public struct ActiveFocusSession: Equatable, Sendable {
         guard let candidate = autoStartCandidate() else {
             shell?.select(.focus); openTaskSelector(); return false
         }
-        selectedTaskID = candidate.id; selectedTaskTitle = candidate.title; refreshTaskNotes()
+        selectedTaskID = candidate.id; selectedTaskTitle = candidate.title
         return startCurrentMode()
     }
     // ⌘↩：计时中暂停或继续，空闲时切到专注页按当前模式开始；取不到任务就展开选择器并提示。
@@ -585,14 +583,14 @@ public struct ActiveFocusSession: Equatable, Sendable {
     }
     @discardableResult public func startPomodoro() -> Bool {
         cancelAutoAdvance()
-        justCompletedPhase = 0
         let taskID = selectedTaskID > 0 ? selectedTaskID : snapshot.currentTaskID
         let title = !selectedTaskTitle.isEmpty ? selectedTaskTitle : (!snapshot.currentTaskTitle.isEmpty ? snapshot.currentTaskTitle : "番茄专注")
         guard taskID > 0 else {
             errorText = "番茄专注启动失败"; return false
         }
         do { try focus.startPomodoro(taskID: taskID, title: title, seconds: selectedWorkMinutes * 60) }
-        catch { errorText = error.localizedDescription; return false }
+        catch { errorText = error.localizedDescription; return false } // 失败时保留完成态，用户仍可重试下一轮
+        justCompletedPhase = 0
         errorText = ""
         // 只在真正启动番茄后记忆模式；单纯切到番茄页不改变用户偏好。
         do { try settings.setLastMode(1) }
@@ -817,7 +815,7 @@ public struct ActiveFocusSession: Equatable, Sendable {
         }
         // 外部任务选择是新的明确意图，一次性替换模式和任务缓存。
         pomodoroModeSelected = true; selectedTaskID = taskID; selectedTaskTitle = safe
-        errorText = ""; justCompletedPhase = 0; refreshTaskNotes()
+        errorText = ""; justCompletedPhase = 0
         return true
     }
     @discardableResult private func enterFreeWithTask(_ taskID: Int, _ title: String) -> Bool {
@@ -827,7 +825,7 @@ public struct ActiveFocusSession: Equatable, Sendable {
         guard taskID > 0, !safe.isEmpty else { errorText = "自由专注任务无效，请重试"; return false }
         if snapshot.hasActiveSession || snapshot.phase != 0 { errorText = "已有计时进行中"; return false }
         pomodoroModeSelected = false; selectedTaskID = taskID; selectedTaskTitle = safe
-        errorText = ""; justCompletedPhase = 0; refreshTaskNotes()
+        errorText = ""; justCompletedPhase = 0
         return true
     }
     // 把任务和模式落到本页，调用前计时器必须已空闲。autoStart 为假时停在待机，番茄模式顺带展开时长面板。

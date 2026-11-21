@@ -47,18 +47,24 @@ import IPadCore
         conflictInputs.append([weekday, startMinutes, endMinutes, weekStart, weekEnd, parity, excluding])
         try read("conflicts"); return conflictValues
     }
-    func add(_ entry: ScheduleEntry) throws { additions.append(entry); try write("add") }
-    func update(id: Int, changes: ScheduleChanges) throws { updates.append((id, changes)); try write("update") }
-    func delete(id: Int) throws { deletions.append(id); try write("delete") }
+    func add(_ entry: ScheduleEntry) throws { additions.append(entry); try write("add"); onScheduleChanged?() }
+    func update(id: Int, changes: ScheduleChanges) throws { updates.append((id, changes)); try write("update"); onScheduleChanged?() }
+    func delete(id: Int) throws { deletions.append(id); try write("delete"); onScheduleChanged?() }
     func periods() throws -> [SchedulePeriod] { try read("periods"); return periodValues }
     func savePeriods(_ periods: [SchedulePeriod]) throws {
         savedPeriods.append(periods); try write("savePeriods")
         if savedPeriods.count > 1, let periodWriteErrorAfterFirst { throw periodWriteErrorAfterFirst }
         periodValues = periods
+        onPeriodsChanged?()
     }
     func settings() throws -> ScheduleSettings { try read("settings"); return settingsValue }
     func saveSettings(_ settings: ScheduleSettings) throws {
+        let old = settingsValue
         savedSettings.append(settings); try write("saveSettings"); if let settingsError { throw settingsError }; settingsValue = settings
+        if old.semesterStartDate != settings.semesterStartDate { onSemesterStartDateChanged?() }
+        if old.semesterWeeks != settings.semesterWeeks { onSemesterWeeksChanged?() }
+        if old.showWeekend != settings.showWeekend { onShowWeekendChanged?() }
+        onScheduleChanged?()
     }
     func mondayOf(date: String) -> String { calls.append("mondayOf"); return mondayValue }
     func parseSemesterStart(_ start: String) -> String { calls.append("parseSemesterStart"); return parsedStartValue }

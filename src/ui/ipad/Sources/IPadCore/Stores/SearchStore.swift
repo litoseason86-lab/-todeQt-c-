@@ -18,6 +18,8 @@ import Observation
     @ObservationIgnored private let gapBridge: any KnowledgeGapBridging
 
     @ObservationIgnored private let categoryBridge: (any CategoryBridgeProtocol)?
+    @ObservationIgnored private var active = false
+    @ObservationIgnored private var needsRefresh = false
 
     public init(tasks: any TaskBridgeProtocol, gaps: any KnowledgeGapBridging, pendingDeletion: PendingDeletionStore, categories: (any CategoryBridgeProtocol)? = nil) {
         self.pendingDeletion = pendingDeletion
@@ -29,10 +31,19 @@ import Observation
         gaps.onChanged = { [weak self] in self?.dataChanged() }
         categories?.onChanged = { [weak self] in self?.dataChanged() }
     }
-    // 还没搜过（或查询已清空）就不读。
-    private func dataChanged() { if searched { search() } }
+    public func setActive(_ value: Bool) {
+        guard active != value else { return }
+        active = value
+        if value && needsRefresh && searched { search() }
+    }
+    // 还没搜过（或查询已清空）就不读；搜索页隐藏时只记待刷新，避免后台每次改任务都跑两次全表模糊查。
+    private func dataChanged() {
+        guard searched else { return }
+        if active { search() } else { needsRefresh = true }
+    }
 
     public func search() {
+        needsRefresh = false
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             rawTasks = []; gaps = []; searched = false; errorMessage = ""

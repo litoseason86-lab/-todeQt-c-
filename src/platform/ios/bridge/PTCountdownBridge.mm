@@ -93,8 +93,11 @@ NSString *storedTime(const QVariant &value) {
     if (!value.isEmpty()) {
         // 主目标 map 的编号键是 goalId，列表角色是 id；在桥接统一，Swift 不处理这项差异。
         value.insert("id", value.take("goalId"));
-        const auto &goal = CountdownService::instance()->model()->goals().first();
-        value.insert("createdAt", goal.createdAt()); value.insert("updatedAt", goal.updatedAt());
+        const auto &goals = CountdownService::instance()->model()->goals();
+        if (!goals.isEmpty()) {
+            const auto &goal = goals.first();
+            value.insert("createdAt", goal.createdAt()); value.insert("updatedAt", goal.updatedAt());
+        }
     }
     return [[PTCountdownResult alloc] initWithRows:value.isEmpty() ? QVariantList{} : QVariantList{value} error:QString()];
 }

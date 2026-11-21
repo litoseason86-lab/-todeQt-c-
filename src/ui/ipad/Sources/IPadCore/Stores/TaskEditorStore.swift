@@ -27,7 +27,7 @@ import Observation
         self.categories = TaskCategoryStore(bridge: categories)
     }
     @discardableResult public func begin(id: Int) -> Bool {
-        guard !active, shell?.snapshot.operationBlocksUI == false else { return false }
+        guard !active, shell?.operationBlocksUI == false else { return false }
         do {
             let registration = try interactions.beginEdit(id: id, source: "ipad.task.detail")
             guard let latest = registration.task, latest.id == id else {
@@ -45,18 +45,21 @@ import Observation
     }
     public var changes: TaskChanges {
         guard let initialTask else { return TaskChanges() }
-        // nil 表示没改；显式空串、零分钟和 .none 才表示清空，避免覆盖同步来的其它字段。
+        // nil 表示没改；先修剪首尾空白再与基线比较，避免仅多敲空格制造无意义的写入与同步版本。
         var result = TaskChanges()
-        if title != initialTask.title { result.title = title.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedTitle != initialTask.title { result.title = trimmedTitle }
         if date != initialTask.date { result.date = date }
         if categoryID != initialCategoryID { result.category = categoryID > 0 ? .selected(categoryID) : TaskCategoryChange.none }
         if estimatedMinutes != initialTask.estimatedMinutes { result.estimatedMinutes = estimatedMinutes }
-        if notes != initialTask.notes { result.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines) }
-        if initialTask.completed && completionNote != initialTask.completionNote { result.completionNote = completionNote.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedNotes != initialTask.notes { result.notes = trimmedNotes }
+        let trimmedCompletion = completionNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        if initialTask.completed && trimmedCompletion != initialTask.completionNote { result.completionNote = trimmedCompletion }
         return result
     }
     @discardableResult public func save() -> Bool {
-        guard active, let initialTask, shell?.snapshot.operationBlocksUI == false else { return false }
+        guard active, let initialTask, shell?.operationBlocksUI == false else { return false }
         do {
             let changes = changes
             if changes != TaskChanges() { try tasks.update(id: initialTask.id, changes: changes) }

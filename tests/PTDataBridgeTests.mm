@@ -60,6 +60,7 @@ private slots:
     void synchronousExportPreservesReason_data();
     void synchronousExportPreservesReason();
     void manualPurgePreservesReasonAndAutomaticPurgeStaysQuiet();
+    void purgeExpiredRespectsAutoPurgeBlockedProvider();
     void initTestCase();
     void init();
     void cleanup();
@@ -194,7 +195,7 @@ void PTDataBridgeTests::syncBridgeDistinguishesEmptyAndDatabaseFailure() {
         PTBridgeSupport::registerService(QStringLiteral("syncController"), nullptr);
     }
 }
-// 产品保证：服务器方式属性与控制器一致，对应 C++ 信号逐次回调，错误配对码只产生问题不改方式。
+// 产品保证：服务器方式属性与控制器一致，方式变化和快照替换信号逐次回调，错误配对码只产生问题不改方式。
 void PTDataBridgeTests::syncBridgeExposesTransportPairingAndCallbacks()
 {
     @autoreleasepool {
@@ -203,8 +204,10 @@ void PTDataBridgeTests::syncBridgeExposesTransportPairingAndCallbacks()
         PTSyncBridge *bridge = [PTSyncBridge new];
         __block int transportChanges = 0;
         __block int switchingChanges = 0;
+        __block int replacements = 0;
         bridge.onTransportChanged = ^{ ++transportChanges; };
         bridge.onSwitchingTransportChanged = ^{ ++switchingChanges; };
+        bridge.onSnapshotReplaced = ^{ ++replacements; };
         QCOMPARE(QString::fromNSString(bridge.transport), controller.transport());
         QCOMPARE(QString::fromNSString(bridge.serverHost), controller.serverHost());
         QCOMPARE(bridge.switchingTransport, controller.isSwitchingTransport());
@@ -215,8 +218,11 @@ void PTDataBridgeTests::syncBridgeExposesTransportPairingAndCallbacks()
             &controller, "transportChanged", Qt::DirectConnection));
         QVERIFY(QMetaObject::invokeMethod(
             &controller, "switchingTransportChanged", Qt::DirectConnection));
+        QVERIFY(QMetaObject::invokeMethod(
+            &controller, "snapshotReplaced", Qt::DirectConnection));
         QCOMPARE(transportChanges, 1);
         QCOMPARE(switchingChanges, 1);
+        QCOMPARE(replacements, 1);
 
         NSError *error = nil;
         QVERIFY([bridge joinWithPairingCode:@"not-a-pairing-code" error:&error]);
@@ -231,7 +237,11 @@ void PTDataBridgeTests::syncBridgeExposesTransportPairingAndCallbacks()
         QCOMPARE(switchingChanges, changesBeforeClear + 1);
         [bridge clearTransportProblem];
         QCOMPARE(switchingChanges, changesBeforeClear + 1);
+        QVERIFY([bridge respondsToSelector:@selector(cancelTransportSwitch)]);
+        [bridge cancelTransportSwitch];
+        QVERIFY(!bridge.switchingTransport);
         PTBridgeSupport::registerService(QStringLiteral("syncController"), nullptr);
+        [bridge cancelTransportSwitch];
     }
 }
 // 产品保证：不存在的备份目录是空列表，存在但不是目录的路径报告存储错误。
@@ -520,6 +530,40 @@ void PTDataBridgeTests::manualPurgePreservesReasonAndAutomaticPurgeStaysQuiet()
     }
 }
 
+
+// 产品保证：恢复不确定保护期（autoPurgeBlocked）内，PTTrashBridge.purgeExpired 静默返回 0 且不报错、不删到期项，解除保护后才真正清理。
+void PTDataBridgeTests::purgeExpiredRespectsAutoPurgeBlockedProvider()
+{
+    @autoreleasepool {
+        auto* trash = TrashService::instance();
+        const auto resetGuard = qScopeGuard([trash] {
+            trash->setAutoPurgeBlockedProvider({});
+        });
+        QSqlQuery seed(DatabaseManager::instance()->database());
+        QVERIFY(seed.exec(QStringLiteral(
+            "INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+            "VALUES ('memo', '', '到期备忘', '{\"v\":1}', '2020-01-01T10:00:00.000')")));
+        const auto trashRowCount = [] {
+            QSqlQuery query(DatabaseManager::instance()->database());
+            if (!query.exec(QStringLiteral("SELECT COUNT(*) FROM trash_items")) || !query.next()) return -1;
+            return query.value(0).toInt();
+        };
+        // TrashService::readItems() 会隐藏已到期项，这里直接核对 trash_items 物理行数确认是否被清理。
+        QCOMPARE(trashRowCount(), 1);
+
+        PTTrashBridge* bridge = [PTTrashBridge new];
+        trash->setAutoPurgeBlockedProvider([] { return true; });
+        NSError* error = nil;
+        QCOMPARE([bridge purgeExpired:&error], NSInteger(0));
+        QVERIFY(error == nil);
+        QCOMPARE(trashRowCount(), 1);
+
+        trash->setAutoPurgeBlockedProvider({});
+        QCOMPARE([bridge purgeExpired:&error], NSInteger(1));
+        QVERIFY(error == nil);
+        QCOMPARE(trashRowCount(), 0);
+    }
+}
 
 // 产品保证：导出完成回调里再次同步导出失败时，两次调用分别拿到自己的原因，不互相串错。
 void PTDataBridgeTests::nestedSynchronousExportsKeepTheirOwnReasons()

@@ -17,6 +17,7 @@
 #include <QFile>
 #include <QObject>
 #include <QDebug>
+#include <QScopedValueRollback>
 #include <QSqlDatabase>
 #include <QVariantMap>
 #include <limits>
@@ -62,7 +63,8 @@
         _useWallpaper = preferences.useWallpaper;
         _selectedPage = preferences.selectedPage.toNSString();
         _appearance = preferences.appearance.toNSString();
-        const auto goal = CountdownService::instance()->primaryGoal().toMap();
+        // 摘要已经读取失败（例如关库期间）时不再额外查询主目标表。
+        const auto goal = _valid ? CountdownService::instance()->primaryGoal().toMap() : QVariantMap{};
         _hasPrimaryGoal = !goal.isEmpty();
         _primaryGoalName = goal.value(QStringLiteral("name")).toString().toNSString();
         _primaryGoalDaysRemaining = goal.value(QStringLiteral("daysRemaining")).toInt();
@@ -106,11 +108,13 @@
 @implementation PTShellBridge {
     std::unique_ptr<QObject> _connections;
     PTBridgeSupport::FailureCollector _failures;
+    bool _selectingTheme;
 }
 - (instancetype)init
 {
     NSAssert(NSThread.isMainThread, @"外壳桥接只能在主线程创建");
     if ((self = [super init])) {
+        _selectingTheme = false;
         // QObject 是 Qt 信号的接收上下文，随桥接对象析构自动断连；弱引用防止回调块形成保留环。
         _connections = std::make_unique<QObject>();
         __weak PTShellBridge *weakSelf = self;
@@ -164,6 +168,11 @@
         QObject::connect(timer, &FocusTimer::operationFailed, context, failed);
         QObject::connect(gaps, &KnowledgeGapService::operationFailed, context, failed);
         QObject::connect(StatisticsService::instance(), &StatisticsService::operationFailed, context, failed);
+        // 仅在本桥接调用 selectTheme 期间认领 settingsWriteFailed；不走未认领出口，避免与 PTSettingsBridge 重复提示。
+        QObject::connect(settings, &AppSettings::settingsWriteFailed, context, [weakSelf](const QString &, const QString &message) {
+            PTShellBridge *bridge = weakSelf;
+            if (bridge && bridge->_selectingTheme) bridge->_failures.collect(message);
+        });
     }
     return self;
 }
@@ -227,10 +236,19 @@
 - (BOOL)selectTheme:(NSString *)value error:(NSError **)error
 {
     NSAssert(NSThread.isMainThread, @"主题设置必须在主线程");
+    // 主题切换调用 AppSettings::setBackgroundTheme；写入失败时由本作用域认领 settingsWriteFailed，
+    // 统一通过返回值和 NSError 告知调用方，避免旁路 PTSettingsBridge 重复弹窗。
+    QScopedValueRollback<bool> selecting(_selectingTheme, true);
+    PTBridgeSupport::FailureCollector::Call call(_failures);
     QString message;
     bool needsRefresh = false;
-    if (!IPadShellPreferences::selectTheme(QString::fromNSString(value), &message, &needsRefresh)) {
-        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: message.toNSString()}];
+    const bool ok = IPadShellPreferences::selectTheme(QString::fromNSString(value), &message, &needsRefresh);
+    const QString collected = call.error();
+    if (!ok) {
+        if (error) {
+            const QString detail = !collected.isEmpty() ? collected : message;
+            *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: detail.toNSString()}];
+        }
         return NO;
     }
     // 主题变化已从 Qt 服务信号转发；C++ 要求补刷新时，才通知原生外壳，避免重复广播。

@@ -4,6 +4,7 @@ import PTBridge
 import UIKit
 @MainActor final class SyncBridgeAdapter: SyncBridgeProtocol {
     private let native = PTSyncBridge(); var onChanged: (() -> Void)?; var onNotice: ((String) -> Void)?; var onCopyRequested: ((String) -> Void)?
+    var onSnapshotReplaced: (() -> Void)?
     init() {
         native.onStatusChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
         native.onFolderChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
@@ -11,6 +12,8 @@ import UIKit
         native.onTransportChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
         native.onSwitchingTransportChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
         native.onLogChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
+        // 快照提交后同步清理旧库编辑状态，必须在普通数据刷新抵达各页面前完成。
+        native.onSnapshotReplaced = { [weak self] in MainActor.assumeIsolated { self?.onSnapshotReplaced?() } }
         native.onNotice = { [weak self] value in MainActor.assumeIsolated { self?.onNotice?(value) } }
         native.onCopyRequested = { [weak self] value in
             MainActor.assumeIsolated {
@@ -49,6 +52,7 @@ import UIKit
     func rebuildFolder() throws { try native.rebuildFolder() }
     func joinWithPairingCode(_ code: String) throws { try native.join(withPairingCode: code) }
     func switchToICloud() throws { try native.switchToICloud() }
+    func cancelTransportSwitch() { native.cancelTransportSwitch() }
     func clearTransportProblem() { native.clearTransportProblem() }
     func joinWarning() -> String { native.joinWarning() }
     func copyLostValue(_ text: String) throws { try native.copyLostValue(text) }

@@ -35,10 +35,12 @@ public enum TrashConfirmation: Equatable {
     @ObservationIgnored private var batchWriting = false
     @ObservationIgnored private let bridge: any TrashBridgeProtocol
     @ObservationIgnored private let logicalDay: (any LogicalDayBridgeProtocol)?
+    @ObservationIgnored private let commitPending: () -> Bool
     @ObservationIgnored private var active = false
 
-    public init(bridge: any TrashBridgeProtocol, logicalDay: (any LogicalDayBridgeProtocol)? = nil) {
-        self.bridge = bridge; self.logicalDay = logicalDay
+    public init(bridge: any TrashBridgeProtocol, logicalDay: (any LogicalDayBridgeProtocol)? = nil,
+                commitPending: @escaping () -> Bool = { true }) {
+        self.bridge = bridge; self.logicalDay = logicalDay; self.commitPending = commitPending
         bridge.onChanged = { [weak self] in if self?.active == true && self?.batchWriting == false { self?.reload() } }
         logicalDay?.onChanged = { [weak self] in if self?.active == true && self?.batchWriting == false { self?.reload() } }
     }
@@ -65,6 +67,7 @@ public enum TrashConfirmation: Equatable {
 
     public func activate() { active = true; actionError = ""; do { _ = try bridge.purgeExpired() } catch { actionError = error.localizedDescription }; reload() }
     public func deactivate() { active = false; endSelection(); cancelConfirmation() }
+    public func prepareForRestore() { endSelection(); cancelConfirmation(); dismissNotice() }
     public func reload() {
         do {
             let result = try bridge.readItems()
@@ -74,6 +77,8 @@ public enum TrashConfirmation: Equatable {
     }
     public func retry() { reload() }
     public func restore(_ item: TrashItem) {
+        // 恢复前先提交待删槽，防止刚删除仍在撤销窗口内的同时间段专注/休息记录误报冲突。
+        guard commitPending() else { actionError = "待删项提交失败，请重试"; return }
         do {
             let result = try bridge.restore(id: item.id)
             if result.error.isEmpty { restoredTitle = result.title.isEmpty ? item.title : result.title; actionError = ""; reload() }
@@ -114,6 +119,7 @@ public enum TrashConfirmation: Equatable {
     public func restoreSelection() {
         let selected = items.filter { selection.contains($0.id) }
         guard selecting, !selected.isEmpty else { return }
+        guard commitPending() else { actionError = "待删项提交失败，请重试"; return }
         // 恢复是逐条独立事务；同步通知先抑制，整批结束仅重读一次，避免每恢复一条重建列表。
         batchWriting = true
         defer { batchWriting = false; reload() }
@@ -147,7 +153,11 @@ public enum TrashConfirmation: Equatable {
         defer { batchWriting = false }
         do {
             let result = try bridge.empty(ids: ids)
-            guard result.error.isEmpty else { actionError = result.error; return }
+            guard result.error.isEmpty else {
+                actionError = result.error
+                if result.code == "gone" { reload() }
+                return
+            }
             actionError = ""; endSelection(); reload()
         } catch { actionError = error.localizedDescription }
     }

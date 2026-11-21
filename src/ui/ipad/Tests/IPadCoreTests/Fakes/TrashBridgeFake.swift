@@ -13,7 +13,21 @@ import IPadCore
     var calls: [(String, [Int])] = []
     func readItems() throws -> TrashRead { readCount += 1; if let readError { throw readError }; return result }
     func purgeExpired() throws -> Int { calls.append(("purge", [])); if let purgeError { throw purgeError }; return 0 }
-    func restore(id: Int) throws -> TrashActionResult { calls.append(("restore", [id])); if let actionError { throw actionError }; onRestore?(id); return restoreResults[id] ?? actionResult }
-    func delete(id: Int) throws -> TrashActionResult { calls.append(("delete", [id])); return actionResult }
-    func empty(ids: [Int]) throws -> TrashActionResult { calls.append(("empty", ids)); if let actionError { throw actionError }; return actionResult }
+    func restore(id: Int) throws -> TrashActionResult {
+        calls.append(("restore", [id])); if let actionError { throw actionError }
+        onRestore?(id)
+        let res = restoreResults[id] ?? actionResult
+        if res.error.isEmpty { onChanged?() }
+        return res
+    }
+    func delete(id: Int) throws -> TrashActionResult {
+        calls.append(("delete", [id])); if let actionError { throw actionError }
+        if actionResult.error.isEmpty { onChanged?() }
+        return actionResult
+    }
+    func empty(ids: [Int]) throws -> TrashActionResult {
+        calls.append(("empty", ids)); if let actionError { throw actionError }
+        if actionResult.error.isEmpty { onChanged?() }
+        return actionResult
+    }
 }

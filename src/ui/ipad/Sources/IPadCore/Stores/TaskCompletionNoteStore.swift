@@ -15,7 +15,7 @@ import Observation
         self.interactions = interactions; self.actions = actions; self.shell = shell
     }
     @discardableResult public func begin(id: Int) -> Bool {
-        guard !active, shell?.snapshot.operationBlocksUI == false else { return false }
+        guard !active, shell?.operationBlocksUI == false else { return false }
         do {
             let registration = try interactions.beginEdit(id: id, source: "ipad.task.completionNote")
             guard let latest = registration.task, latest.id == id else {
@@ -27,7 +27,7 @@ import Observation
         } catch { errorMessage = error.localizedDescription; shell?.showToast(errorMessage); return false }
     }
     @discardableResult public func save() -> Bool {
-        guard active, let task, shell?.snapshot.operationBlocksUI == false else { return false }
+        guard active, let task, shell?.operationBlocksUI == false else { return false }
         // 完成与记录原子写入、专注收尾、撤销提示一律经 TaskActions，不在表单另做一条路径。
         guard actions.complete(id: task.id, title: task.title, note: note.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             errorMessage = shell?.toast?.message ?? "任务完成失败，请重试"; return false

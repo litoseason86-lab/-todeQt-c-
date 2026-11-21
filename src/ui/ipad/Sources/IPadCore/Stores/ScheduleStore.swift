@@ -17,6 +17,8 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
     @ObservationIgnored private let bridge: any ScheduleBridging
     @ObservationIgnored private let settingsBridge: any SettingsBridgeProtocol
     @ObservationIgnored private var logicalDay: (any LogicalDayBridgeProtocol)?
+    @ObservationIgnored private var active = false
+    @ObservationIgnored private var initializedOnce = false
     @ObservationIgnored private var writing = false
     @ObservationIgnored private var hasSnapshot = false
     public var maxWeekIndex: Int { bridge.maxWeekIndex }
@@ -73,8 +75,7 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
         bridge.onSemesterStartDateChanged = { [weak self] in self?.refreshFromSignal() }
         bridge.onSemesterWeeksChanged = { [weak self] in self?.refreshFromSignal() }
         bridge.onShowWeekendChanged = { [weak self] in self?.refreshFromSignal() }
-        bridge.onFailure = { [weak self] in self?.error = $0 }
-        refresh(initial: true)
+        bridge.onFailure = { [weak self] message in if self?.active == true { self?.error = message } }
     }
     // 正式装配使用逻辑今日；自然日不再由页面或系统时钟推断。
     public convenience init(bridge: any ScheduleBridging, settingsBridge: any SettingsBridgeProtocol,
@@ -83,14 +84,22 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
                   todayDate: logicalDay.today, todayWeekday: 1)
         self.logicalDay = logicalDay
         logicalDay.onChanged = { [weak self] in self?.refreshFromSignal() }
-        refresh(initial: true)
+    }
+    public func setActive(_ value: Bool) {
+        guard active != value else { return }
+        active = value
+        if value {
+            let initial = !initializedOnce
+            initializedOnce = true
+            refresh(initial: initial)
+        }
     }
     @discardableResult public func setDisplayMode(_ mode: ScheduleDisplayMode) -> Bool {
         do { try settingsBridge.setScheduleDisplayMode(mode.rawValue); displayMode = mode; error = ""; return true }
         catch { self.error = error.localizedDescription; return false }
     }
     private func clampedWeek(_ value: Int, settings: ScheduleSettings) -> Int { max(1, min(settings.semesterWeeks, value)) }
-    private func refreshFromSignal() { if !writing { refresh() } }
+    private func refreshFromSignal() { if active && !writing { refresh() } }
     public func refresh() { refresh(initial: false) }
     private func refresh(initial: Bool, requestedWeek: Int? = nil) {
         do {

@@ -1,50 +1,6 @@
 import IPadCore
 import SwiftUI
 
-// 时长设置：预设加步进器，写回设置的范围校验在 Store（专注 5–180 分，休息 1–60 分）。
-struct FocusDurationPanel: View {
-    let store: FocusStore
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Button {
-                store.panelExpanded.toggle()
-            } label: {
-                Text("专注 \(store.selectedWorkMinutes) 分 · 休息 \(store.selectedBreakMinutes) 分\(store.panelExpanded ? "  ▴" : "  ▾")")
-            }
-            .buttonStyle(.bordered).tint(ThemeColors.accentInk)
-            .accessibilityLabel("时长设置，专注 \(store.selectedWorkMinutes) 分钟，休息 \(store.selectedBreakMinutes) 分钟")
-            .accessibilityHint(store.panelExpanded ? "收起" : "展开")
-            if store.panelExpanded {
-                VStack(spacing: 12) {
-                    row("专注", presets: [25, 45, 60], value: store.selectedWorkMinutes, range: 5...180) { store.selectWorkMinutes($0) }
-                    row("休息", presets: [5, 10], value: store.selectedBreakMinutes, range: 1...60) { store.selectBreakMinutes($0) }
-                    Text("专注时长达到预计用时时自动完成任务 · 不足 \(store.snapshot.minimumValidMinutes) 分钟不计入记录")
-                        .font(.footnote).foregroundStyle(ThemeColors.inkSoft).multilineTextAlignment(.center)
-                }
-                .padding(16)
-                .background(ThemeColors.surfaceRaised, in: RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(ThemeColors.border))
-            }
-        }
-    }
-
-    private func row(_ title: String, presets: [Int], value: Int, range: ClosedRange<Int>,
-                     set: @escaping (Int) -> Void) -> some View {
-        HStack(spacing: 8) {
-            Text(title).foregroundStyle(ThemeColors.inkSoft).frame(width: 36, alignment: .trailing)
-            ForEach(presets, id: \.self) { minutes in
-                Button("\(minutes)") { set(minutes) }
-                    .buttonStyle(.bordered)
-                    .tint(value == minutes ? ThemeColors.accentInk : ThemeColors.inkSoft)
-                    .accessibilityLabel("\(title) \(minutes) 分钟")
-            }
-            Spacer(minLength: 0)
-            AccentStepper(title: "\(title)分钟数，\(value)", value: Binding(get: { value }, set: { set($0) }), range: range)
-        }
-    }
-}
-
 // 任务选择：今日任务（跳过待删项）加「新建并开始」。
 struct FocusTaskPicker: View {
     let store: FocusStore
@@ -82,6 +38,7 @@ struct FocusTaskPicker: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("完成") { store.taskSelectorPresented = false } }
             }
         }
+        .tint(ThemeColors.accentInk)
         .frame(minWidth: 320, minHeight: 360)
     }
     private func createAndStart() {
@@ -120,7 +77,8 @@ struct FocusLongFreeSheet: View {
                         Text("不修改则保留精确计时；修改后将按整分钟记录。")
                     }
                     Section {
-                        Button("记录") { record() }.buttonStyle(.borderedProminent).tint(ThemeColors.accentFill)
+                        Button { record() } label: { Text("记录").foregroundStyle(ThemeColors.accentFillInk) }
+                            .buttonStyle(.borderedProminent).tint(ThemeColors.accentFill)
                         Button("不记录", role: .destructive) { store.discardLongFree() }
                         Button("继续计时") { store.continueLongFree() }
                     } footer: {
@@ -130,6 +88,7 @@ struct FocusLongFreeSheet: View {
             }
             .navigationTitle("确认自由计时记录").sheetChrome()
         }
+        .tint(ThemeColors.accentInk)
         .onAppear {
             guard let prompt = store.longFree else { return }
             initial = String(max(prompt.minimumMinutes, prompt.elapsedSeconds / 60)); text = initial

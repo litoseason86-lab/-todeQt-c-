@@ -1,6 +1,14 @@
 import IPadCore
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
+
+// 数据提供者由系统拖动会话持有；取消拖动或未触发 onMove 时随会话销毁自动释放刷新冻结令牌。
+private final class TodayDragLifetime: Sendable {
+    let ended: @Sendable () -> Void
+    init(ended: @escaping @Sendable () -> Void) { self.ended = ended }
+    deinit { ended() }
+}
 
 // 同一时间只显示一个表单：任务表单各自持有编辑令牌，叠两个会让冻结与释放顺序难以保证。
 // 任务详情不在这里：它从任务行以浮层弹出（宽窗），见 TaskRow。
@@ -43,7 +51,7 @@ struct TodayView: View {
                 store.start()
                 if UIPerfProbe.isRequested { UIPerfProbe.todayDetail = { presentation.detailTaskID = $0 } }
             }
-            .onDisappear { store.stop() }
+            .onDisappear { _ = core.inlineEditor.finish(); store.stop() }
             // 撤销状态改变由 Store 隐藏/恢复任务，不在视图维护第二份列表。
             .onChange(of: core.pendingDeletion.pendingTaskID) { _, _ in store.pendingDeletionChanged() }
     }
@@ -62,6 +70,7 @@ struct TodayView: View {
 private struct TodayTaskList: View {
     let store: TodayStore
     let presentation: TodayPresentation
+    @Environment(CoreBridges.self) private var core
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -94,12 +103,14 @@ private struct TodayTaskList: View {
     // 未完成的任务卡：任务行 + 最后一行「＋ 新任务」（新建中换成输入行）；多选时不放新建行。
     @ViewBuilder private func taskCard(rows: [TaskValue], narrow: Bool) -> some View {
         let footer = !store.selecting
+        let allowsDrag = !store.selecting && store.lingering.isEmpty && store.canReorder
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, task in
             let last = index == rows.count - 1 && !footer
             TodayTaskCardRow(task: task, store: store, presentation: presentation, narrow: narrow,
                              divider: index > 0,
                              position: index == 0 ? (last ? .single : .top) : (last ? .bottom : .middle),
-                             fill: ThemeColors.surface)
+                             fill: ThemeColors.surface,
+                             allowsDrag: allowsDrag)
         }
         // 停留中、多选中不能拖：停留的那几条已完成，服务不让已完成任务参与排序。
         .onMove(perform: moveAction)
@@ -124,7 +135,7 @@ private struct TodayTaskList: View {
     }
 
     private var newTaskButton: some View {
-        Button { store.requestNewTask() } label: {
+        Button { _ = core.inlineEditor.finish(); store.requestNewTask() } label: {
             HStack(spacing: 14) {
                 Image(systemName: "plus.circle.fill").scaledSystemFont(size: 26).frame(width: 44, height: 44)
                 Text("新任务").scaledSystemFont(size: 17)
@@ -216,6 +227,7 @@ private struct TodayTaskCardRow: View {
     let divider: Bool
     let position: CardRowPosition
     let fill: Color
+    var allowsDrag = false
     @Environment(CoreBridges.self) private var core
     @Environment(FocusStore.self) private var focus
 
@@ -225,6 +237,22 @@ private struct TodayTaskCardRow: View {
             row.padding(.horizontal, narrow ? 8 : 6).padding(.vertical, 6)
         }
         .cardRow(position, fill: store.selecting && store.selection.contains(task.id) ? ThemeColors.accentFill : fill)
+        .conditionalDrag(enabled: allowsDrag) { dragProvider() }
+    }
+
+    private func dragProvider() -> NSItemProvider {
+        guard allowsDrag, let session = store.beginDragSession(taskID: task.id) else { return NSItemProvider() }
+        let lifetime = TodayDragLifetime { [weak store] in
+            Task { @MainActor in store?.endDrag(session: session) }
+        }
+        let payload = Data(String(task.id).utf8)
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(forTypeIdentifier: UTType.plainText.identifier, visibility: .ownProcess) { [lifetime] completion in
+            _ = lifetime
+            completion(payload, nil)
+            return nil
+        }
+        return provider
     }
 
     private var row: some View {
@@ -243,6 +271,7 @@ private struct TodayTaskCardRow: View {
 private struct TodayToolbarModifier: ViewModifier {
     let store: TodayStore
     let presentation: TodayPresentation
+    @Environment(CoreBridges.self) private var core
     func body(content: Content) -> some View {
         content.toolbar { toolbarContent }
     }
@@ -258,7 +287,10 @@ private struct TodayToolbarModifier: ViewModifier {
         } else {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button("选择任务", systemImage: "checkmark.circle") { store.beginSelection() }
+                    Button("选择任务", systemImage: "checkmark.circle") {
+                        _ = core.inlineEditor.finish()
+                        store.beginSelection()
+                    }
                         .disabled(store.unfinished.isEmpty && store.finished.isEmpty)
                     Button(store.completedExpanded ? "隐藏已完成" : "显示已完成", systemImage: store.completedExpanded ? "eye.slash" : "eye") {
                         store.completedExpanded.toggle()
@@ -355,6 +387,7 @@ struct BatchDatePicker: View {
     let onPick: (String) -> Bool
     @State private var date = Date()
     @Environment(\.dismiss) private var dismiss
+    @Environment(ShellStore.self) private var shell
     var body: some View {
         VStack(spacing: 12) {
             Text(title).scaledSystemFont(size: 16, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
@@ -369,6 +402,7 @@ struct BatchDatePicker: View {
         .padding(16)
         .frame(idealWidth: 340)
         .tint(ThemeColors.accentInk)
+        .disabled(shell.operationBlocksUI)
         .onAppear { date = TodayDisplayDate.date(initial) }
     }
 }

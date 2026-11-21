@@ -25,16 +25,21 @@ struct WallpaperBackground: View {
     }
 }
 
-// 每个页面的外壳都铺一份壁纸（十几份），解码后的图按主题只留一份共用：原来每份视图第一次出现时各解码一遍
+// 每个页面的外壳都铺一份壁纸（十几份），解码后的图按主题复用：原来每份视图第一次出现时各解码一遍
 // （10-12 测速，切页第一轮比第二轮多出的时间里有一部分在这里）。第一次取时同步解码并预先展开成位图，
-// 之后各页直接复用，也不再出现先铺底色、下一帧才换成壁纸的闪动。Qt 已打包的壁纸只读这一次。
+// 之后各页直接复用，也不再出现先铺底色、下一帧才换成壁纸的闪动。用 NSCache 限制最多保留 2 张大图并响应系统内存告警。
 @MainActor private enum WallpaperCache {
-    private static var images: [String: UIImage] = [:]
+    private static let images: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 2
+        return cache
+    }()
     static func image(for theme: String) -> UIImage? {
-        if let cached = images[theme] { return cached }
+        let key = theme as NSString
+        if let cached = images.object(forKey: key) { return cached }
         guard let data = PTShellBridge.wallpaperData(forTheme: theme), let decoded = UIImage(data: data) else { return nil }
         let prepared = decoded.preparingForDisplay() ?? decoded
-        images[theme] = prepared
+        images.setObject(prepared, forKey: key)
         return prepared
     }
 }

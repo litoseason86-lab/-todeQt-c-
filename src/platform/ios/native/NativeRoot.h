@@ -3,4 +3,4 @@
 // 启动与生命周期钩子只用于 iOS 装配，不向 Swift 暴露 Qt 或 UIKit 类型。
 bool isIPadDevice();
 void installNativeRoot();
-void flushNativeEdits();
+bool flushNativeEdits();

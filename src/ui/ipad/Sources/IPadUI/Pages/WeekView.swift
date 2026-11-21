@@ -42,7 +42,11 @@ import UniformTypeIdentifiers
                 }
             } else {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button("选择") { composingDate = nil; store.beginSelection() }
+                    Button("选择") {
+                        _ = core.inlineEditor.finish()
+                        composingDate = nil
+                        store.beginSelection()
+                    }
                         .disabled(store.groups.allSatisfy { $0.tasks.isEmpty })
                     Button { store.shiftWeek(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上一周")
                     Button { store.shiftWeek(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("下一周")
@@ -52,7 +56,8 @@ import UniformTypeIdentifiers
         .safeAreaInset(edge: .bottom) { if store.selecting { selectionBar } }
         .sheet(item: $completionTask) { task in TaskCompletionNoteSheet(taskID: task.id, core: core, shell: shell) }
         .sheet(item: $movingTask, onDismiss: { store.endReschedule() }) { task in WeekMoveTaskSheet(store: store, task: task) }
-        .onDisappear { store.cancelDrag(); store.endReschedule() }
+        .onAppear { store.setActive(true) }
+        .onDisappear { _ = core.inlineEditor.finish(); store.setActive(false) }
     }
 
     private var selectionBar: some View {
@@ -261,7 +266,7 @@ import UniformTypeIdentifiers
     }
     private func keyAction(_ press: KeyPress) -> KeyPress.Result {
         guard press.modifiers.isEmpty, !store.selecting, presentation.detailTaskID == nil, completionTask == nil,
-              movingTask == nil, composingDate == nil, store.draggingTaskID == -1 else { return .ignored }
+              movingTask == nil, composingDate == nil, !core.inlineEditor.isEditing, store.draggingTaskID == -1 else { return .ignored }
         switch press.key {
         case .upArrow: store.moveCursor(-1)
         case .downArrow: store.moveCursor(1)
@@ -311,10 +316,6 @@ private final class WeekDragLifetime: Sendable {
     let onReschedule: () -> Void
     @Environment(CoreBridges.self) private var core
     @Environment(ShellStore.self) private var shell
-    private var detailPresented: Binding<Bool> {
-        Binding(get: { detailTaskID.wrappedValue == task.id },
-                set: { if !$0 && detailTaskID.wrappedValue == task.id { detailTaskID.wrappedValue = nil } })
-    }
 
     private var selected: Bool { store.selection.contains(task.id) }
     var body: some View {
@@ -322,7 +323,7 @@ private final class WeekDragLifetime: Sendable {
             .simultaneousGesture(TapGesture().onEnded {
                 if store.selecting { store.toggleSelection(task.id) } else { store.selectTask(id: task.id) }
             })
-            .onDrag { dragProvider() }
+            .conditionalDrag(enabled: !store.selecting) { dragProvider() }
             .dropDestination(for: String.self) { ids, _ in
                 guard ids.count == 1, let id = Int(ids[0]) else { return false }
                 return store.drop(taskID: id, to: task.date, before: task.id)
@@ -351,7 +352,9 @@ private final class WeekDragLifetime: Sendable {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(task.title + (task.completed ? "，已完成" : ""))
             .accessibilityAddTraits(store.selecting && selected ? .isSelected : [])
-            .popover(isPresented: detailPresented) { TaskDetailSheet(taskID: task.id, core: core, shell: shell) }
+            .overlay(alignment: .trailing) {
+                TaskDetailAnchor(taskID: task.id, detailTaskID: detailTaskID, core: core, shell: shell)
+            }
             // 与任务行同一套（TaskRow）：左滑删除 / 详情，右滑完成记录，长按菜单。
             .swipeActions(edge: .trailing) {
                 if !store.selecting {
@@ -408,6 +411,7 @@ private final class WeekDragLifetime: Sendable {
     @Binding var composingDate: String?
     // 宽窗七列里的小号样式；窄窗与今日任务页的新建行同一大小。
     let compact: Bool
+    @Environment(CoreBridges.self) private var core
     @State private var title = ""
     @State private var continuing = false
     @FocusState private var focused: Bool
@@ -432,7 +436,7 @@ private final class WeekDragLifetime: Sendable {
                     Task { @MainActor in if !focused && !continuing && composing { end() } }
                 }
             } else {
-                Button { composingDate = date } label: {
+                Button { _ = core.inlineEditor.finish(); composingDate = date } label: {
                     HStack(spacing: compact ? 6 : 14) {
                         Image(systemName: "plus.circle.fill").scaledSystemFont(size: compact ? 16 : 26)
                             .frame(width: compact ? 18 : 44, height: compact ? 30 : 44)

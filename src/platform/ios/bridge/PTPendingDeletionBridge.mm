@@ -38,6 +38,7 @@ using namespace PTBridgeSupport;
 - (NSInteger)sessionId { NSAssert(NSThread.isMainThread, @"撤销状态必须在主线程读取"); return _service ? _service->sessionId() : -1; }
 - (BOOL)sessionIsRest { NSAssert(NSThread.isMainThread, @"撤销状态必须在主线程读取"); return _service && _service->sessionIsRest(); }
 - (NSString *)title { NSAssert(NSThread.isMainThread, @"撤销状态必须在主线程读取"); return _service ? string(_service->title()) : @""; }
+- (int64_t)generation { NSAssert(NSThread.isMainThread, @"撤销状态必须在主线程读取"); return _service ? _service->generation() : 0; }
 - (BOOL)requestTask:(NSInteger)taskId title:(NSString *)title error:(NSError **)error {
     NSAssert(NSThread.isMainThread, @"删除请求必须在主线程");
     int id; if (!integer(taskId, &id)) return fail(error, QStringLiteral("任务编号越界"));
@@ -73,7 +74,19 @@ using namespace PTBridgeSupport;
     const QString reason = call.error();
     return fail(error, reason.isEmpty() ? QStringLiteral("提交删除失败") : reason);
 }
+- (BOOL)commitGeneration:(int64_t)generation error:(NSError **)error {
+    NSAssert(NSThread.isMainThread, @"删除提交必须在主线程");
+    if (!_service) return fail(error, QStringLiteral("删除服务未登记或已释放"));
+    // 代次绑定防止换库或替槽后的迟到退场回调误提交新待删项。
+    QScopedValueRollback<bool> calling(_callingDeletion, true);
+    FailureCollector::Call call(_failures);
+    const bool ok = _service->commitGeneration(generation);
+    if (ok) return YES;
+    const QString reason = call.error();
+    return fail(error, reason.isEmpty() ? QStringLiteral("提交删除失败") : reason);
+}
 - (void)cancel { NSAssert(NSThread.isMainThread, @"撤销必须在主线程"); if (_service) _service->cancel(); }
+- (void)cancelGeneration:(int64_t)generation { NSAssert(NSThread.isMainThread, @"撤销必须在主线程"); if (_service) _service->cancelGeneration(generation); }
 - (void)setAutomaticCommitSuspended:(BOOL)suspended {
     NSAssert(NSThread.isMainThread, @"暂停自动提交状态必须在主线程设置");
     if (_service) {

@@ -7,6 +7,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) double completionRate;
 @property(nonatomic, readonly) NSInteger sessionCount;
 @property(nonatomic, readonly) NSInteger pomodoroCount;
+@property(nonatomic, readonly) NSInteger goalMinutes;
+@property(nonatomic, readonly) double goalProgressPercent;
 @end
 @interface PTMonthStatistics : NSObject
 @property(nonatomic, readonly) NSInteger totalDuration;

@@ -568,4 +568,24 @@ import XCTest
         XCTAssertEqual(store.errorMessage, "摘要读取失败")
     }
 
+    // 产品保证：恢复阻断期间禁止打开全局搜索；正常打开搜索前先同步冲刷已注册的编辑会话。
+    func testRestoreBlocksOpenSearchAndSearchFlushesEdits() {
+        let bridge = FakeShellBridge()
+        bridge.snapshot.operationBlocksUI = true
+        let store = ShellStore(bridge: bridge)
+        var flushed = 0
+        store.registerEditFlusher { flushed += 1; return true }
+        XCTAssertTrue(store.operationBlocksUI)
+        store.openSearch()
+        XCTAssertFalse(store.searchShown)
+        XCTAssertEqual(flushed, 0)
+
+        bridge.snapshot.operationBlocksUI = false
+        bridge.onChanged?()
+        XCTAssertFalse(store.operationBlocksUI)
+        store.openSearch()
+        XCTAssertTrue(store.searchShown)
+        XCTAssertEqual(flushed, 1)
+    }
+
 }

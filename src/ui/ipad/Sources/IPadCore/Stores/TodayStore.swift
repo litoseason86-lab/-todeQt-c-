@@ -86,17 +86,20 @@ import Observation
     // 055-P4-1 步骤 4：专注完成后「已专注」要跟着变；宿主给本 Store 一份专用适配器，不给就不监听。
     @ObservationIgnored private let focus: (any FocusBridgeProtocol)?
     @ObservationIgnored private weak var shell: ShellStore?
+    @ObservationIgnored private weak var inlineEditor: InlineTaskEditor?
     @ObservationIgnored private var active = false
     // 冻结期间收到的刷新只记一笔，令牌释放时补读一次。
     @ObservationIgnored private var refreshPending = false
     @ObservationIgnored private var dragToken: InteractionToken?
+    @ObservationIgnored private var dragSessionID: UUID?
 
     public init(tasks: any TaskBridgeProtocol, interactions: any InteractionBridgeProtocol,
                 logicalDay: any LogicalDayBridgeProtocol, settings: any SettingsBridgeProtocol,
                 statistics: any StatisticsBridgeProtocol, gaps: any GapReminderBridgeProtocol,
                 pendingDeletion: PendingDeletionStore, shell: ShellStore,
-                focus: (any FocusBridgeProtocol)? = nil) {
-        self.focus = focus
+                focus: (any FocusBridgeProtocol)? = nil,
+                inlineEditor: InlineTaskEditor? = nil) {
+        self.focus = focus; self.inlineEditor = inlineEditor
         self.taskBridge = tasks; self.interactions = interactions; self.logicalDay = logicalDay
         self.settings = settings; self.statistics = statistics; self.gaps = gaps
         self.pendingDeletion = pendingDeletion; self.shell = shell
@@ -128,7 +131,7 @@ import Observation
         statistics.onFailure = nil
         focus?.onFocusCompleted = { [weak self] _ in
             guard let self, self.active else { return }
-            self.loadStats(); self.loadGoal()
+            self.loadStatsAndGoal()
         }
         refresh()
     }
@@ -145,6 +148,16 @@ import Observation
         gaps.onChanged = nil; gaps.onTasksAffected = nil; statistics.onFailure = nil
         focus?.onFocusCompleted = nil
     }
+    // 换库前清理所有持有旧库任务编号的交互态，避免旧多选/停留/新建状态带入新库。
+    public func prepareForRestore() {
+        releaseDrag()
+        settleLingering()
+        endSelection()
+        composing = false
+        newTitle = ""
+        newTaskFocusRequested = false
+        tools.close()
+    }
 
     // MARK: 读取
     public func refresh() {
@@ -155,7 +168,7 @@ import Observation
         // 一轮组合读取只在起点清错；后续成功不抹掉前面刚发生的失败。
         loadError = ""
         today = logicalDay.today
-        loadOverdue(); loadTasks(); loadStats(); loadGoal(); loadGaps(); loadPlanned()
+        loadOverdue(); loadTasks(); loadStatsAndGoal(); loadGaps(); loadPlanned()
         tools.reloadIfOpen()
     }
     // 待删状态变化：隐藏/恢复那一行，「已排」也要换排除对象；已开始的拖动随之取消。
@@ -186,15 +199,17 @@ import Observation
             rolloverBannerActive = !overdue.isEmpty && !ignored
         } catch { fail("任务加载失败，请重试") }
     }
-    private func loadStats() {
-        do { focusedSeconds = try statistics.todayStats().totalDuration } catch { fail("统计数据加载失败，请重试") }
-    }
-    private func loadGoal() {
+    private func loadStatsAndGoal() {
         goalMinutes = settings.dailyFocusGoal(date: logicalDay.today)
-        // 进度来自服务的周复盘今日目标，不用不同查询时刻的数字在 Swift 重算比例。
-        do { goalProgressPercent = try statistics.currentWeeklyReview().todayGoal?.progressPercent ?? 0 }
-        catch { fail("统计数据加载失败，请重试") }
+        // 直接消费单日统计的 goalMinutes 与 goalProgressPercent（C++ 零额外 SQL 同口径算出），不再调用整套周复盘。
+        do {
+            let day = try statistics.todayStats()
+            focusedSeconds = day.totalDuration
+            if day.goalMinutes > 0 { goalMinutes = day.goalMinutes }
+            goalProgressPercent = day.goalProgressPercent
+        } catch { fail("统计数据加载失败，请重试") }
     }
+    private func loadGoal() { loadStatsAndGoal() }
     private func loadPlanned() {
         do {
             let hidden = pendingDeletion.pendingTaskID
@@ -248,9 +263,10 @@ import Observation
         refresh()
         return true
     }
-    // 起一行新任务并请求聚焦；多选中不起（提醒事项选择模式下也不能新建）。
+    // 起一行新任务并请求聚焦；多选中不起（提醒事项选择模式下也不能新建），开启前先结束正在行内编辑的行释放令牌。
     public func requestNewTask() {
         guard !selecting else { return }
+        _ = inlineEditor?.finish()
         composing = true; newTaskFocusRequested = true
     }
     public func acknowledgeNewTaskRequest() { newTaskFocusRequested = false }
@@ -293,6 +309,8 @@ import Observation
 
     // MARK: 多选
     public func beginSelection() {
+        // 先结束行内编辑与行内新建并释放交互令牌，防止带着刷新冻结进入多选导致批量操作后列表死锁。
+        _ = inlineEditor?.finish()
         endComposing()
         // 草稿写入失败时保留新建行，不能再进入与它互斥的多选模式。
         guard !composing else { return }
@@ -322,7 +340,7 @@ import Observation
     }
     @discardableResult public func rescheduleSelection(to date: String) -> Bool {
         let ids = orderedSelection
-        guard !ids.isEmpty else { return false }
+        guard !ids.isEmpty, shell?.operationBlocksUI != true else { return false }
         do { try taskBridge.move(ids: ids, date: date) }
         catch { loadError = error.localizedDescription; return false }
         endSelection(); return true
@@ -330,19 +348,34 @@ import Observation
 
     // MARK: 排序
     // 拖动只交「把 X 移到 Y 之前」，整天重新编号、已完成固定在末尾由服务做。
+    public func beginDragSession(taskID: Int) -> UUID? {
+        _ = inlineEditor?.finish()
+        guard canReorder, dragToken == nil, unfinished.contains(where: { $0.id == taskID }) else { return nil }
+        do {
+            dragToken = try interactions.beginDrag(id: taskID, source: "TodayStore.drag")
+            let session = UUID(); dragSessionID = session
+            return session
+        } catch { loadError = error.localizedDescription; return nil }
+    }
     @discardableResult public func beginDrag(taskID: Int) -> Bool {
-        guard canReorder, dragToken == nil, unfinished.contains(where: { $0.id == taskID }) else { return false }
-        do { dragToken = try interactions.beginDrag(id: taskID, source: "TodayStore.drag"); return true }
-        catch { loadError = error.localizedDescription; return false }
+        beginDragSession(taskID: taskID) != nil
+    }
+    public func endDrag(session: UUID) {
+        guard dragSessionID == session else { return }
+        releaseDrag()
     }
     public func cancelDrag() { releaseDrag() }
     // target 是移动后在「未完成组」里的最终下标；落在该组之外（含已完成组）或原位不写库。
     @discardableResult public func commitDrag(taskID: Int, toIndex target: Int) -> Bool {
+        _ = inlineEditor?.finish()
         let list = unfinished
         var written = false
         defer { releaseDrag(); if written { refresh() } }
         guard canReorder, let from = list.firstIndex(where: { $0.id == taskID }),
               target >= 0, target < list.count, target != from else { return false }
+        if dragToken == nil {
+            dragToken = try? interactions.beginDrag(id: taskID, source: "TodayStore.drag")
+        }
         // 向上移落在 target 那项之前；向下移落在 target 后一项之前，没有后一项时取第一条已完成任务，
         // 再没有就传 0 表示末尾。后面是已完成项时照样传它的编号，夹到组尾是服务的事。
         let before: Int
@@ -355,7 +388,7 @@ import Observation
         return true
     }
     private func releaseDrag() {
-        let token = dragToken; dragToken = nil; token?.end()
+        let token = dragToken; dragToken = nil; dragSessionID = nil; token?.end()
     }
 
     // MARK: 其它写入

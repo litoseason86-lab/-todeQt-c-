@@ -25,11 +25,14 @@ import SwiftUI
             // 055-R4：左栏每行是明确的按钮。List(selection:) 放在分栏侧栏之外时，iPadOS 上点按不会改选中，
             // 10-11 真机实测点「科目」「每日例行」都切不过去。
             HStack(alignment: .top, spacing: 28) {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(SettingsAvailability.sections) { section in
-                        sectionButton(section, selected: section == store.selectedSection)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(SettingsAvailability.sections) { section in
+                            sectionButton(section, selected: section == store.selectedSection)
+                        }
                     }
                 }
+                .scrollIndicators(.hidden)
                 .frame(width: 240)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(store.selectedSectionTitle).font(.title2.bold()).foregroundStyle(ThemeColors.inkStrong)
@@ -72,6 +75,8 @@ import SwiftUI
 
 @MainActor private struct GeneralSettings: View {
     @Bindable var store: SettingsStore
+    @State private var nicknameDraft = ""
+    @FocusState private var nicknameFocused: Bool
     var body: some View {
         SettingsForm {
             Section("专注") {
@@ -93,13 +98,31 @@ import SwiftUI
                 Picker("一天从几点开始", selection: Binding(get: { store.snapshot.dayStartHour }, set: store.setDayStartHour)) {
                     ForEach(0...23, id: \.self) { Text("\($0):00").tag($0) }
                 }.pickerStyle(.menu)
+                // 昵称使用本地草稿并在回车、失焦或离页时提交，避免逐键写库刷新快照打断中文输入法选字。
                 LabeledContent("昵称") {
-                    TextField("昵称", text: Binding(get: { store.snapshot.nickname }, set: store.setNickname))
+                    TextField("昵称", text: $nicknameDraft)
                         .multilineTextAlignment(.trailing)
+                        .focused($nicknameFocused)
+                        .submitLabel(.done)
+                        .onSubmit { commitNicknameIfNeeded() }
                 }
             }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-        }.formStyle(.grouped)
+        }
+        .formStyle(.grouped)
+        .onAppear { nicknameDraft = store.snapshot.nickname }
+        .onChange(of: store.snapshot.nickname) { _, latest in
+            if !nicknameFocused && nicknameDraft != latest { nicknameDraft = latest }
+        }
+        .onChange(of: nicknameFocused) { _, focused in
+            if !focused { commitNicknameIfNeeded() }
+        }
+        .onDisappear { commitNicknameIfNeeded() }
+    }
+    private func commitNicknameIfNeeded() {
+        if nicknameDraft != store.snapshot.nickname {
+            store.setNickname(nicknameDraft)
+        }
     }
     private var longBreakForm: some View {
         SettingsForm {
@@ -111,7 +134,7 @@ import SwiftUI
                     .disabled(!store.snapshot.longBreakEnabled)
             }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-        }.formStyle(.grouped).navigationTitle("长休息")
+        }.formStyle(.grouped).modifier(PageBackground()).navigationTitle("长休息")
     }
 
 }
@@ -124,25 +147,17 @@ import SwiftUI
     var body: some View {
         SettingsForm {
             Section("系统外观") {
-                HStack {
-                    Text("明暗").foregroundStyle(ThemeColors.inkStrong)
-                    Spacer()
-                    HStack(spacing: 2) {
-                        ForEach(systemModes, id: \.0) { mode in
-                            let selected = shell.selectedSystemAppearance == mode.0
-                            Button { shell.setAppearance(mode.0) } label: {
-                                Text(mode.1).scaledSystemFont(size: 14, weight: selected ? .semibold : .regular)
-                                    .foregroundStyle(selected ? ThemeColors.accentFillInk : ThemeColors.ink)
-                                    .padding(.horizontal, 14).frame(height: 32)
-                                    .background(selected ? ThemeColors.surface : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityAddTraits(selected ? .isSelected : [])
-                        }
+                // 辅助大字号或窄窗下一行放不下三段按钮时自动折为上下两行，避免「跟随系统」被截断。
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        Text("明暗").foregroundStyle(ThemeColors.inkStrong)
+                        Spacer()
+                        systemModePicker
                     }
-                    .padding(3)
-                    .background(ThemeColors.accentFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("明暗").foregroundStyle(ThemeColors.inkStrong)
+                        systemModePicker
+                    }
                 }
             }
             Section("主题") {
@@ -181,8 +196,26 @@ import SwiftUI
                     .disabled(shell.operationBlocksUI)
             }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-            if !shell.errorMessage.isEmpty { Text(shell.errorMessage).foregroundStyle(ThemeColors.danger) }
         }.formStyle(.grouped)
+    }
+    private var systemModePicker: some View {
+        HStack(spacing: 2) {
+            ForEach(systemModes, id: \.0) { mode in
+                let selected = shell.selectedSystemAppearance == mode.0
+                Button { shell.setAppearance(mode.0) } label: {
+                    Text(mode.1).scaledSystemFont(size: 14, weight: selected ? .semibold : .regular)
+                        .lineLimit(1).minimumScaleFactor(0.75)
+                        .foregroundStyle(selected ? ThemeColors.accentFillInk : ThemeColors.ink)
+                        .padding(.horizontal, 14).frame(height: 32)
+                        .background(selected ? ThemeColors.surface : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(ThemeColors.accentFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

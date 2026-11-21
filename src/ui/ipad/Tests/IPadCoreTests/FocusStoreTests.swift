@@ -1304,6 +1304,60 @@ import XCTest
         }
     }
 
+    // 产品保证：恢复备份开始时清空超长自由专注确认、任务选择器与沉浸全屏状态；专注页上打开全局搜索时自动衔接仍弹出提示。
+    func testPrepareForRestoreClearsLongFreeSelectorAndImmersiveAndSearchShowsAutoAdvanceToast() {
+        let r = rig([task(1, "旧库自由计时")])
+        setTimer(r, mode: 0, phase: 0, running: true, active: true, taskID: 1, title: "旧库自由计时", elapsed: 15000)
+        r.focus.focusEndResult.result = "needsConfirmation"
+        r.store.triggerSecondary()
+        r.store.enterImmersive()
+        r.store.taskSelectorPresented = true
+        XCTAssertTrue(r.store.immersiveActive)
+        XCTAssertTrue(r.store.taskSelectorPresented)
+        XCTAssertNotNil(r.store.longFree)
+
+        r.store.prepareForRestore()
+        XCTAssertNil(r.store.longFree)
+        XCTAssertFalse(r.store.taskSelectorPresented)
+        XCTAssertFalse(r.store.immersiveActive)
+
+        // 用户从专注页打开了全局搜索（selection 仍为 .focus，但 searchShown == true），自动衔接完成时必须弹提示。
+        let searchRig = rig([task(2, "番茄任务")]) { focus, _ in focus.autoAdvance = [1: true] }
+        searchRig.shell.select(.focus)
+        searchRig.shell.openSearch()
+        XCTAssertEqual(searchRig.shell.selection, .focus)
+        finishWork(searchRig)
+        searchRig.scheduler.fire(0)
+        XCTAssertEqual(searchRig.shell.toast?.message, "专注完成，已自动开始休息")
+    }
+
+    // 产品保证：休息结束（breakDone）点开始下一轮番茄失败时保留 breakDone 状态供用户直接重试，成功后才清除完成阶段；prepareForRestore 清空错误、新建草稿并唤醒隐藏的控制栏。
+    func testBreakDoneStartPomodoroFailurePreservesCompletedPhaseAndPrepareForRestoreWakesControls() {
+        let r = rig([task(1, "任务1")])
+        setTimer(r, mode: 1, phase: 2, active: true, taskID: 1, title: "任务1", remaining: 10, target: 300)
+        r.focus.onPhaseCompleted?(2)
+        setTimer(r, mode: 0, phase: 0, active: false)
+        XCTAssertEqual(r.store.state, .breakDone)
+
+        r.focus.failing = ["startPomodoro"]
+        r.store.triggerPrimary()
+        XCTAssertEqual(r.store.state, .breakDone)
+        XCTAssertEqual(r.store.justCompletedPhase, 2)
+        XCTAssertFalse(r.store.errorText.isEmpty)
+
+        r.focus.failing = []
+        r.store.triggerPrimary()
+        XCTAssertEqual(r.store.justCompletedPhase, 0)
+        XCTAssertEqual(r.store.errorText, "")
+
+        r.store.newTaskTitle = "旧草稿"
+        r.store.panelExpanded = true
+        r.store.prepareForRestore()
+        XCTAssertEqual(r.store.newTaskTitle, "")
+        XCTAssertFalse(r.store.panelExpanded)
+        XCTAssertFalse(r.store.controlsHidden)
+    }
+
 }
 
 // 测试里直接构造完成结果的便捷初始化。

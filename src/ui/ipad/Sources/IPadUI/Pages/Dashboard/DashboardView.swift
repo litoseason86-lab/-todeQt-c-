@@ -15,7 +15,7 @@ struct DashboardView: View {
             let narrow = geometry.size.width < 700
             List {
                 PageHeader(title: store.nickname.isEmpty ? store.greeting : "\(store.greeting)，\(store.nickname)",
-                           subtitle: TodayDisplayDate.title(TodayDisplayDate.iso(store.now)))
+                           subtitle: TodayDisplayDate.title(store.today))
                     .plainRow(insets: EdgeInsets(top: 4, leading: 0, bottom: 16, trailing: 0))
                 statsGrid(narrow: narrow)
                     .plainRow(insets: EdgeInsets(top: 0, leading: 0, bottom: 20, trailing: 0))
@@ -35,7 +35,7 @@ struct DashboardView: View {
                     }
                     .buttonStyle(AccentTextButtonStyle(size: 15))
                 }
-                .cardRow(store.topTasks.isEmpty ? .top : .top, insets: EdgeInsets(top: 12, leading: 16, bottom: 4, trailing: 4))
+                .cardRow(.top, insets: EdgeInsets(top: 12, leading: 16, bottom: 4, trailing: 4))
                 if store.topTasks.isEmpty {
                     Text("今天还没有任务").scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
                         .frame(maxWidth: .infinity, minHeight: 80).cardRow(.bottom)
@@ -60,7 +60,7 @@ struct DashboardView: View {
         .navigationTitle("")
         .toolbarTitleDisplayMode(.inline)
         .onAppear { store.start() }
-        .onDisappear { store.stop() }
+        .onDisappear { _ = core.inlineEditor.finish(); store.stop() }
         .sheet(item: $sheet) { item in
             switch item {
             case .note(let id): TaskCompletionNoteSheet(taskID: id, core: core, shell: shell)

@@ -28,6 +28,7 @@ struct TaskRow: View {
     @Environment(CoreBridges.self) private var core
     @Environment(ShellStore.self) private var shell
     @FocusState private var field: InlineField?
+    @State private var completionFeedbackCount = 0
     private enum InlineField { case title, notes }
 
     private var compact: Bool { compactAppearance ?? (sizeClass == .compact) }
@@ -76,7 +77,8 @@ struct TaskRow: View {
             }
         }
         .contextMenu { if !selectionMode { menu } }
-        .sensoryFeedback(.success, trigger: task.completed)
+        // 仅在用户主动点完成从未完成变为完成时触发成功触感；取消完成或同步刷新不误震动。
+        .sensoryFeedback(.success, trigger: completionFeedbackCount)
         .accessibilityAddTraits(selectionMode && selected ? .isSelected : [])
     }
 
@@ -89,10 +91,16 @@ struct TaskRow: View {
         } else if allowsCompletion {
             Button {
                 act {
+                    let willComplete = !task.completed
                     // 勾选是一步完成，带记录的完成由右滑或长按打开表单；两条路径共用 TaskActions。
-                    if let onToggleCompletion { onToggleCompletion() }
-                    else if task.completed { _ = actions.uncomplete(id: task.id) }
-                    else { _ = actions.complete(id: task.id, title: task.title) }
+                    if let onToggleCompletion {
+                        onToggleCompletion()
+                        if willComplete { completionFeedbackCount += 1 }
+                    } else if task.completed {
+                        _ = actions.uncomplete(id: task.id)
+                    } else if actions.complete(id: task.id, title: task.title) {
+                        completionFeedbackCount += 1
+                    }
                 }
             } label: {
                 Group {
@@ -112,7 +120,7 @@ struct TaskRow: View {
     }
 
     @ViewBuilder private var content: some View {
-        if editing {
+        if editing && !selectionMode {
             @Bindable var editor = editor
             VStack(alignment: .leading, spacing: 6) {
                 TextField("标题", text: $editor.title)
@@ -131,7 +139,7 @@ struct TaskRow: View {
             .padding(.vertical, 8)
             // 编辑框随开始编辑才出现，聚焦要等它进了视图树；放在 task 里而不是 onChange，避免聚焦落空。
             .task(id: editor.focusRequested) {
-                guard editor.focusRequested, editing else { return }
+                guard editor.focusRequested, editing, !selectionMode else { return }
                 field = .title; editor.acknowledgeFocus()
             }
             // 点别处让两个框都失焦就结束编辑；标题与备注之间切换时焦点可能先落空一瞬，所以下一轮再看。
@@ -223,7 +231,7 @@ struct TaskRow: View {
 }
 
 // 共享详情编号的读取限于锚点；开关浮层只更新这个子树，行内编辑的视图身份与焦点保持不变。
-private struct TaskDetailAnchor: View {
+struct TaskDetailAnchor: View {
     let taskID: Int
     let detailTaskID: Binding<Int?>
     let core: CoreBridges

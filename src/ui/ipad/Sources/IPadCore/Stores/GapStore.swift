@@ -57,8 +57,8 @@ public enum GapFormIntent: Identifiable, Equatable {
     @ObservationIgnored private let preferences: UserDefaults?
     @ObservationIgnored private let logicalDay: any LogicalDayBridgeProtocol
     @ObservationIgnored private weak var shell: ShellStore?
-    private var active = false
-    private var reading = false
+    @ObservationIgnored private var active = false
+    @ObservationIgnored private var reading = false
     public init(bridge: any KnowledgeGapBridging, logicalDay: any LogicalDayBridgeProtocol, shell: ShellStore? = nil, categories: (any CategoryBridgeProtocol)? = nil, preferences: UserDefaults? = nil, tasks: (any TaskBridgeProtocol)? = nil) {
         self.bridge = bridge; self.logicalDay = logicalDay; self.shell = shell; categoryBridge = categories; self.preferences = preferences; taskBridge = tasks
         if let stored = preferences?.object(forKey: "ipadui.knowledgeGap.status") as? Int, [-2, 2].contains(stored) { statusFilter = stored }
@@ -72,6 +72,14 @@ public enum GapFormIntent: Identifiable, Equatable {
         bridge.onFailure = nil
     }
     public func setActive(_ value: Bool) { active = value; if value { refresh() } }
+    public func prepareForRestore() {
+        form = nil
+        pendingDelete = nil
+        pendingRevealID = nil
+        selectedID = nil
+        detailPresented = false
+        errorMessage = ""
+    }
     public func logicalDayChanged() { if active { refresh() } }
     public func relatedDataChanged() { if active { refresh() } }
     public func gaps(status: Int) -> [GapValue] { items.filter { $0.status == status } }

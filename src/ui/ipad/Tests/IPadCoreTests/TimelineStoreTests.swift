@@ -18,6 +18,7 @@ import XCTest
             logicalDay.relations["2026-10-09/2026-10-09"] = .same
             store = TimelineStore(history: history, statistics: statistics, pendingDeletion: pending,
                                   logicalDay: logicalDay, date: "2026-10-09", focus: focus)
+            store.setActive(true)
         }
     }
     // 产品保证：副标题「· 今天」只认服务的日期关系；翻到别的日子或关系读取失败时都不写「今天」。
@@ -351,5 +352,48 @@ import XCTest
         XCTAssertTrue(f.store.editorTaskOptions.contains { $0.taskID == 71 })
         f.store.refresh()
         XCTAssertTrue(f.store.editorTaskOptions.contains { $0.taskID == 71 })
+    }
+
+    // 产品保证：今日专注页隐藏期间不响应历史、专注完成或日界信号查库，也不污染隐藏页错误；重新进入后按最新日界补读。
+    func testInactiveTimelineSkipsBackgroundReadsAndCatchesUpOnActivation() {
+        let shell = ShellStore(bridge: ShellBridgeFake())
+        let history = FocusHistoryBridgeFake()
+        let statistics = StatisticsBridgeFake()
+        let logicalDay = LogicalDayBridgeFake(); logicalDay.today = "2026-10-09"
+        logicalDay.relations["2026-10-09/2026-10-09"] = .same
+        logicalDay.relations["2026-10-10/2026-10-10"] = .same
+        let focus = FocusBridgeFake()
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: TaskBridgeFake(), shell: shell)
+        let store = TimelineStore(history: history, statistics: statistics, pendingDeletion: pending,
+                                  logicalDay: logicalDay, date: "2026-10-09", focus: focus)
+        XCTAssertTrue(history.calls.isEmpty)
+        history.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "后台查库失败"])
+        history.onChanged?(); focus.onFocusCompleted?(1500); focus.onRestCompleted?()
+        logicalDay.today = "2026-10-10"
+        XCTAssertTrue(history.calls.isEmpty)
+        XCTAssertEqual(store.error, "")
+
+        history.error = nil
+        store.setActive(true)
+        XCTAssertEqual(store.selectedDate, "2026-10-10")
+        let callsWhenActive = history.calls.count
+        XCTAssertGreaterThan(callsWhenActive, 0)
+
+        store.setActive(false)
+        history.onChanged?(); focus.onFocusCompleted?(1500)
+        XCTAssertEqual(history.calls.count, callsWhenActive)
+
+        // 活跃态补录触发桥接同步 onChanged 时，写保护抑制重入，每次保存只重读一轮日时间轴。
+        store.setActive(true)
+        let timelinesBeforeWrite = history.calls.filter { $0.0 == "dayTimeline" }.count
+        XCTAssertTrue(store.addManualSession(taskID: 1, startTime: "2026-10-10T09:00:00", durationMinutes: 25))
+        XCTAssertEqual(history.calls.filter { $0.0 == "dayTimeline" }.count, timelinesBeforeWrite + 1)
+        // 日常时间轴刷新不预读全表 taskOptions，仅在打开补录/编辑弹窗时按需加载任务候选。
+        XCTAssertFalse(history.calls.contains { $0.0 == "taskOptions" })
+        store.openEditor(original: nil)
+        XCTAssertEqual(history.calls.filter { $0.0 == "taskOptions" }.count, 1)
+        store.prepareForRestore()
+        XCTAssertFalse(store.manualAddPresented)
+        XCTAssertNil(store.editorDraft)
     }
 }

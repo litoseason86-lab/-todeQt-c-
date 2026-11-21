@@ -49,7 +49,33 @@ static NSString *readError(ServiceReadError error) { return error == ServiceRead
 @end
 
 @implementation PTSyncBridge { QPointer<SyncController> _controller; std::unique_ptr<QObject> _connections; }
-- (instancetype)init { NSAssert(NSThread.isMainThread, @"同步桥接只能在主线程创建"); if ((self = [super init])) { _controller = PTBridgeSupport::service<SyncController>(QStringLiteral("syncController")); _connections = std::make_unique<QObject>(); __weak PTSyncBridge *weakSelf = self; if (_controller) { QObject::connect(_controller.data(), &SyncController::statusChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onStatusChanged) b.onStatusChanged(); }); QObject::connect(_controller.data(), &SyncController::folderChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onFolderChanged) b.onFolderChanged(); }); QObject::connect(_controller.data(), &SyncController::choosingFolderChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onChoosingFolderChanged) b.onChoosingFolderChanged(); }); QObject::connect(_controller.data(), &SyncController::transportChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onTransportChanged) b.onTransportChanged(); }); QObject::connect(_controller.data(), &SyncController::switchingTransportChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onSwitchingTransportChanged) b.onSwitchingTransportChanged(); }); QObject::connect(_controller.data(), &SyncController::logChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onLogChanged) b.onLogChanged(); }); QObject::connect(_controller.data(), &SyncController::notice, _connections.get(), [weakSelf](const QString &text) { PTSyncBridge *b = weakSelf; if (b.onNotice) b.onNotice(string(text)); }); QObject::connect(_controller.data(), &SyncController::copyRequested, _connections.get(), [weakSelf](const QString &text) { PTSyncBridge *b = weakSelf; if (b.onCopyRequested) b.onCopyRequested(string(text)); }); } } return self; }
+- (instancetype)init
+{
+    NSAssert(NSThread.isMainThread, @"同步桥接只能在主线程创建");
+    if ((self = [super init])) {
+        _controller = PTBridgeSupport::service<SyncController>(QStringLiteral("syncController"));
+        _connections = std::make_unique<QObject>();
+        __weak PTSyncBridge *weakSelf = self;
+        if (_controller) {
+            QObject::connect(_controller.data(), &SyncController::statusChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onStatusChanged) b.onStatusChanged(); });
+            QObject::connect(_controller.data(), &SyncController::folderChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onFolderChanged) b.onFolderChanged(); });
+            QObject::connect(_controller.data(), &SyncController::choosingFolderChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onChoosingFolderChanged) b.onChoosingFolderChanged(); });
+            QObject::connect(_controller.data(), &SyncController::transportChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onTransportChanged) b.onTransportChanged(); });
+            QObject::connect(_controller.data(), &SyncController::switchingTransportChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onSwitchingTransportChanged) b.onSwitchingTransportChanged(); });
+            QObject::connect(_controller.data(), &SyncController::logChanged, _connections.get(), [weakSelf] { PTSyncBridge *b = weakSelf; if (b.onLogChanged) b.onLogChanged(); });
+            QObject::connect(_controller.data(), &SyncController::notice, _connections.get(), [weakSelf](const QString &text) { PTSyncBridge *b = weakSelf; if (b.onNotice) b.onNotice(string(text)); });
+            QObject::connect(_controller.data(), &SyncController::copyRequested, _connections.get(), [weakSelf](const QString &text) { PTSyncBridge *b = weakSelf; if (b.onCopyRequested) b.onCopyRequested(string(text)); });
+            // 快照已提交，Swift 外壳必须在常规数据刷新前同步清理旧库编辑器。
+            QObject::connect(_controller.data(), &SyncController::snapshotReplaced, _connections.get(), [weakSelf] {
+                PTSyncBridge *bridge = weakSelf;
+                if (bridge.onSnapshotReplaced) {
+                    bridge.onSnapshotReplaced();
+                }
+            });
+        }
+    }
+    return self;
+}
 - (BOOL)enabled { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return _controller && _controller->isEnabled(); }
 - (NSString *)statusKey { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return string(_controller ? _controller->statusKey() : QString()); }
 - (BOOL)hasProblem { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return _controller && _controller->hasProblem(); }
@@ -77,6 +103,7 @@ static NSString *readError(ServiceReadError error) { return error == ServiceRead
 - (BOOL)rebuildFolder:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (!_controller) return fail(error, QStringLiteral("同步服务未登记或已释放")); _controller->rebuildFolder(); return YES; }
 - (BOOL)joinWithPairingCode:(NSString *)code error:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (!_controller) return fail(error, QStringLiteral("同步服务未登记或已释放")); _controller->joinWithPairingCode(string(code)); return YES; }
 - (BOOL)switchToICloud:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (!_controller) return fail(error, QStringLiteral("同步服务未登记或已释放")); _controller->switchToICloud(); return YES; }
+- (void)cancelTransportSwitch { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (_controller) _controller->cancelTransportSwitch(); }
 - (void)clearTransportProblem { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (_controller) _controller->clearTransportProblem(); }
 - (NSString *)joinWarning { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return string(_controller ? _controller->joinWarning() : QString()); }
 - (PTSyncLogReadResult *)syncLog:(NSInteger)limit { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); int value; if (!integer(limit, &value)) value = 200; return [[PTSyncLogReadResult alloc] initWithResult:_controller ? _controller->readSyncLog(value) : ServiceReadResult<QVariantList>{QVariantList{}, ServiceReadError::Database}]; }

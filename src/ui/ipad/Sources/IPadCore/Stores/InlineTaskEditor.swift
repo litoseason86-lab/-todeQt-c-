@@ -15,6 +15,7 @@ import Observation
     @ObservationIgnored private weak var shell: ShellStore?
     @ObservationIgnored private var token: InteractionToken?
     @ObservationIgnored private var baseline: TaskValue?
+    @ObservationIgnored private var flusherToken: UUID?
 
     public init(tasks: any TaskBridgeProtocol, interactions: any InteractionBridgeProtocol, shell: ShellStore) {
         self.tasks = tasks; self.interactions = interactions; self.shell = shell
@@ -35,6 +36,10 @@ import Observation
             token = registration; baseline = latest
             title = latest.title; notes = latest.notes
             taskID = id; focusRequested = true
+            // 仅在编辑期间向外壳登记同步冲刷，确保退后台、备份或切搜索前落盘并释放列表冻结令牌。
+            if flusherToken == nil {
+                flusherToken = shell?.registerEditFlusher { [weak self] in self?.finish() ?? true }
+            }
             return true
         } catch { shell?.showToast(error.localizedDescription); return false }
     }
@@ -60,6 +65,10 @@ import Observation
 
     private func release() {
         taskID = -1; baseline = nil; focusRequested = false
+        if let flusher = flusherToken {
+            flusherToken = nil
+            shell?.unregisterEditFlusher(flusher)
+        }
         let registration = token; token = nil; registration?.end()
     }
 }

@@ -48,4 +48,4 @@ void installNativeRoot()
         }];
 }
 
-void flushNativeEdits() { [PTLifecycleBridge flush]; }
+bool flushNativeEdits() { return [PTLifecycleBridge flush]; }

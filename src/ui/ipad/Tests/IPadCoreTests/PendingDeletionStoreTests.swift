@@ -107,4 +107,63 @@ import XCTest
         XCTAssertEqual(bridge.calls.filter { $0.name == "commit" }.count, 1)
     }
 
+    // 产品保证：新提示顶掉待删撤销条触发提交失败时，保留原条目的删除失败告警而不被外层普通成功提示覆盖；若外层携带新退场职责则同时保留退场回调与错误可见性。
+    func testReplacingToastPreservesCommitFailureAlertOverOrdinaryToast() {
+        let (shell, bridge, tasks, store) = fixture()
+        let actions = TaskActions(tasks: tasks, pendingDeletion: store, shell: shell)
+        XCTAssertTrue(store.requestTask(id: 7, title: "待删甲"))
+        bridge.commitError = NSError(domain: "测试", code: 1)
+
+        // 完成任务乙弹普通提示时触发甲提交失败：必须保留甲的删除失败告警，不被「已完成「乙」」吞没。
+        XCTAssertTrue(actions.complete(id: 8, title: "乙"))
+        XCTAssertEqual(shell.toast?.message, "删除「待删甲」失败：数据库写入失败：T33-2 blocked")
+        XCTAssertNil(shell.toast?.actionTitle)
+
+        // 若外层调用携带新的 onRetired 责任，既不丢失新退场回调，也将重入失败提升到外壳错误可见。
+        var secondRetired = 0
+        shell.showToast("第一条", onRetired: {
+            shell.showToast("第一条提交失败")
+        })
+        shell.showToast("第二条待退场", actionTitle: "撤销", action: {}, onRetired: { secondRetired += 1 })
+        XCTAssertEqual(shell.toast?.message, "第二条待退场")
+        XCTAssertEqual(shell.errorMessage, "第一条提交失败")
+        shell.retireToast()
+        XCTAssertEqual(secondRetired, 1)
+    }
+
+    // 产品保证：删 A → 外部重置/换库清槽 → 删 B：A 的旧提示立即退场且其退场回调绝不提前提交 B，撤销 B 正常恢复 B。
+    func testCrossDatabaseResetRetiresOldUndoAndProtectsNewDeletion() {
+        // 场景 1：显式调用 invalidateForDatabaseChange 换库。
+        let (shell, bridge, _, store) = fixture()
+        XCTAssertTrue(store.requestTask(id: 7, title: "旧库任务A"))
+        XCTAssertEqual(store.pendingTaskID, 7)
+        shell.invalidateForDatabaseChange()
+        store.invalidateForDatabaseChange()
+        bridge.retireForExternalReset()
+        XCTAssertNil(shell.toast)
+        XCTAssertEqual(store.pendingTaskID, -1)
+        XCTAssertFalse(bridge.calls.contains { $0.name == "commit" })
+
+        XCTAssertTrue(store.requestTask(id: 8, title: "新库任务B"))
+        XCTAssertEqual(store.pendingTaskID, 8)
+        XCTAssertEqual(bridge.calls.filter { $0.name == "commit" }.count, 0)
+        shell.triggerToastAction()
+        XCTAssertEqual(bridge.calls.last?.name, "cancel")
+        XCTAssertEqual(store.pendingTaskID, -1)
+
+        // 场景 2：底层 PendingDeletion::retireForExternalReset 只发出 changed 信号（不发 retired）时，旧撤销条同样静默收起且不串代提交新槽。
+        let (shell2, bridge2, _, store2) = fixture()
+        XCTAssertTrue(store2.requestTask(id: 11, title: "任务A"))
+        XCTAssertNotNil(shell2.toast)
+        bridge2.retireForExternalReset()
+        XCTAssertNil(shell2.toast)
+        XCTAssertEqual(store2.pendingTaskID, -1)
+        XCTAssertTrue(store2.requestTask(id: 12, title: "任务B"))
+        XCTAssertEqual(store2.pendingTaskID, 12)
+        XCTAssertEqual(bridge2.calls.filter { $0.name == "commit" }.count, 0)
+        shell2.triggerToastAction()
+        XCTAssertEqual(bridge2.calls.last?.name, "cancel")
+        XCTAssertEqual(store2.pendingTaskID, -1)
+    }
+
 }

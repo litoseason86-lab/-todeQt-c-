@@ -8,7 +8,7 @@ import XCTest
         for selectServer in [false, true] {
             let bridge = SettingsSyncFake()
             bridge.result.transportProblem = "上一轮连接失败"
-            let store = SettingsSyncStore(bridge: bridge)
+            let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
             XCTAssertEqual(store.transportProblem, "上一轮连接失败")
             if selectServer { store.selectTransport("server") }
             else { store.requestPairingSheet() }
@@ -21,7 +21,7 @@ import XCTest
     // 产品保证：取消配对表单清除本轮问题并立即更新页面快照。
     func testPairingSheetCancelClearsTransportProblem() {
         let bridge = SettingsSyncFake()
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         store.requestPairingSheet()
         XCTAssertTrue(store.pairingSheetRequested)
         bridge.calls = []
@@ -38,7 +38,7 @@ import XCTest
     func testPairingFailureAndAutomaticCloseDoNotClearProblem() {
         let bridge = SettingsSyncFake()
         bridge.result.transport = "server"
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         store.requestPairingSheet()
         bridge.calls = []
         bridge.onPairingCodeSubmitted = { [unowned bridge] in
@@ -73,7 +73,7 @@ import XCTest
         ]
         for (name, action) in actions {
             let bridge = SettingsSyncFake()
-            let store = SettingsSyncStore(bridge: bridge)
+            let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
             bridge.onNotice?("上次操作的通知")
             XCTAssertEqual(store.notice, "上次操作的通知", name)
             action(store)
@@ -86,7 +86,7 @@ import XCTest
     // 产品保证：同步动作过程中回调产生的通知和复制反馈不会被动作收尾清空。
     func testSyncActionCallbackNoticeSurvivesActionCompletion() {
         let bridge = SettingsSyncFake()
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         bridge.onNotice?("旧通知")
         XCTAssertEqual(store.notice, "旧通知")
         bridge.onPairingCodeSubmitted = { [unowned bridge] in bridge.onNotice?("配对请求已送出") }
@@ -102,7 +102,7 @@ import XCTest
     // 产品保证：进入新同步页面或日志详情清除旧提示后，仍能收到后续通知与复制反馈。
     func testClearSyncNoticePreservesFutureCallbacks() {
         let bridge = SettingsSyncFake()
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         bridge.onNotice?("上一页通知")
         XCTAssertEqual(store.notice, "上一页通知")
         store.clearNotice()
@@ -248,7 +248,7 @@ import XCTest
         let entry = SyncLogEntry(id: 1, kind: "edit", kindLabel: "修改冲突", time: "今天", title: "备忘录",
             summary: "冲突", detail: "详情", fieldLabel: "正文", lostValue: "  第一行\n🍅\n", keptValue: "新版", canCopyLostValue: true)
         bridge.logs = [entry]
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         store.reloadLogs(); XCTAssertEqual(store.logs, [entry])
         store.copy(entry); XCTAssertEqual(bridge.copied, entry.lostValue)
         XCTAssertEqual(store.notice, "已复制丢失值")
@@ -263,7 +263,7 @@ import XCTest
             summary: "删除赢过修改", detail: "详情", fieldLabel: "标题", lostValue: "未生效的任务名", keptValue: "", canCopyLostValue: false)
         XCTAssertFalse(entry.lostValue.isEmpty)
         XCTAssertFalse(entry.canCopyLostValue)
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         store.copy(entry)
         XCTAssertEqual(bridge.copied, "")
         XCTAssertEqual(store.notice, "")
@@ -288,7 +288,7 @@ import XCTest
 
     // 产品保证：同步开关显示服务接受的值；状态变化刷新，文件夹和同步动作原样转发。
     func testSyncShowsAcceptedStateAndForwardsActions() {
-        let bridge = SettingsSyncFake(); let store = SettingsSyncStore(bridge: bridge)
+        let bridge = SettingsSyncFake(); let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         store.setEnabled(true)
         XCTAssertFalse(store.snapshot.enabled)
         XCTAssertEqual(bridge.calls, ["enabled:true"])
@@ -321,7 +321,7 @@ import XCTest
     func testSyncActionFailuresPreserveBridgeReason() {
         for action in 0..<6 {
             let bridge = SettingsSyncFake()
-            let store = SettingsSyncStore(bridge: bridge)
+            let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
             XCTAssertEqual(store.errorMessage, "")
             bridge.actionError = NSError(domain: "测试", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "同步服务未登记或已释放"])
@@ -342,7 +342,7 @@ import XCTest
     // 产品保证：iCloud 选服务器只请求配对表单，选回 iCloud 才调用服务切换。
     func testSyncTransportSelectionRequestsPairingBeforeSwitching() {
         let bridge = SettingsSyncFake()
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         XCTAssertFalse(store.isServerTransport)
         store.selectTransport("server")
         XCTAssertTrue(store.pairingSheetRequested)
@@ -358,7 +358,7 @@ import XCTest
     // 产品保证：配对码提交只转发给桥接，连接失败保留表单和问题，成功切到服务器后自动关闭。
     func testPairingSubmissionPreservesProblemAndClosesOnlyAfterSuccess() {
         let bridge = SettingsSyncFake()
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         store.requestPairingSheet()
         bridge.result.switchingTransport = true
         store.submitPairingCode(" valid-code ")
@@ -382,7 +382,7 @@ import XCTest
     func testServerRepairingKeepsSheetAfterImmediateFailureUntilRetrySucceeds() {
         let bridge = SettingsSyncFake()
         bridge.result.transport = "server"
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         store.requestPairingSheet()
         XCTAssertTrue(store.isServerTransport)
         XCTAssertTrue(store.pairingSheetRequested)
@@ -423,7 +423,7 @@ import XCTest
             bridge.result.switchingTransport = true
             bridge.onChanged?()
         }
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         store.requestPairingSheet()
         XCTAssertTrue(store.isServerTransport)
         store.submitPairingCode("unreachable-code")
@@ -444,7 +444,7 @@ import XCTest
         let bridge = SettingsSyncFake()
         bridge.result.transport = "server"
         bridge.joinWarningValue = "本机还有 2 条改动没发出，加入后只留在自动备份里。"
-        let store = SettingsSyncStore(bridge: bridge)
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         XCTAssertTrue(store.isServerTransport)
         XCTAssertEqual(store.joinTitle, "加入同步空间？")
         XCTAssertEqual(store.joinConfirmationText,
@@ -456,6 +456,200 @@ import XCTest
         bridge.onChanged?()
         XCTAssertTrue(store.canSubmitPairingCode("code"))
         XCTAssertFalse(store.canSubmitPairingCode("   "))
+    }
+
+    // 产品保证：手动创建备份与确认恢复前都先冲刷备忘录编辑会话，存在未保存草稿无法落盘时中止操作并提示用户处理。
+    func testBackupAndRestoreFlushMemoEditsBeforeProceeding() throws {
+        var flushOK = false
+        var events: [String] = []
+        let bridge = SettingsBackupFake(); let files = SettingsFilesFake()
+        let store = SettingsBackupStore(
+            bridge: bridge, files: files,
+            flushEdits: { events.append("flush"); return flushOK },
+            commitPending: { events.append("commit"); return true },
+            restoreWarning: { "" }
+        )
+        store.createBackup()
+        XCTAssertEqual(events, ["flush"])
+        XCTAssertEqual(store.errorMessage, "备忘录还有未保存的修改，请先回备忘录处理")
+        XCTAssertTrue(bridge.calls.isEmpty)
+
+        events.removeAll()
+        try store.importBackup(URL(fileURLWithPath: "/external/input.tomatobackup"))
+        bridge.onBackupInfoReady?("/owned/import.tomatobackup", BackupInfo(valid: true))
+        XCTAssertNotNil(store.restoreInfo)
+        store.confirmRestore()
+        XCTAssertEqual(events, ["flush"])
+        XCTAssertEqual(store.errorMessage, "备忘录还有未保存的修改，请先回备忘录处理")
+        XCTAssertNil(store.restoreInfo)
+        XCTAssertFalse(bridge.calls.contains { $0.hasPrefix("restore:") })
+
+        flushOK = true; events.removeAll()
+        store.createBackup()
+        XCTAssertEqual(events, ["flush", "commit"])
+        XCTAssertEqual(bridge.calls.last, "backup:/owned/backup.tomatobackup")
+    }
+
+    // 产品保证：CSV 导出开始前先冲刷备忘草稿并提交共享待删槽，任一失败均中止导出，避免把已隐藏的待删记录导出。
+    func testExportFlushesEditsAndCommitsPendingDeletionBeforeStarting() {
+        var flushOK = false, commitOK = false
+        var events: [String] = []
+        let bridge = SettingsExportFake(); let files = SettingsFilesFake()
+        let store = SettingsExportStore(
+            bridge: bridge, files: files, logicalDay: LogicalDayBridgeFake(),
+            flushEdits: { events.append("flush"); return flushOK },
+            commitPending: { events.append("commit"); return commitOK }
+        )
+        store.start(.all)
+        XCTAssertEqual(events, ["flush"])
+        XCTAssertEqual(store.errorMessage, "备忘录还有未保存的修改，请先回备忘录处理")
+        XCTAssertTrue(bridge.calls.isEmpty)
+
+        flushOK = true; events.removeAll()
+        store.start(.tasks)
+        XCTAssertEqual(events, ["flush", "commit"])
+        XCTAssertEqual(store.errorMessage, "待删项提交失败，导出已取消")
+        XCTAssertTrue(bridge.calls.isEmpty)
+
+        commitOK = true; events.removeAll()
+        store.start(.tasks)
+        XCTAssertEqual(events, ["flush", "commit"])
+        XCTAssertEqual(bridge.calls, ["tasks:/owned/output.csv"])
+    }
+
+    // 产品保证：确认加入同步文件夹或提交服务器配对码前，先冲刷备忘草稿并提交待删槽，任一失败均中止加入。
+    func testSyncJoinAndPairingFlushEditsAndCommitPendingDeletionBeforeProceeding() {
+        var flushOK = false, commitOK = false
+        var events: [String] = []
+        let bridge = SettingsSyncFake()
+        let store = SettingsSyncStore(
+            bridge: bridge,
+            flushEdits: { events.append("flush"); return flushOK },
+            commitPending: { events.append("commit"); return commitOK }
+        )
+        store.setActive(true)
+        store.confirmJoin()
+        XCTAssertEqual(events, ["flush"])
+        XCTAssertEqual(store.errorMessage, "备忘录还有未保存的修改，请先回备忘录处理")
+        XCTAssertTrue(bridge.calls.isEmpty)
+
+        flushOK = true; events.removeAll()
+        store.submitPairingCode("pair-1")
+        XCTAssertEqual(events, ["flush", "commit"])
+        XCTAssertEqual(store.errorMessage, "待删项提交失败，加入同步已取消")
+        XCTAssertTrue(bridge.calls.isEmpty)
+
+        commitOK = true; events.removeAll()
+        store.confirmJoin()
+        store.submitPairingCode("pair-1")
+        XCTAssertEqual(events, ["flush", "commit", "flush", "commit"])
+        XCTAssertEqual(bridge.calls, ["join", "pair:pair-1"])
+    }
+
+    // 产品保证：同步设置不在前台时不响应状态信号查询快照或重拉 200 条日志，也不污染隐藏页错误；进入对应页面才按需读取。
+    func testInactiveSyncStoreDefersRefreshAndSkipsBackgroundLogQueries() {
+        let bridge = SettingsSyncFake()
+        bridge.result.pendingCount = 5
+        bridge.logs = [SyncLogEntry(id: 1, kind: "edit", kindLabel: "", time: "", title: "日志1",
+                                    summary: "", detail: "", fieldLabel: "", lostValue: "", keptValue: "", canCopyLostValue: false)]
+        let store = SettingsSyncStore(bridge: bridge)
+        XCTAssertEqual(store.snapshot.pendingCount, 0)
+        bridge.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "后台关库"])
+        bridge.onChanged?()
+        XCTAssertEqual(store.errorMessage, "")
+        XCTAssertTrue(store.logs.isEmpty)
+
+        bridge.error = nil
+        store.setActive(true)
+        XCTAssertEqual(store.snapshot.pendingCount, 5)
+        // 只在同步主页而未进入同步日志子页时，不重拉 200 条日志。
+        XCTAssertTrue(store.logs.isEmpty)
+        bridge.result.pendingCount = 9
+        bridge.onChanged?()
+        XCTAssertEqual(store.snapshot.pendingCount, 9)
+        XCTAssertTrue(store.logs.isEmpty)
+
+        store.setLogsActive(true)
+        XCTAssertEqual(store.logs.count, 1)
+        store.setLogsActive(false)
+        store.setActive(false)
+        bridge.result.pendingCount = 12
+        bridge.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "隐藏期间失败"])
+        bridge.onChanged?()
+        XCTAssertEqual(store.snapshot.pendingCount, 9)
+        XCTAssertEqual(store.errorMessage, "")
+    }
+
+    // 产品保证：提交配对码后在连接期间点取消，必须调用 cancelTransportSwitch 终止在途切换并保留原同步方式。
+    func testPairingCancelAbortsInFlightTransportSwitch() {
+        let bridge = SettingsSyncFake()
+        bridge.result.transport = "icloud"
+        bridge.onPairingCodeSubmitted = { [unowned bridge] in
+            bridge.result.switchingTransport = true
+            bridge.onChanged?()
+        }
+        let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
+        store.selectTransport("server")
+        XCTAssertTrue(store.pairingSheetRequested)
+        bridge.calls.removeAll()
+        store.submitPairingCode("pair-code")
+        XCTAssertTrue(store.snapshot.switchingTransport)
+        store.cancelPairingSheet()
+        XCTAssertEqual(bridge.calls, ["pair:pair-code", "cancelTransportSwitch", "clearTransportProblem"])
+        XCTAssertFalse(store.pairingSheetRequested)
+        XCTAssertFalse(store.snapshot.switchingTransport)
+        XCTAssertEqual(store.snapshot.transport, "icloud")
+    }
+
+    // 产品保证：同步日志子页激活期间，仅在 logRevision 变化时重读 200 条日志，普通同步状态变化不重复查日志。
+    func testSyncLogThrottlesReloadByLogRevision() {
+        let bridge = SettingsSyncFake()
+        bridge.result.logRevision = 1
+        bridge.logs = [SyncLogEntry(id: 1, kind: "edit", kindLabel: "", time: "", title: "日志1",
+                                    summary: "", detail: "", fieldLabel: "", lostValue: "", keptValue: "", canCopyLostValue: false)]
+        let store = SettingsSyncStore(bridge: bridge)
+        store.setActive(true)
+        store.setLogsActive(true)
+        XCTAssertEqual(bridge.logReads, 1)
+
+        // pendingCount 或 busy 变化但 logRevision 未变：零日志查询。
+        bridge.result.pendingCount = 3
+        bridge.result.busy = true
+        bridge.onChanged?()
+        XCTAssertEqual(bridge.logReads, 1)
+
+        // logRevision 递增：重读一次日志。
+        bridge.result.logRevision = 2
+        bridge.onChanged?()
+        XCTAssertEqual(bridge.logReads, 2)
+    }
+
+    // 产品保证：异步导入备份在后台完成文件复制后再请求备份信息，确认恢复后迟到的取消回调绝不误删正在恢复的临时副本。
+    func testImportBackupAsyncAndLateCancelGuardDuringRestore() async throws {
+        let base = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("pt-async-import-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let source = base.appendingPathComponent("external.tomatobackup")
+        try Data("sqlite-backup-payload".utf8).write(to: source)
+
+        let bridge = SettingsBackupFake()
+        let workspace = FileTransferWorkspace(base: base)
+        let store = SettingsBackupStore(bridge: bridge, files: workspace, commitPending: { true }, restoreWarning: { "同步提醒" })
+        await store.importBackupAsync(source)
+        let inspectCall = try XCTUnwrap(bridge.calls.last)
+        XCTAssertTrue(inspectCall.hasPrefix("inspect:"))
+        let copiedPath = String(inspectCall.dropFirst("inspect:".count))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copiedPath))
+        bridge.onBackupInfoReady?(copiedPath, BackupInfo(valid: true))
+        XCTAssertNotNil(store.restoreInfo)
+
+        store.confirmRestore()
+        XCTAssertNil(store.restoreInfo)
+        // Alert 收起时触发的迟到 cancelRestore 不能删除正在恢复的本地副本。
+        store.cancelRestore()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copiedPath))
+        bridge.onRestoreCompleted?(true, "恢复成功")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copiedPath))
     }
 }
 
@@ -511,6 +705,7 @@ import XCTest
     var onPairingCodeSubmitted: (() -> Void)?
     var result = SyncSnapshot()
     var calls: [String] = []
+    var logReads = 0
     func snapshot() throws -> SyncSnapshot { if let error { throw error }; return result }
     func setEnabled(_ value: Bool) throws { calls.append("enabled:\(value)"); if let actionError { throw actionError } }
     func confirmJoin() throws { calls.append("join"); if let actionError { throw actionError } }
@@ -524,13 +719,17 @@ import XCTest
         // 控制器的校验失败会同步发状态信号；替身也在动作返回前转发，避免漏掉重入路径。
         onPairingCodeSubmitted?()
     }
+    func cancelTransportSwitch() {
+        calls.append("cancelTransportSwitch")
+        result.switchingTransport = false
+    }
     func clearTransportProblem() {
         calls.append("clearTransportProblem")
         if !result.switchingTransport { result.transportProblem = "" }
     }
     func switchToICloud() throws { calls.append("icloud"); if let actionError { throw actionError } }
     func joinWarning() -> String { joinWarningValue }
-    func syncLog(limit: Int) throws -> [SyncLogEntry] { if let error { throw error }; return logs }
+    func syncLog(limit: Int) throws -> [SyncLogEntry] { logReads += 1; if let error { throw error }; return logs }
     func copyLostValue(_ text: String) throws { if let actionError { throw actionError }; copied = text; onCopyRequested?(text) }
     func restoreWarning() -> String { "" }
 }

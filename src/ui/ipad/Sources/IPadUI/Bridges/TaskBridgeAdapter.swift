@@ -32,7 +32,12 @@ import PTBridge
     func todayTasks() throws -> [TaskValue] { try values(bridge.todayTasks()) }
     func weekTasks(startDate: String) throws -> [TaskValue] { try values(bridge.weekTasks(startDate)) }
     func overdueTasks() throws -> [TaskValue] { try values(bridge.overdueTasks()) }
-    func task(id: Int) throws -> TaskValue { try values(bridge.task(id))[0] }
+    func task(id: Int) throws -> TaskValue {
+        guard let first = try values(bridge.task(id)).first else {
+            throw NSError(domain: "PTTaskBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "任务已不存在"])
+        }
+        return first
+    }
     func search(text: String, status: Int, limit: Int) throws -> [TaskValue] { try values(bridge.search(text, status: status, limit: limit)) }
     func create(title: String, date: String, categoryID: Int, estimatedMinutes: Int, notes: String) throws -> Int {
         try bridge.createTask(title, date: date, categoryId: categoryID, estimatedMinutes: estimatedMinutes, notes: notes)

@@ -10,6 +10,7 @@ import Observation
     public private(set) var nickname = ""
     public private(set) var loadError = ""
     public private(set) var now = Date()
+    public private(set) var today = ""
     // 先投影共享待删槽再取前六项；待删状态可独立变化，不能依赖任务信号重读或先截断列表。
     public var topTasks: [TaskValue] { Array(tasks.filter { $0.id != pendingDeletion.pendingTaskID }.prefix(6)) }
     public var greeting: String { DashboardFormat.greeting(for: Calendar.current.component(.hour, from: now)) }
@@ -60,6 +61,8 @@ import Observation
     public func refresh() {
         guard active else { return }
         now = nowProvider(); nickname = settings.snapshot().nickname
+        // 页头日期与同页统计/任务共用逻辑今日，避免凌晨日界前显示第二天自然日。
+        today = logicalDay?.today ?? ContentDateFormat.isoDate(now)
         // 一次刷新从当前快照重新建立错误状态；某一路失败时保留它之前的数据显示，避免空白覆盖有效数据。
         loadError = ""
         do { tasks = try tasksBridge.todayTasks() } catch { loadError = "任务加载失败，请重试" }

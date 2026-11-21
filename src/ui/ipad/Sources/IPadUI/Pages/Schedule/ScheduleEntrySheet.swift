@@ -86,12 +86,15 @@ import SwiftUI
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save() } }
             }
         }
+        .tint(ThemeColors.accentInk)
         .presentationDetents([.large])
         .task {
             do { categoryOptions = try categories.allCategories(); refreshConflict() }
             catch { self.error = error.localizedDescription }
         }
-        .onChange(of: draft) { refreshConflict() }
+        // 仅在星期、单双周、时间与周次变化时重新查询重叠冲突；输入课程名称和地点不逐键查库。
+        .onChange(of: draft.weekday) { refreshConflict() }
+        .onChange(of: draft.weekParity) { refreshConflict() }
         .onChange(of: startText) { refreshConflict() }
         .onChange(of: endText) { refreshConflict() }
         .onChange(of: weekStartText) { refreshConflict() }
@@ -99,7 +102,9 @@ import SwiftUI
     }
     private func parsedDraft() -> ScheduleEntry? {
         let start = ScheduleFormat.parseMinutes(startText), end = ScheduleFormat.parseMinutes(endText)
-        guard start >= 0, end >= 0, let weekStart = Int(weekStartText), let weekEnd = Int(weekEndText) else { return nil }
+        let trimmedWeekStart = weekStartText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedWeekEnd = weekEndText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard start >= 0, end >= 0, let weekStart = Int(trimmedWeekStart), let weekEnd = Int(trimmedWeekEnd) else { return nil }
         var value = draft
         value.startMinutes = start; value.endMinutes = end; value.weekStart = weekStart; value.weekEnd = weekEnd
         return value

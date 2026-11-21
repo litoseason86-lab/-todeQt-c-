@@ -74,6 +74,11 @@ struct TaskDetailSheet: View {
         .presentationDetents([.large])
         .disabled(shell.operationBlocksUI)
         .onAppear { if !store.active { _ = store.begin(id: taskID) } }
+        // 恢复备份或远端快照换库时立即放弃编辑并收起，防止 onDisappear 把旧库草稿写进新库同号任务。
+        .onChange(of: shell.databaseGeneration) { _, _ in
+            store.cancel()
+            dismiss()
+        }
         // 点外面、下滑关掉都按保存处理；保存失败（例如别处已删掉这条）用提示条说原因，再释放编辑登记。
         .onDisappear {
             guard store.active else { return }

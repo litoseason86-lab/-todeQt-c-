@@ -5,36 +5,49 @@ import SwiftUI
 struct FocusImmersiveView: View {
     let store: FocusStore
     let shell: ShellStore
+    @Environment(\.previewThemeID) private var previewThemeID
 
     var body: some View {
         ZStack {
             ThemeColors.surface.ignoresSafeArea()
-            WallpaperBackground(theme: shell.appearanceState.backgroundTheme, enabled: shell.appearanceState.useWallpaper).ignoresSafeArea()
-            VStack(spacing: 28) {
-                Text(store.taskTitleText).font(.title2.bold()).foregroundStyle(ThemeColors.ink)
-                    .multilineTextAlignment(.center).lineLimit(2)
-                if store.pomodoroModeSelected && store.state != .manualRest {
-                    FocusRingView(progress: store.ringProgress, tone: tone, dimmed: store.ringDimmed,
-                                  reduceMotion: store.animationsReduced) {
-                        VStack(spacing: 4) {
-                        FocusClockText(text: store.primaryTimeText, size: 72, slim: store.slimClockFont,
-                                       color: color)
-                            if !store.ringCaption.isEmpty { Text(store.ringCaption).foregroundStyle(ThemeColors.inkSoft) }
-                        }.padding(40)
+            WallpaperBackground(theme: shell.appearanceState.backgroundTheme, enabled: shell.wallpaperVisible).ignoresSafeArea()
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(spacing: 28) {
+                        Text(store.taskTitleText).font(.title2.bold()).foregroundStyle(ThemeColors.ink)
+                            .multilineTextAlignment(.center).lineLimit(2)
+                        if store.pomodoroModeSelected && store.state != .manualRest {
+                            FocusRingView(progress: store.ringProgress, tone: tone, dimmed: store.ringDimmed,
+                                          reduceMotion: store.animationsReduced) {
+                                VStack(spacing: 4) {
+                                    FocusClockText(text: store.primaryTimeText, size: 72, slim: store.slimClockFont,
+                                                   color: color)
+                                    if !store.ringCaption.isEmpty { Text(store.ringCaption).foregroundStyle(ThemeColors.inkSoft) }
+                                }.padding(40)
+                            }
+                            .frame(maxWidth: 380)
+                        } else {
+                            FocusClockText(text: store.primaryTimeText, size: 96, slim: store.slimClockFont, color: ThemeColors.accentInk)
+                        }
+                        if !store.stageText.isEmpty { Text(store.stageText).font(.title3).foregroundStyle(ThemeColors.inkSoft) }
+                        HStack(spacing: 16) {
+                            Button { store.triggerPrimary() } label: { Text(store.primaryButtonText).frame(minWidth: 96, minHeight: 36) }
+                                .buttonStyle(SoftPillStyle())
+                                .opacity(store.primaryButtonEnabled ? 1 : 0.45)
+                                .disabled(!store.primaryButtonEnabled)
+                            Button { store.triggerSecondary() } label: { Text(store.secondaryButtonText).frame(minWidth: 96, minHeight: 36) }
+                                .buttonStyle(.bordered).tint(ThemeColors.inkSoft)
+                        }
+                        if !store.errorText.isEmpty {
+                            Text(store.errorText).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.danger)
+                                .multilineTextAlignment(.center).lineLimit(2)
+                        }
                     }
-                    .frame(maxWidth: 380)
-                } else {
-                    FocusClockText(text: store.primaryTimeText, size: 96, slim: store.slimClockFont, color: ThemeColors.accentInk)
+                    .padding(32)
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
                 }
-                if !store.stageText.isEmpty { Text(store.stageText).font(.title3).foregroundStyle(ThemeColors.inkSoft) }
-                HStack(spacing: 16) {
-                    Button { store.triggerPrimary() } label: { Text(store.primaryButtonText).frame(minWidth: 96, minHeight: 36) }
-                        .buttonStyle(.borderedProminent).tint(ThemeColors.accentFill).disabled(!store.primaryButtonEnabled)
-                    Button { store.triggerSecondary() } label: { Text(store.secondaryButtonText).frame(minWidth: 96, minHeight: 36) }
-                        .buttonStyle(.bordered).tint(ThemeColors.inkSoft)
-                }
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .padding(32)
             VStack {
                 HStack {
                     Spacer()
@@ -47,6 +60,10 @@ struct FocusImmersiveView: View {
             }
             .padding(16)
         }
+        .tint(ThemeColors.accentInk)
+        // fullScreenCover 位于独立呈现控制器树，需单独挂载主题特征以保持颜色令牌一致。
+        .background { ThemeAppearance(themeID: previewThemeID ?? shell.selectedTheme ?? "").frame(width: 0, height: 0) }
+        .disabled(shell.operationBlocksUI)
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
     }

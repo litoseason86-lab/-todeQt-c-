@@ -6,24 +6,28 @@ struct TodayRescheduleSheet: View {
     let taskID: Int
     let store: TodayStore
     @State private var date = Date()
+    @State private var error = ""
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             Form {
                 DatePicker("新日期", selection: $date, displayedComponents: .date)
-                if !store.loadError.isEmpty { Text(store.loadError).foregroundStyle(ThemeColors.danger) }
+                if !error.isEmpty { Text(error).foregroundStyle(ThemeColors.danger) }
             }
             .navigationTitle("改期").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("改期") { if store.reschedule(id: taskID, date: TodayDisplayDate.iso(date)) { dismiss() } }
+                    Button("改期") {
+                        if store.reschedule(id: taskID, date: TodayDisplayDate.iso(date)) { dismiss() }
+                        else { error = store.loadError }
+                    }
                 }
             }
         }
         .tint(ThemeColors.accentInk)
         .presentationDetents([.medium])
-        .onAppear { date = TodayDisplayDate.date(store.today) }
+        .onAppear { date = TodayDisplayDate.date(store.today); error = "" }
     }
 }
 
@@ -38,6 +42,7 @@ struct TodayGoalSheet: View {
     @State private var draft = DailyGoalDraft(minutes: 0)
     @State private var hoursText = ""
     @State private var minutesText = ""
+    @State private var error = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -47,20 +52,23 @@ struct TodayGoalSheet: View {
                     row("小时", text: $hoursText, step: 60)
                     row("分钟", text: $minutesText, step: 15)
                 }
-                if !store.loadError.isEmpty { Text(store.loadError).foregroundStyle(ThemeColors.danger) }
+                if !error.isEmpty { Text(error).foregroundStyle(ThemeColors.danger) }
             }
             .navigationTitle("今日专注目标").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { if store.saveGoal(minutes: draft.totalMinutes) { dismiss() } }
+                    Button("保存") {
+                        if store.saveGoal(minutes: draft.totalMinutes) { dismiss() }
+                        else { error = store.loadError }
+                    }
                         .disabled(!draft.canSave)
                 }
             }
         }
         .tint(ThemeColors.accentInk)
         .presentationDetents([.large])
-        .onAppear { draft = DailyGoalDraft(minutes: store.goalEditorStartMinutes()); syncFields() }
+        .onAppear { draft = DailyGoalDraft(minutes: store.goalEditorStartMinutes()); error = ""; syncFields() }
     }
 
     private func row(_ label: String, text: Binding<String>, step: Int) -> some View {

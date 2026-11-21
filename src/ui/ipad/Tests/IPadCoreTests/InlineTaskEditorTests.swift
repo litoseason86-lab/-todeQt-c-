@@ -53,4 +53,17 @@ import XCTest
         XCTAssertFalse(editor.begin(id: 9)); XCTAssertFalse(editor.isEditing); XCTAssertFalse(interactions.refreshBlocked)
         XCTAssertEqual(shell.toast?.message, "任务信息已变化，请重试")
     }
+
+    // 产品保证：任务行内编辑进行中触发外壳 flushEdits（进后台、创建备份、打开全局搜索）时，自动保存修改并释放冻结令牌。
+    func testShellFlushEditsCommitsActiveInlineTaskEditor() {
+        let (tasks, interactions, shell, editor) = fixture()
+        XCTAssertTrue(editor.begin(id: 9))
+        editor.title = "后台前自动保存的标题"
+        XCTAssertTrue(interactions.refreshBlocked)
+        XCTAssertTrue(shell.flushEdits())
+        XCTAssertFalse(editor.isEditing)
+        XCTAssertFalse(interactions.refreshBlocked)
+        XCTAssertEqual(tasks.changes.last?.0, 9)
+        XCTAssertEqual(tasks.changes.last?.1.title, "后台前自动保存的标题")
+    }
 }

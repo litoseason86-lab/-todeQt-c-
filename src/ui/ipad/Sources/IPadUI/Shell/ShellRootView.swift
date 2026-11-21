@@ -280,6 +280,7 @@ private struct ShellKeyboardCommands: View {
     @Binding var compactTab: ShellTab
     @Binding var morePath: [MoreRoute]
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(FocusStore.self) private var focus
     var body: some View {
         VStack {
             ForEach(Array(store.orderedPages.prefix(7).enumerated()), id: \.element) { index, page in
@@ -287,6 +288,11 @@ private struct ShellKeyboardCommands: View {
                     .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
             }
             Button("记一笔") {
+                // 专注页沉浸模式或主动休息时不弹出记一笔；工具栏自动淡出时先唤醒控制再挂载浮层锚点。
+                guard !(store.selection == .focus && !store.searchShown && (focus.immersiveActive || focus.state == .manualRest)) else { return }
+                if store.selection == .focus && !store.searchShown && store.focusChromeHidden {
+                    focus.wakeControls()
+                }
                 let anchor: CaptureAnchor = store.searchShown ? .search
                     : (sizeClass == .compact && compactTab == .more && morePath.isEmpty ? .moreRoot : .page(store.selection))
                 store.presentCapture(from: anchor)
@@ -412,10 +418,10 @@ private struct MoreRootView: View {
                 case .search: SearchPage().shellChrome(store: store, anchor: .search)
                 case .page(let page):
                     PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store, anchor: .page(page))
-                        .onAppear { store.select(page) }
+                        .onAppear { if store.selection != page || store.searchShown { store.select(page) } }
                 }
             }
-            .shellChrome(store: store, anchor: .moreRoot)
+            .shellChrome(store: store, anchor: .moreRoot, morePathEmpty: morePath.isEmpty)
         }
     }
 }
@@ -426,6 +432,7 @@ private struct MoreRootView: View {
 private struct ShellChrome: ViewModifier {
     let store: ShellStore
     let anchor: CaptureAnchor
+    var morePathEmpty = true
     func body(content: Content) -> some View {
         content
             // 统一放开主题页底，列表行仍由各页的语义纸面令牌决定；系统外观保留系统滚动底色。
@@ -438,7 +445,7 @@ private struct ShellChrome: ViewModifier {
                     ToolbarItem(placement: .topBarTrailing) { CaptureToolbarButton(store: store, anchor: anchor) }
                 }
             }
-            .safeAreaInset(edge: .bottom) { ShellToastBar(store: store, anchor: anchor) }
+            .safeAreaInset(edge: .bottom) { ShellToastBar(store: store, anchor: anchor, morePathEmpty: morePathEmpty) }
             .overlay(alignment: .top) { ShellErrorBar(store: store) }
     }
 }
@@ -489,6 +496,7 @@ private struct CapturePopover: View {
         }
         .padding(20)
         .tint(ThemeColors.accentInk)
+        .disabled(store.operationBlocksUI)
         // 打开就能直接写，不用再点一下输入框。
         .onAppear { focused = true }
         Group {
@@ -505,16 +513,17 @@ private struct CapturePopover: View {
     }
 }
 
-// 提示条只画在当前显示的那一页（「更多」根列表也画，它在窄窗里可能就是眼前这一页）：
+// 提示条只画在当前显示的那一页（「更多」根列表仅在未推入子页时画，避免与子页底部提示条上下双叠）：
 // 别的页面不读提示条内容、不让出底部安全区，提示条出现或收起时它们不必重新排版。
 private struct ShellToastBar: View {
     let store: ShellStore
     let anchor: CaptureAnchor
+    var morePathEmpty = true
     private var isCurrent: Bool {
         switch anchor {
         case .search: store.searchShown
         case .page(let page): !store.searchShown && store.selection == page
-        case .moreRoot: true
+        case .moreRoot: morePathEmpty && !store.searchShown
         }
     }
     var body: some View {
@@ -546,7 +555,9 @@ private struct ShellErrorBar: View {
     }
 }
 private extension View {
-    func shellChrome(store: ShellStore, anchor: CaptureAnchor) -> some View { modifier(ShellChrome(store: store, anchor: anchor)) }
+    func shellChrome(store: ShellStore, anchor: CaptureAnchor, morePathEmpty: Bool = true) -> some View {
+        modifier(ShellChrome(store: store, anchor: anchor, morePathEmpty: morePathEmpty))
+    }
 }
 
 // 宽窗侧栏左滑收起（10-12 用户要求）：不必每次点左上角的收起按钮，在侧栏上向左一扫就收到顶部标签栏。

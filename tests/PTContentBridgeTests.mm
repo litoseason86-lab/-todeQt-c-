@@ -167,6 +167,39 @@ void PTContentBridgeTests::signalsReturnToMainThreadAndDisconnect() {
     }
     QVERIFY(released == nil); emit MemoService::instance()->memosChanged(); QCOMPARE(memoCalls, 2);
     emit KnowledgeGapService::instance()->gapsChanged(); emit CountdownService::instance()->goalsReloaded(); QCOMPARE(gapCalls, 1); QCOMPARE(goalCalls, 1);
+
+    // 真实跨线程断连：工作线程发信号把异步回调排进主线程队列后，不等事件循环排空就销毁全部三个桥接对象，
+    // 随后主线程排空事件循环，验证既不悬垂回调也不崩溃（UAF）。
+    __block int queuedCalls = 0;
+    __weak PTMemoBridge *releasedMemo = nil;
+    __weak PTKnowledgeGapBridge *releasedGap = nil;
+    __weak PTCountdownBridge *releasedCountdown = nil;
+    @autoreleasepool {
+        PTKnowledgeGapBridge *g2 = [PTKnowledgeGapBridge new];
+        PTMemoBridge *m2 = [PTMemoBridge new];
+        PTCountdownBridge *c2 = [PTCountdownBridge new];
+        releasedGap = g2;
+        releasedMemo = m2;
+        releasedCountdown = c2;
+        g2.onChanged = ^{ ++queuedCalls; };
+        m2.onChanged = ^{ ++queuedCalls; };
+        c2.onChanged = ^{ ++queuedCalls; };
+        auto *gapSvc = KnowledgeGapService::instance();
+        auto *memoSvc = MemoService::instance();
+        auto *cntSvc = CountdownService::instance();
+        std::unique_ptr<QThread> qWorker(QThread::create([gapSvc, memoSvc, cntSvc] {
+            emit gapSvc->gapsChanged();
+            emit memoSvc->memosChanged();
+            emit cntSvc->goalsReloaded();
+        }));
+        qWorker->start();
+        QVERIFY(qWorker->wait(2000));
+        // 故意不调用 processEvents() 即离开作用域释放桥接，确保待处理跨线程投递遇到已释放宿主。
+    }
+    QVERIFY(releasedGap == nil && releasedMemo == nil && releasedCountdown == nil);
+    QCoreApplication::processEvents();
+    QTest::qWait(20);
+    QCOMPARE(queuedCalls, 0);
 }
 QTEST_GUILESS_MAIN(PTContentBridgeTests)
 #include "PTContentBridgeTests.moc"

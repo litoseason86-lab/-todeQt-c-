@@ -28,30 +28,42 @@ import SwiftUI
         .formStyle(.grouped)
         .toolbar { Button("新增科目", systemImage: "plus") { store.beginNew() } }
         .sheet(isPresented: Binding(get: { store.editing }, set: { if !$0 { store.cancel() } })) {
-            NavigationStack {
-                SettingsForm {
-                    TextField("科目名称", text: $store.name)
-                    Picker("颜色", selection: $store.color) {
-                        ForEach(Array(SettingsCategoryStore.colors.enumerated()), id: \.element) { index, color in
-                            Label { Text("暖色 \(index + 1)") } icon: {
-                                Image(systemName: "circle.fill").foregroundStyle(SettingsCategoryColor.value(color))
-                            }.tag(color)
-                        }
-                        if !SettingsCategoryStore.colors.contains(store.color) { Text("现有颜色").tag(store.color) }
-                    }
-                    if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-                }.navigationTitle("科目").sheetChrome()
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
-                    ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.save() } }
-                }
-            }.interactiveDismissDisabled()
+            CategoryEditorSheet(store: store)
         }
         .alert("确认删除科目？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("取消", role: .cancel) { deleting = nil }
             Button("删除", role: .destructive) { if let deleting { _ = store.delete(deleting) }; deleting = nil }
         } message: { Text("删除会解除任务、例行、课表和知识缺口的科目关联。") }
-        .task { store.reload() }
+        .onAppear { store.setActive(true) }
+        .onDisappear { store.setActive(false) }
+    }
+}
+
+// 编辑弹窗拆为独立子视图：在输入框打字只重算弹窗，不带动背后科目列表逐字重排。
+@MainActor private struct CategoryEditorSheet: View {
+    @Bindable var store: SettingsCategoryStore
+    var body: some View {
+        NavigationStack {
+            SettingsForm {
+                TextField("科目名称", text: $store.name)
+                Picker("颜色", selection: $store.color) {
+                    ForEach(Array(SettingsCategoryStore.colors.enumerated()), id: \.element) { index, color in
+                        Label { Text("暖色 \(index + 1)") } icon: {
+                            Image(systemName: "circle.fill").foregroundStyle(SettingsCategoryColor.value(color))
+                        }.tag(color)
+                    }
+                    if !SettingsCategoryStore.colors.contains(store.color) { Text("现有颜色").tag(store.color) }
+                }
+                if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
+            }.navigationTitle("科目").sheetChrome()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
+                ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.save() } }
+            }
+        }
+        .tint(ThemeColors.accentInk)
+        .presentationDetents([.large])
+        .interactiveDismissDisabled()
     }
 }
 
@@ -95,54 +107,75 @@ private enum SettingsCategoryColor {
         }.formStyle(.grouped)
         .toolbar { Button("新增例行", systemImage: "plus") { store.beginNew() } }
         .sheet(isPresented: Binding(get: { store.editing }, set: { if !$0 { store.cancel() } })) {
-            NavigationStack {
-                SettingsForm {
-                    TextField("标题", text: $store.title)
-                    Picker("科目", selection: $store.categoryID) {
-                        Text("不设置科目").tag(-1)
-                        ForEach(store.categories, id: \.id) { Text($0.name).tag($0.id) }
-                        if store.categoryID > 0 && !store.categories.contains(where: { $0.id == store.categoryID }) {
-                            Text("当前科目").tag(store.categoryID)
-                        }
-                    }
-                    if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-                }.formStyle(.grouped).navigationTitle("每日例行").sheetChrome()
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
-                    ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.save() } }
-                }
-            }.interactiveDismissDisabled()
+            RoutineEditorSheet(store: store)
         }
         .sheet(isPresented: Binding(get: { store.editingWeekdays }, set: { if !$0 { store.cancel() } })) {
-            NavigationStack {
-                SettingsForm {
-                    Section {
-                        ForEach(0..<7, id: \.self) { index in
-                            Toggle(RoutineWeekdaysFormat.names[index], isOn: Binding(
-                                get: { store.weekdays & (1 << index) != 0 },
-                                set: { selected in
-                                    let bit = 1 << index
-                                    store.weekdays = selected ? store.weekdays | bit : store.weekdays & ~bit
-                                }))
-                        }
-                    }
-                    Section {
-                        Button("每天") { store.weekdays = 127 }
-                        Button("工作日") { store.weekdays = 31 }
-                        Button("周末") { store.weekdays = 96 }
-                    }
-                    if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-                }.navigationTitle("重复日").sheetChrome()
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
-                    ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.saveWeekdays() } }
-                }
-            }.interactiveDismissDisabled()
+            RoutineWeekdaysSheet(store: store)
         }
         .alert("确认删除每日例行？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("取消", role: .cancel) { deleting = nil }
             Button("删除", role: .destructive) { if let deleting { store.delete(deleting) }; deleting = nil }
         }
-        .task { store.reload(); store.reloadCategories() }
+        .onAppear { store.setActive(true) }
+        .onDisappear { store.setActive(false) }
+    }
+}
+
+@MainActor private struct RoutineEditorSheet: View {
+    @Bindable var store: SettingsRoutineStore
+    var body: some View {
+        NavigationStack {
+            SettingsForm {
+                TextField("标题", text: $store.title)
+                Picker("科目", selection: $store.categoryID) {
+                    Text("不设置科目").tag(-1)
+                    ForEach(store.categories, id: \.id) { Text($0.name).tag($0.id) }
+                    if store.categoryID > 0 && !store.categories.contains(where: { $0.id == store.categoryID }) {
+                        Text("当前科目").tag(store.categoryID)
+                    }
+                }
+                if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
+            }.formStyle(.grouped).navigationTitle("每日例行").sheetChrome()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
+                ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.save() } }
+            }
+        }
+        .tint(ThemeColors.accentInk)
+        .presentationDetents([.large])
+        .interactiveDismissDisabled()
+    }
+}
+
+@MainActor private struct RoutineWeekdaysSheet: View {
+    @Bindable var store: SettingsRoutineStore
+    var body: some View {
+        NavigationStack {
+            SettingsForm {
+                Section {
+                    ForEach(0..<7, id: \.self) { index in
+                        Toggle(RoutineWeekdaysFormat.names[index], isOn: Binding(
+                            get: { store.weekdays & (1 << index) != 0 },
+                            set: { selected in
+                                let bit = 1 << index
+                                store.weekdays = selected ? store.weekdays | bit : store.weekdays & ~bit
+                            }))
+                    }
+                }
+                Section {
+                    Button("每天") { store.weekdays = 127 }
+                    Button("工作日") { store.weekdays = 31 }
+                    Button("周末") { store.weekdays = 96 }
+                }
+                if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
+            }.navigationTitle("重复日").sheetChrome()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
+                ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.saveWeekdays() } }
+            }
+        }
+        .tint(ThemeColors.accentInk)
+        .presentationDetents([.large])
+        .interactiveDismissDisabled()
     }
 }

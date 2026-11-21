@@ -59,10 +59,12 @@ import SwiftUI
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save() } }
             }
-        }.presentationDetents([.large])
+        }
+        .tint(ThemeColors.accentInk)
+        .presentationDetents([.large])
     }
     private func save() {
-        guard let weeks = Int(weeks) else { error = "学期总周数应为整数"; return }
+        guard let weeks = Int(weeks.trimmingCharacters(in: .whitespacesAndNewlines)) else { error = "学期总周数应为整数"; return }
         var periods: [SchedulePeriod] = []
         for (index, row) in periodDrafts.enumerated() {
             let start = ScheduleFormat.parseMinutes(row.start), end = ScheduleFormat.parseMinutes(row.end)

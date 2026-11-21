@@ -1,3 +1,4 @@
+import CoreTransferable
 import Foundation
 import IPadCore
 import SwiftUI
@@ -97,8 +98,8 @@ import UniformTypeIdentifiers
             Button("取消", role: .cancel) {}
             Button("确认加入", role: .destructive) { store.confirmJoin() }
         } message: { Text(store.joinConfirmationText) }
-        .onAppear { store.clearNotice() }
-        .task { store.refresh() }
+        .onAppear { store.clearNotice(); store.setActive(true) }
+        .onDisappear { store.setActive(false) }
     }
 }
 
@@ -141,7 +142,7 @@ import UniformTypeIdentifiers
                     }
                 }
             }
-            .navigationTitle("输入配对码")
+            .navigationTitle("输入配对码").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") {
@@ -160,49 +161,54 @@ import UniformTypeIdentifiers
 
 @MainActor private struct SyncLogSettings: View {
     @Environment(SettingsSyncStore.self) private var store
+    @Environment(ShellStore.self) private var shell
     var body: some View {
         List {
-            if !store.errorMessage.isEmpty {
-                Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
-                Button("重试读取日志") { store.reloadLogs() }
-            }
-            ForEach(store.logs) { entry in
-                NavigationLink {
-                    SettingsForm {
-                        LabeledContent("时间", value: entry.time)
-                        LabeledContent("类型", value: entry.kindLabel)
-                        Text(entry.summary)
-                        if !entry.detail.isEmpty { Text(entry.detail) }
-                        if !entry.fieldLabel.isEmpty { LabeledContent("字段", value: entry.fieldLabel) }
-                        if !entry.lostValue.isEmpty {
-                            Section("未生效的值") {
-                                Text(entry.lostValue).textSelection(.enabled)
-                                if entry.canCopyLostValue {
-                                    Button("复制丢失值", systemImage: "doc.on.doc") { store.copy(entry) }
+            Group {
+                if !store.errorMessage.isEmpty {
+                    Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
+                    Button("重试读取日志") { store.reloadLogs() }
+                }
+                ForEach(store.logs) { entry in
+                    NavigationLink {
+                        SettingsForm {
+                            LabeledContent("时间", value: entry.time)
+                            LabeledContent("类型", value: entry.kindLabel)
+                            Text(entry.summary)
+                            if !entry.detail.isEmpty { Text(entry.detail) }
+                            if !entry.fieldLabel.isEmpty { LabeledContent("字段", value: entry.fieldLabel) }
+                            if !entry.lostValue.isEmpty {
+                                Section("未生效的值") {
+                                    Text(entry.lostValue).textSelection(.enabled)
+                                    if entry.canCopyLostValue {
+                                        Button("复制丢失值", systemImage: "doc.on.doc") { store.copy(entry) }
+                                    }
                                 }
                             }
+                            if !entry.keptValue.isEmpty { Section("保留的值") { Text(entry.keptValue).textSelection(.enabled) } }
+                            if !store.notice.isEmpty { Text(store.notice) }
+                        }.modifier(PageBackground()).navigationTitle(entry.title)
+                            .onAppear { store.clearNotice() }
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text(entry.title)
+                            Text(entry.time + " · " + entry.kindLabel).font(.caption).foregroundStyle(ThemeColors.inkMuted)
+                            Text(entry.summary).font(.caption).foregroundStyle(ThemeColors.inkMuted).lineLimit(2)
                         }
-                        if !entry.keptValue.isEmpty { Section("保留的值") { Text(entry.keptValue).textSelection(.enabled) } }
-                        if !store.notice.isEmpty { Text(store.notice) }
-                    }.navigationTitle(entry.title)
-                        .onAppear { store.clearNotice() }
-                } label: {
-                    VStack(alignment: .leading) {
-                        Text(entry.title)
-                        Text(entry.time + " · " + entry.kindLabel).font(.caption).foregroundStyle(ThemeColors.inkMuted)
-                        Text(entry.summary).font(.caption).foregroundStyle(ThemeColors.inkMuted).lineLimit(2)
                     }
                 }
             }
-        }.navigationTitle("同步日志")
+            .listRowBackground(shell.selectedTheme != nil ? ThemeColors.surface : nil)
+        }.modifier(PageBackground()).navigationTitle("同步日志")
         .toolbar { Button("刷新日志", systemImage: "arrow.clockwise") { store.reloadLogs() } }
-        .task { store.reloadLogs() }
+        .onAppear { store.setLogsActive(true) }
+        .onDisappear { store.setLogsActive(false) }
     }
 }
 
 @MainActor struct BackupSettings: View {
     @Environment(SettingsBackupStore.self) private var store
-    @State private var document: TransferDocument?
+    @State private var exportItem: TransferFile?
     @State private var exportPresented = false
     @State private var importPresented = false
     var body: some View {
@@ -230,20 +236,25 @@ import UniformTypeIdentifiers
             if !store.notice.isEmpty { Text(store.notice) }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
         }.formStyle(.grouped)
-        .fileExporter(isPresented: $exportPresented, document: document, contentType: .data,
-                      defaultFilename: store.exportURL?.lastPathComponent) { result in
-            document = nil
+        // 用户在系统文件面板点取消时不触发 onCompletion；必须接入 onCancellation 清理临时目录并解除按钮禁用。
+        .fileExporter(isPresented: $exportPresented, item: exportItem, contentTypes: [.data],
+                      defaultFilename: store.exportURL?.lastPathComponent,
+                      onCompletion: { result in
+            exportItem = nil
             switch result { case .success: store.finishExport(error: nil); case .failure(let error): store.finishExport(error: error) }
-        }
+        }, onCancellation: {
+            exportItem = nil
+            store.finishExport(error: CocoaError(.userCancelled))
+        })
         .fileImporter(isPresented: $importPresented, allowedContentTypes: [.data]) { result in
             switch result { case .success(let url): importURL(url); case .failure(let error): store.importFailed(error) }
         }
         .onChange(of: store.exportURL, initial: true) { _, url in
-            guard let url else { return }
-            do { document = try TransferDocument(url: url); exportPresented = true }
-            catch { store.finishExport(error: error) }
+            guard let url else { exportItem = nil; exportPresented = false; return }
+            exportItem = TransferFile(url: url, contentType: .data)
+            exportPresented = true
         }
-        .alert("从备份恢复？", isPresented: Binding(get: { store.restoreInfo != nil }, set: { _ in })) {
+        .alert("从备份恢复？", isPresented: Binding(get: { store.restoreInfo != nil }, set: { if !$0 { store.cancelRestore() } })) {
             Button("取消", role: .cancel) { store.cancelRestore() }
             Button("恢复", role: .destructive) { store.confirmRestore() }
         } message: {
@@ -257,16 +268,14 @@ import UniformTypeIdentifiers
         .task { store.refresh(); store.reloadBackups() }
     }
     private func importURL(_ url: URL) {
-        // 安全作用域只覆盖同步复制，立即释放；服务异步读取自有副本，不持有外部授权。
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        do { try store.importBackup(url) } catch { store.importFailed(error) }
+        // 最大 512 MiB 的备份文件在后台任务内开启安全作用域并复制，避免阻塞主线程。
+        Task { await store.importBackupAsync(url) }
     }
 }
 
 @MainActor struct ExportSettings: View {
     @Environment(SettingsExportStore.self) private var store
-    @State private var document: TransferDocument?
+    @State private var exportItem: TransferFile?
     @State private var exportPresented = false
     var body: some View {
         @Bindable var store = store
@@ -291,43 +300,35 @@ import UniformTypeIdentifiers
             if !store.notice.isEmpty { Text(store.notice) }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
         }.formStyle(.grouped)
-        .fileExporter(isPresented: $exportPresented, document: document,
-                      contentType: store.kind == .all ? .folder : .commaSeparatedText,
-                      defaultFilename: store.exportURL?.lastPathComponent) { result in
-            document = nil
+        .fileExporter(isPresented: $exportPresented, item: exportItem,
+                      contentTypes: [store.kind == .all ? .folder : .commaSeparatedText],
+                      defaultFilename: store.exportURL?.lastPathComponent,
+                      onCompletion: { result in
+            exportItem = nil
             switch result { case .success: store.finishExport(error: nil); case .failure(let error): store.finishExport(error: error) }
-        }
+        }, onCancellation: {
+            exportItem = nil
+            store.finishExport(error: CocoaError(.userCancelled))
+        })
         .onChange(of: store.exportURL, initial: true) { _, url in
-            guard let url else { return }
-            do { document = try TransferDocument(url: url); exportPresented = true }
-            catch { store.finishExport(error: error) }
+            guard let url else { exportItem = nil; exportPresented = false; return }
+            exportItem = TransferFile(url: url, contentType: store.kind == .all ? .folder : .commaSeparatedText)
+            exportPresented = true
         }
     }
 }
 
-// 先复制为 Sendable 值树（可跨线程的不可变数据）；系统每次请求都生成独立 FileWrapper，
-// 避免把非线程安全的 Foundation 引用跨 SwiftUI 导出线程共享。
-private struct TransferDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.data, .commaSeparatedText, .folder] }
-    let value: TransferValue
-    init(url: URL) throws { value = try TransferValue(FileWrapper(url: url, options: .immediate)) }
-    init(configuration: ReadConfiguration) throws { value = try TransferValue(configuration.file) }
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { value.wrapper() }
-}
-private indirect enum TransferValue: Sendable {
-    case file(Data)
-    case directory([String: TransferValue])
-    init(_ wrapper: FileWrapper) throws {
-        if wrapper.isRegularFile, let data = wrapper.regularFileContents { self = .file(data) }
-        else if wrapper.isDirectory, let children = wrapper.fileWrappers {
-            self = .directory(try children.mapValues { try TransferValue($0) })
-        } else { throw CocoaError(.fileReadUnknown) }
-    }
-    func wrapper() -> FileWrapper {
-        switch self {
-        case .file(let data): return FileWrapper(regularFileWithContents: data)
-        case .directory(let children): return FileWrapper(directoryWithFileWrappers: children.mapValues { $0.wrapper() })
-        }
+// 仅把沙盒临时文件或目录的 URL 交给系统导出器流式复制，不将最高 512 MiB 的备份或整批 CSV 预读进内存。
+private struct TransferFile: Transferable {
+    let url: URL
+    let contentType: UTType
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .data) { SentTransferredFile($0.url) }
+            .exportingCondition { $0.contentType == .data }
+        FileRepresentation(exportedContentType: .commaSeparatedText) { SentTransferredFile($0.url) }
+            .exportingCondition { $0.contentType == .commaSeparatedText }
+        FileRepresentation(exportedContentType: .folder) { SentTransferredFile($0.url) }
+            .exportingCondition { $0.contentType == .folder }
     }
 }
 

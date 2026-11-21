@@ -15,12 +15,14 @@ import PTBridge
     var state: PendingDeletionState {
         var value = PendingDeletionState()
         value.active = bridge.active; value.taskID = bridge.taskId; value.sessionID = bridge.sessionId
-        value.sessionIsRest = bridge.sessionIsRest; value.title = bridge.title
+        value.sessionIsRest = bridge.sessionIsRest; value.title = bridge.title; value.generation = bridge.generation
         return value
     }
     func requestTask(id: Int, title: String) throws { try bridge.requestTask(id, title: title) }
     func requestSession(id: Int, title: String, isRest: Bool) throws { try bridge.requestSession(id, title: title, isRest: isRest) }
     func commit() throws { try bridge.commit() }
+    func commit(generation: Int64) throws { try bridge.commitGeneration(generation) }
     func cancel() { bridge.cancel() }
+    func cancel(generation: Int64) { bridge.cancelGeneration(generation) }
     func setAutomaticCommitSuspended(_ suspended: Bool) { bridge.setAutomaticCommitSuspended(suspended) }
 }

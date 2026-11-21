@@ -9,19 +9,30 @@ private final class InteractionOwner {
 }
 @MainActor final class InteractionBridgeFake: InteractionBridgeProtocol {
     var onChanged: (() -> Void)?
-    var refreshBlocked = false
+    private var activeTokens: Set<UUID> = []
+    private var manualBlock = false
+    var refreshBlocked: Bool {
+        get { manualBlock || !activeTokens.isEmpty }
+        set { manualBlock = newValue }
+    }
     var lastError = ""
     var error: Error?
     var latest = TaskValue()
     var calls: [(name: String, id: Int, source: String)] = []
+    private func releaseToken(_ tokenID: UUID) {
+        guard activeTokens.remove(tokenID) != nil else { return }
+        onChanged?()
+    }
     private func begin(_ name: String, id: Int, source: String) throws -> InteractionToken {
         calls.append((name, id, source)); if let error { throw error }
-        refreshBlocked = true; onChanged?()
+        let tokenID = UUID()
+        activeTokens.insert(tokenID)
+        onChanged?()
         let owner = InteractionOwner { [weak self] in
-            MainActor.assumeIsolated { self?.refreshBlocked = false; self?.onChanged?() }
+            MainActor.assumeIsolated { self?.releaseToken(tokenID) }
         }
         return InteractionToken(task: name == "edit" ? latest : nil, lifetime: owner, end: { [weak self] in
-            self?.refreshBlocked = false; self?.onChanged?()
+            self?.releaseToken(tokenID)
         })
     }
     func beginEdit(id: Int, source: String) throws -> InteractionToken { try begin("edit", id: id, source: source) }

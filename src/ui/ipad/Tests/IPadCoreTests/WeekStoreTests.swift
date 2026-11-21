@@ -10,6 +10,7 @@ import XCTest
         day.relations["2026-10-10/2026-10-09"] = .later
         let shell = ShellStore(bridge: ShellBridgeFake()); let deletion = PendingDeletionBridgeFake(); let pending = PendingDeletionStore(bridge: deletion, tasks: tasks, shell: shell)
         let store = WeekStore(tasks: tasks, logicalDay: day, pendingDeletion: pending, interactions: InteractionBridgeFake(), weekStart: "2026-10-05") { _ in (5...11).map { String(format: "2026-10-%02d", $0) } }
+        store.setActive(true)
         return (tasks, day, pending, store)
     }
     // 产品保证：七天分组和「已排」分钟由 C++ 返回，Swift 不自行累加且负值归零只在接口结果投影。
@@ -76,6 +77,7 @@ import XCTest
                               weekStart: "2026-10-05",
                               weekDates: { start in (0..<7).compactMap { LogicalDateNavigation.shifted(start, days: $0) } },
                               weekStartProvider: { serviceWeek })
+        store.setActive(true)
         store.shiftWeek(1)
         XCTAssertEqual(store.weekStart, "2026-10-12"); XCTAssertFalse(store.showsCurrentWeek)
         // 跨过逻辑周日界：服务的本周变成 10-12，正在显示的就是本周。
@@ -105,6 +107,7 @@ import XCTest
                               weekStart: "2026-10-05",
                               weekDates: { start in (0..<7).compactMap { LogicalDateNavigation.shifted(start, days: $0) } },
                               weekStartProvider: { serviceWeek })
+        store.setActive(true)
         XCTAssertEqual(store.weekStart, "2026-10-05"); XCTAssertTrue(store.showsCurrentWeek)
         // 跨周后周列表读取失败。
         serviceWeek = "2026-10-12"; tasks.failing = ["weekTasks"]
@@ -134,6 +137,7 @@ import XCTest
         let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
         let store = WeekStore(tasks: tasks, logicalDay: day, pendingDeletion: pending, interactions: interactions,
                               weekStart: "2026-10-05", weekDates: { _ in (5...11).map { String(format: "2026-10-%02d", $0) } })
+        store.setActive(true)
         return (tasks, interactions, day, shell, store, TaskActions(tasks: tasks, pendingDeletion: pending, shell: shell))
     }
     // 产品保证：拖动期间同步刷新延后，取消零写入；最后一个令牌结束时补一次最新读取。
@@ -235,6 +239,7 @@ import XCTest
         let store = WeekStore(tasks: tasks, logicalDay: LogicalDayBridgeFake(), pendingDeletion: pending,
                               interactions: InteractionBridgeFake(), weekStart: "2026-10-05",
                               weekDates: { _ in (5...11).map { String(format: "2026-10-%02d", $0) } })
+        store.setActive(true)
         XCTAssertEqual(store.groups[4].tasks.map(\.id), [31]); XCTAssertEqual(store.groups[4].plannedMinutes, 45)
         tasks.planned[4] = 0; XCTAssertTrue(pending.requestTask(id: 31, title: "任务"))
         XCTAssertTrue(store.groups[4].tasks.isEmpty)
@@ -256,6 +261,7 @@ import XCTest
         let store = WeekStore(tasks: tasks, logicalDay: day, pendingDeletion: pending, interactions: InteractionBridgeFake(),
                               weekStart: "", weekDates: { value in [value, "d2", "d3", "d4", "d5", "d6", "d7"] },
                               weekStartProvider: { if let readError { throw readError }; return start })
+        store.setActive(true)
         XCTAssertEqual(store.weekStart, start)
         start = "2026-10-12"; day.today = "2026-10-12"
         XCTAssertEqual(store.weekStart, start); XCTAssertEqual(store.groups[0].date, start)
@@ -345,10 +351,78 @@ import XCTest
         let store = WeekStore(tasks: tasks, logicalDay: day, pendingDeletion: pending, interactions: InteractionBridgeFake(),
             weekStart: currentWeek, weekDates: { start in (0..<7).compactMap { LogicalDateNavigation.shifted(start, days: $0) } },
             weekStartProvider: { reads += 1; return currentWeek })
+        store.setActive(true)
         XCTAssertEqual(reads, 1); store.shiftWeek(1); XCTAssertEqual(reads, 2)
         XCTAssertEqual(store.weekStart, "2026-10-12"); XCTAssertFalse(store.showsCurrentWeek)
         currentWeek = "2026-10-12"; day.today = "2026-10-12"
         XCTAssertEqual(reads, 3); XCTAssertTrue(store.showsCurrentWeek)
         tasks.onChanged?(); XCTAssertEqual(reads, 4)
+    }
+
+    // 产品保证：本周计划页未激活时不响应任务或日界信号查库、不污染隐藏页错误；进入多选前自动结束行内编辑释放令牌。
+    func testInactiveWeekStoreSkipsBackgroundQueriesAndEnteringSelectionFinishesInlineEditor() {
+        let tasks = TaskBridgeFake(); tasks.planned = Array(repeating: 15, count: 7)
+        let day = LogicalDayBridgeFake(); day.today = "2026-10-09"
+        let interactions = InteractionBridgeFake()
+        var row = TaskValue(); row.id = 3; row.title = "周任务"; row.date = "2026-10-09"
+        tasks.result = [row]; interactions.latest = row
+        let shell = ShellStore(bridge: ShellBridgeFake())
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
+        let editor = InlineTaskEditor(tasks: tasks, interactions: interactions, shell: shell)
+        let store = WeekStore(tasks: tasks, logicalDay: day, pendingDeletion: pending, interactions: interactions,
+                              weekStart: "2026-10-05",
+                              weekDates: { _ in (5...11).map { String(format: "2026-10-%02d", $0) } },
+                              inlineEditor: editor)
+        XCTAssertTrue(tasks.calls.isEmpty)
+        tasks.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "隐藏页故障"])
+        tasks.onChanged?(); day.onChanged?()
+        XCTAssertTrue(tasks.calls.isEmpty)
+        XCTAssertEqual(store.error, "")
+
+        tasks.error = nil
+        store.setActive(true)
+        let callsAfterActivate = tasks.calls.count
+        XCTAssertGreaterThan(callsAfterActivate, 0)
+
+        XCTAssertTrue(editor.begin(id: 3))
+        editor.title = "改后周任务"
+        XCTAssertTrue(interactions.refreshBlocked)
+        store.beginSelection()
+        XCTAssertFalse(editor.isEditing)
+        XCTAssertFalse(interactions.refreshBlocked)
+        XCTAssertEqual(tasks.changes.last?.1.title, "改后周任务")
+
+        store.setActive(false)
+        let callsAfterDeactivate = tasks.calls.count
+        tasks.onChanged?(); day.onChanged?()
+        XCTAssertEqual(tasks.calls.count, callsAfterDeactivate)
+    }
+
+    // 产品保证：行内编辑任务期间点上一周/下一周，先保存并释放行内编辑令牌，翻周不会被刷新冻结门禁吞掉。
+    func testShiftWeekFinishesActiveInlineTaskEditor() {
+        let tasks = TaskBridgeFake(); tasks.planned = Array(repeating: 0, count: 7)
+        let day = LogicalDayBridgeFake(); day.today = "2026-10-09"
+        day.periodResult.start = "2026-10-12"
+        let interactions = InteractionBridgeFake()
+        var row = TaskValue(); row.id = 5; row.title = "原周标题"; row.date = "2026-10-09"
+        tasks.result = [row]; interactions.latest = row
+        let shell = ShellStore(bridge: ShellBridgeFake())
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
+        let editor = InlineTaskEditor(tasks: tasks, interactions: interactions, shell: shell)
+        let store = WeekStore(tasks: tasks, logicalDay: day, pendingDeletion: pending, interactions: interactions,
+                              weekStart: "2026-10-05",
+                              weekDates: { start in (0..<7).compactMap { LogicalDateNavigation.shifted(start, days: $0) } },
+                              weekStartProvider: { "2026-10-05" },
+                              inlineEditor: editor)
+        store.setActive(true)
+        XCTAssertTrue(editor.begin(id: 5))
+        editor.title = "翻周前改名"
+        XCTAssertTrue(interactions.refreshBlocked)
+
+        store.shiftWeek(1)
+        XCTAssertFalse(editor.isEditing)
+        XCTAssertFalse(interactions.refreshBlocked)
+        XCTAssertEqual(tasks.changes.last?.1.title, "翻周前改名")
+        XCTAssertEqual(store.weekStart, "2026-10-12")
     }
 }

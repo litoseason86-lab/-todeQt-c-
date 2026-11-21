@@ -20,6 +20,7 @@ import Observation
         guard flush() else { return false }; categorySheetPresented = true; return true
     }
     public func dismissCategorySheet() { categorySheetPresented = false }
+    public func clearDetailPresentation() { detailPresented = false }
     @discardableResult public func createAndPresentCategory() -> Bool {
         guard createCategory(name: newCategoryName, color: newCategoryColor) else { return false }
         newCategoryName = ""; categorySheetPresented = false; detailPresented = true; return true
@@ -42,11 +43,11 @@ import Observation
     public private(set) var titleFocusGeneration = 0
     public private(set) var titleComposing = false
     public private(set) var bodyComposing = false
-    private var baseline = MemoValue()
-    private var deletedNeighborIndex = 0
-    private var active = false
-    private var saving = false
-    private var reading = false
+    @ObservationIgnored private var baseline = MemoValue()
+    @ObservationIgnored private var deletedNeighborIndex = 0
+    @ObservationIgnored private var active = false
+    @ObservationIgnored private var saving = false
+    @ObservationIgnored private var reading = false
     @ObservationIgnored private let bridge: any MemoBridging
     @ObservationIgnored private let preferences: UserDefaults?
     @ObservationIgnored private let categoryBridge: any CategoryBridgeProtocol
@@ -63,6 +64,8 @@ import Observation
     }
     public var dirty: Bool { editorTitle != baseline.title || editorBody != baseline.body || editorCategoryID != baseline.categoryID }
     public var isComposing: Bool { titleComposing || bodyComposing }
+    // 列表不足两条、当前稿件处于远端已删待决态或阻断操作期间不启用拖拽排序，避免拉起无效空拖影。
+    public var canReorder: Bool { visibleItems.count > 1 && !remoteDeleted && shell?.operationBlocksUI != true }
     public var visibleItems: [MemoValue] { items.filter { filterCategoryID == -1 || $0.categoryID == filterCategoryID } }
     public func rows(categoryID: Int) -> [MemoValue] { visibleItems.filter { $0.categoryID == categoryID } }
     public var usedCategories: [CategoryValue] { categories.filter { category in items.contains { $0.categoryID == category.id } } }
@@ -80,13 +83,37 @@ import Observation
         if value { registerFlusher(); refresh() }
         else { draggingID = nil; _ = flush(); if !dirty && !isComposing { unregisterFlusher() } }
     }
+    // 恢复备份切入新数据库前清空旧库选中项、未保存脏草稿与挂起回调，防止新库恰好存在同主键备忘录时被旧草稿跨库覆盖。
+    public func prepareForRestore() {
+        saveTask?.cancel(); saveTask = nil
+        selectedID = nil
+        baseline = MemoValue()
+        editorTitle = ""
+        editorBody = ""
+        editorCategoryID = 0
+        updatedAt = ""
+        titleComposing = false
+        bodyComposing = false
+        remoteDeleted = false
+        pendingDelete = nil
+        draggingID = nil
+        categorySheetPresented = false
+        detailPresented = false
+        setError("")
+        if !active { unregisterFlusher() }
+    }
     private func registerFlusher() {
         guard flusher == nil else { return }
-        // 即使切页保存失败，后台仍需保存这份草稿；闭包弱引用，不把编辑会话保留成环。
-        flusher = shell?.registerEditFlusher { [weak self] in _ = self?.flush() }
+        // 即使切页保存失败，后台与备份/恢复前仍需同步冲刷并拿到成败结果；闭包弱引用，不把编辑会话保留成环。
+        flusher = shell?.registerEditFlusher { [weak self] in self?.flush() ?? true }
     }
     private func unregisterFlusher() { if let flusher { shell?.unregisterEditFlusher(flusher) }; flusher = nil }
     public func relatedDataChanged() { if active { refresh() } }
+    // 分钟显示时钟只更新展示时间，不重查数据库、也不在隐藏页运行或打断拖拽排序。
+    public func tickDisplayClock(now: Date = Date()) {
+        guard active else { return }
+        displayNow = now
+    }
     public func refresh(now: Date = Date()) {
         guard !saving && !reading else { return }; reading = true; defer { reading = false }
         displayNow = now; draggingID = nil
@@ -154,7 +181,10 @@ import Observation
         do {
             try bridge.update(id: id, changes: changes)
             baseline.title = editorTitle; baseline.body = editorBody; baseline.categoryID = editorCategoryID
-            saving = false; setError(""); refresh(); return true
+            saving = false; setError("")
+            if !active && !dirty && !isComposing { unregisterFlusher() }
+            if active { refresh() }
+            return true
         } catch { saving = false; setError(error.localizedDescription); return false }
     }
     @discardableResult public func selectMemo(_ id: Int) -> Bool {

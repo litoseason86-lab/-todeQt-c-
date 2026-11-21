@@ -474,13 +474,17 @@ import XCTest
         XCTAssertEqual(call?.numbers, [-1, 0]); XCTAssertTrue(r.store.composing)
         XCTAssertEqual(r.store.newTitle, "")
     }
-    // 产品保证：今日目标进度照服务值展示，禁止从已专注与目标重新相除。
+    // 产品保证：今日目标进度直接消费今日统计快照的服务值，不重复查询整周周报，失败时保留上一份快照。
     func testR2GoalProgressUsesServiceValueAndKeepsSnapshotOnFailure() {
         let r = rig(); r.settings.goal = 60; r.statistics.day.totalDuration = 1800
-        var goal = ReviewTodayGoal(); goal.goalMinutes = 60; goal.progressPercent = 73.5
-        r.statistics.review.todayGoal = goal; r.store.refresh()
+        r.statistics.day.goalMinutes = 60; r.statistics.day.goalProgressPercent = 73.5
+        r.statistics.calls.removeAll()
+        r.store.refresh()
+        XCTAssertEqual(r.store.goalMinutes, 60)
         XCTAssertEqual(r.store.goalProgressPercent, 73.5)
+        XCTAssertFalse(r.statistics.calls.contains { $0.0 == "currentWeeklyReview" || $0.0 == "weeklyReview" })
         r.statistics.error = NSError(domain: "测试", code: 1); r.store.refresh()
+        XCTAssertEqual(r.store.goalMinutes, 60)
         XCTAssertEqual(r.store.goalProgressPercent, 73.5)
         XCTAssertFalse(r.store.loadError.isEmpty)
     }
@@ -581,5 +585,50 @@ import XCTest
         XCTAssertTrue(r.store.composing); XCTAssertTrue(r.store.newTaskFocusRequested)
         r.store.stop()
         XCTAssertFalse(r.store.composing); XCTAssertEqual(r.store.newTitle, ""); XCTAssertFalse(r.store.newTaskFocusRequested)
+    }
+
+    // 产品保证：行内编辑任务期间进入多选或点击新建任务会先结束行内编辑并释放交互令牌，且多令牌并存时释放其中一个不会提前解除刷新冻结。
+    func testEnteringSelectionOrNewTaskFinishesInlineEditorAndReleasesToken() throws {
+        let tasks = TaskBridgeFake(); tasks.result = [task(10, title: "旧标题"), task(20, title: "任务20")]
+        let interactions = InteractionBridgeFake(); interactions.latest = tasks.result[0]
+        let logicalDay = LogicalDayBridgeFake(); logicalDay.today = "2026-10-09"
+        let shell = ShellStore(bridge: ShellBridgeFake()); retainedShell = shell
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
+        let editor = InlineTaskEditor(tasks: tasks, interactions: interactions, shell: shell)
+        let store = TodayStore(tasks: tasks, interactions: interactions, logicalDay: logicalDay,
+                               settings: SettingsBridgeFake(), statistics: StatisticsBridgeFake(),
+                               gaps: GapReminderBridgeFake(), pendingDeletion: pending, shell: shell,
+                               inlineEditor: editor)
+        store.start()
+
+        // 先验证多令牌引用计数：两个令牌同时活跃时，释放第一个后 refreshBlocked 仍须保持为 true。
+        let firstToken = try interactions.beginEdit(id: 10, source: "t1")
+        let secondToken = try interactions.beginDrag(id: 20, source: "t2")
+        XCTAssertTrue(interactions.refreshBlocked)
+        firstToken.end()
+        XCTAssertTrue(interactions.refreshBlocked)
+        secondToken.end()
+        XCTAssertFalse(interactions.refreshBlocked)
+
+        // 行内编辑期间进入多选：自动保存修改、释放编辑令牌，多选操作后刷新不再死锁。
+        XCTAssertTrue(editor.begin(id: 10))
+        editor.title = "行内新标题"
+        XCTAssertTrue(interactions.refreshBlocked)
+        store.beginSelection()
+        XCTAssertFalse(editor.isEditing)
+        XCTAssertFalse(interactions.refreshBlocked)
+        XCTAssertEqual(tasks.changes.last?.0, 10)
+        XCTAssertEqual(tasks.changes.last?.1.title, "行内新标题")
+        store.endSelection()
+
+        // 行内编辑期间点击新建任务：同样先结束行内编辑释放令牌。
+        interactions.latest = task(20, title: "原20")
+        XCTAssertTrue(editor.begin(id: 20))
+        editor.notes = "补备注"
+        store.requestNewTask()
+        XCTAssertFalse(editor.isEditing)
+        XCTAssertFalse(interactions.refreshBlocked)
+        XCTAssertEqual(tasks.changes.last?.0, 20)
+        XCTAssertEqual(tasks.changes.last?.1.notes, "补备注")
     }
 }

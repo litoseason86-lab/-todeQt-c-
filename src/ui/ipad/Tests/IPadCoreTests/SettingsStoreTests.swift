@@ -57,7 +57,7 @@ import XCTest
     }
     // 产品保证：同步页始终显示服务给的待同步数，文件夹存在时操作明确为重新选择。
     func testR1SyncFormProjectsPendingZeroAndFolderAction() {
-        let bridge = SettingsSyncFake(); let store = SettingsSyncStore(bridge: bridge)
+        let bridge = SettingsSyncFake(); let store = SettingsSyncStore(bridge: bridge); store.setActive(true)
         XCTAssertEqual(store.pendingText, "0 项"); XCTAssertEqual(store.folderActionTitle, "选择同步文件夹")
         bridge.result.pendingCount = 8; bridge.result.hasFolder = true; bridge.onChanged?()
         XCTAssertEqual(store.pendingText, "8 项"); XCTAssertEqual(store.folderActionTitle, "重新选择文件夹")
@@ -135,5 +135,17 @@ import XCTest
         store.setUseWallpaper(true)
         XCTAssertFalse(store.snapshot.useWallpaper)
         XCTAssertFalse(store.errorMessage.isEmpty)
+    }
+
+    // 产品保证：恢复默认侧栏顺序会清空自定义顺序并通知快照回到默认状态，失败时回滚原顺序。
+    func testResetSidebarOrderRestoresDefaultAndRollsBackOnFailure() {
+        let bridge = SettingsBridgeFake()
+        let store = SettingsStore(bridge: bridge)
+        store.setSidebarOrder([.memo, .today, .focus])
+        XCTAssertFalse(store.snapshot.sidebarOrderIsDefault)
+        XCTAssertEqual(store.snapshot.sidebarOrder, ["memo", "today", "focus"])
+        store.resetSidebarOrder()
+        XCTAssertTrue(store.snapshot.sidebarOrderIsDefault)
+        XCTAssertTrue(store.snapshot.sidebarOrder.isEmpty)
     }
 }

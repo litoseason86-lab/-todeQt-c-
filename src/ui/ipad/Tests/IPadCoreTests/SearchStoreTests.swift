@@ -56,12 +56,13 @@ import XCTest
         XCTAssertEqual(store.errorMessage, "")
     }
 
-    // 产品保证：任务或缺口在别处改动（详情里改名、同步进来）后，已显示的结果按当前查询重读，
+    // 产品保证：任务或缺口在别处改动（详情里改名、同步进来）后，处于活跃状态的搜索页按当前查询重读，
     // 改名后不再匹配的条目消失；还没搜索过时变更不触发读取。
     func testDataChangeRerunsCurrentQuery() {
         let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake()
         let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: ShellStore(bridge: ShellBridgeFake()))
         let store = SearchStore(tasks: tasks, gaps: gaps, pendingDeletion: pending)
+        store.setActive(true)
         tasks.onChanged?(); gaps.onChanged?()
         XCTAssertFalse(tasks.calls.contains { $0.name == "search" })
         tasks.result = [task(3, "线代 第 4 讲"), task(9, "线代 第 3 讲")]
@@ -76,12 +77,13 @@ import XCTest
         XCTAssertEqual(tasks.calls.last?.text, ["线代"])
     }
 
-    // 产品保证：科目改名或删除后（任务搜索也匹配科目名，结果行显示科目），已显示的结果按当前查询重读，
+    // 产品保证：科目改名或删除后（任务搜索也匹配科目名，结果行显示科目），活跃搜索页按当前查询重读，
     // 不再匹配的任务消失。
     func testCategoryChangeRerunsCurrentQuery() {
         let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake(), categories = CategoryBridgeFake()
         let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: ShellStore(bridge: ShellBridgeFake()))
         let store = SearchStore(tasks: tasks, gaps: gaps, pendingDeletion: pending, categories: categories)
+        store.setActive(true)
         tasks.result = [task(3, "微积分 第 2 章")]
         store.query = "数学"; store.search()
         XCTAssertEqual(store.tasks.map(\.id), [3])
@@ -89,6 +91,29 @@ import XCTest
         categories.onChanged?()
         XCTAssertTrue(store.tasks.isEmpty)
         XCTAssertEqual(tasks.calls.last?.text, ["数学"])
+    }
+
+    // 产品保证：关闭搜索页后任务、缺口和科目高频变更不触发后台全表模糊查询，重新打开搜索页时合并补读一次。
+    func testInactiveSearchStoreDefersBackgroundQueriesUntilReopened() {
+        let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake(), categories = CategoryBridgeFake()
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: ShellStore(bridge: ShellBridgeFake()))
+        let store = SearchStore(tasks: tasks, gaps: gaps, pendingDeletion: pending, categories: categories)
+        store.setActive(true)
+        tasks.result = [task(1, "旧任务")]
+        store.query = "任务"; store.search()
+        XCTAssertEqual(store.tasks.map(\.id), [1])
+
+        store.setActive(false)
+        let searchCallsBefore = tasks.calls.filter { $0.name == "search" }.count
+        tasks.result = [task(2, "新任务")]
+        tasks.onChanged?()
+        gaps.onChanged?()
+        categories.onChanged?()
+        XCTAssertEqual(tasks.calls.filter { $0.name == "search" }.count, searchCallsBefore)
+
+        store.setActive(true)
+        XCTAssertEqual(tasks.calls.filter { $0.name == "search" }.count, searchCallsBefore + 1)
+        XCTAssertEqual(store.tasks.map(\.id), [2])
     }
 
     // 产品保证：搜索只根据共享待删槽投影结果，撤销或提交失败清槽立即恢复，不依赖任务变更或重搜。

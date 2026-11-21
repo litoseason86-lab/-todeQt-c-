@@ -45,8 +45,11 @@ struct StatisticsView: View {
                     }
                     .fixedSize(horizontal: false, vertical: true)
                     if wide {
+                        // 扣除左右安全区（含浮层侧栏）与居中页边距后再按 2:1 分配，避免侧栏展开或超宽屏下挤窄饼图。
+                        let margin = Design.pageMargin(geometry: geometry, compact: false, maxWidth: 1150)
+                        let available = max(0, geometry.size.width - geometry.safeAreaInsets.leading - geometry.safeAreaInsets.trailing - margin * 2)
                         HStack(alignment: .top, spacing: 20) {
-                            StatisticsBarChart(store: store).frame(width: (geometry.size.width - 84) * 2 / 3)
+                            StatisticsBarChart(store: store).frame(width: max(0, (available - 20) * 2 / 3))
                             StatisticsPieChart(store: store).frame(maxWidth: .infinity)
                         }
                     } else {

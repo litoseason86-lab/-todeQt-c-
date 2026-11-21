@@ -13,7 +13,13 @@ import IPadCore
     var dates: [(Int, String)] = []
     func check(_ name: String) throws { calls.append(name); if let error { throw error } }
     func gaps(status: Int, categoryID: Int, search: String) throws -> [GapValue] { try check("read"); filters.append((status, categoryID, search)); return rows }
-    func gap(id: Int) throws -> GapValue { try check("gap"); return rows.first { $0.id == id }! }
+    func gap(id: Int) throws -> GapValue {
+        try check("gap")
+        guard let found = rows.first(where: { $0.id == id }) else {
+            throw NSError(domain: "PTKnowledgeGapBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "知识缺口已不存在"])
+        }
+        return found
+    }
     func add(title: String, categoryID: Int, detail: String, priority: Int, dueDate: String, sourceTaskID: Int) throws -> Int { try check("add"); return 123 }
     func update(id: Int, changes: GapChanges) throws { try check("update"); updates.append((id, changes)) }
     func schedule(id: Int, date: String) throws { try check("schedule"); dates.append((id, date)) }

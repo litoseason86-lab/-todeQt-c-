@@ -35,8 +35,9 @@ import SwiftUI
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { datePickerPresented = false } } }
             }.presentationDetents([.medium, .large])
         }
-        // 对照 Mac 的 TodayFocusView：回页时重读；若有跨页日期意图则先消费并切到该日期。
+        // 对照 Mac 的 TodayFocusView：回页时重读；若有跨页日期意图则先消费并切到该日期；离开页面释放活跃门禁。
         .onAppear { store.pageAppeared(shell: shell) }
+        .onDisappear { store.setActive(false) }
         .onChange(of: shell.requestedFocusDate) { store.selectRequestedDate(from: shell) }
     }
 
@@ -65,10 +66,13 @@ import SwiftUI
             notices
             HStack(alignment: .top, spacing: 24) {
                 timelineCard
-                VStack(spacing: 14) {
-                    totalCard(compact: false)
-                    categoryCard
+                ScrollView {
+                    VStack(spacing: 14) {
+                        totalCard(compact: false)
+                        categoryCard
+                    }
                 }
+                .scrollIndicators(.hidden)
                 .frame(width: 300)
             }
             .frame(maxHeight: .infinity, alignment: .top)
@@ -103,7 +107,14 @@ import SwiftUI
                 ForEach(blocks, id: \.session.timelineID) { block in
                     let height = max(16, y(block.endMinute) - y(block.startMinute) - 2)
                     Button { editing = block.session } label: { sessionBlock(block, height: height) }
-                        .popover(isPresented: editorPresented(block.session)) { SessionEditorSheet(store: store, session: block.session) }
+                        // 仅在被点中的记录块上按需挂浮层锚点，避免时间轴每块常驻一套 popover 修饰器。
+                        .overlay {
+                            if editing?.timelineID == block.session.timelineID {
+                                Color.clear
+                                    .popover(isPresented: editorPresented(block.session)) { SessionEditorSheet(store: store, session: block.session) }
+                                    .allowsHitTesting(false)
+                            }
+                        }
                         .buttonStyle(.plain)
                         .offset(x: 68, y: y(block.startMinute) + 1)
                         .padding(.trailing, 84)
@@ -227,7 +238,13 @@ import SwiftUI
                 VStack(spacing: 0) {
                     if index > 0 { CardDivider() }
                     Button { editing = block.session } label: { compactRow(block) }.buttonStyle(.plain)
-                        .popover(isPresented: editorPresented(block.session)) { SessionEditorSheet(store: store, session: block.session) }
+                        .overlay {
+                            if editing?.timelineID == block.session.timelineID {
+                                Color.clear
+                                    .popover(isPresented: editorPresented(block.session)) { SessionEditorSheet(store: store, session: block.session) }
+                                    .allowsHitTesting(false)
+                            }
+                        }
                 }
                 .cardRow(blocks.count == 1 ? .single : index == 0 ? .top : index == blocks.count - 1 ? .bottom : .middle)
                 .swipeActions(edge: .trailing) {

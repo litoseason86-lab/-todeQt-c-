@@ -37,10 +37,12 @@ struct TaskCompletionNoteSheet: View {
             }
         }
         .tint(ThemeColors.accentInk)
-        .presentationDetents([.medium, .large])
+        // 带文本输入的表单统一用全高，规避窄窗半高表单弹键盘时的系统自动布局崩溃（见 TodaySheets.swift）。
+        .presentationDetents([.large])
         .interactiveDismissDisabled(store.active && store.note != store.task?.completionNote)
         .disabled(shell.operationBlocksUI)
         .onAppear { if !store.active { _ = store.begin(id: taskID) } }
+        .onChange(of: shell.databaseGeneration) { _, _ in store.cancel(); dismiss() }
         .onDisappear { store.cancel() }
     }
 }

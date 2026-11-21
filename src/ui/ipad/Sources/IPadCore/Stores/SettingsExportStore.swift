@@ -15,10 +15,14 @@ public enum ExportKind: String, CaseIterable, Sendable { case tasks, focus = "fo
     @ObservationIgnored private let bridge: any ExportBridgeProtocol
     @ObservationIgnored private let files: any FileTransferWorkspaceProtocol
     @ObservationIgnored private let logicalDay: any LogicalDayBridgeProtocol
+    @ObservationIgnored private let flushEdits: () -> Bool
+    @ObservationIgnored private let commitPending: () -> Bool
     @ObservationIgnored private var localURL: URL?
     @ObservationIgnored private var working = false
-    public init(bridge: any ExportBridgeProtocol, files: any FileTransferWorkspaceProtocol, logicalDay: any LogicalDayBridgeProtocol) {
-        self.bridge = bridge; self.files = files; self.logicalDay = logicalDay; endDate = logicalDay.today
+    public init(bridge: any ExportBridgeProtocol, files: any FileTransferWorkspaceProtocol, logicalDay: any LogicalDayBridgeProtocol,
+                flushEdits: @escaping () -> Bool = { true }, commitPending: @escaping () -> Bool = { true }) {
+        self.bridge = bridge; self.files = files; self.logicalDay = logicalDay
+        self.flushEdits = flushEdits; self.commitPending = commitPending; endDate = logicalDay.today
         bridge.onProgress = { [weak self] current, total in self?.progress = current; self?.total = total }
         bridge.onBusyChanged = { [weak self] in self?.busy = self?.bridge.isBusy() ?? false }
         bridge.onCompleted = { [weak self] in self?.completed($0, message: $1) }
@@ -31,6 +35,9 @@ public enum ExportKind: String, CaseIterable, Sendable { case tasks, focus = "fo
     }
     public func start(_ kind: ExportKind) {
         guard !busy && !working && exportURL == nil else { return }
+        // 导出前先冲刷编辑草稿并提交共享待删槽，避免把界面上已删除隐藏的任务或专注记录导出到 CSV。
+        guard flushEdits() else { errorMessage = "备忘录还有未保存的修改，请先回备忘录处理"; return }
+        guard commitPending() else { errorMessage = "待删项提交失败，导出已取消"; return }
         self.kind = kind; progress = 0; total = 0; errorMessage = ""; notice = ""
         do {
             let url: URL

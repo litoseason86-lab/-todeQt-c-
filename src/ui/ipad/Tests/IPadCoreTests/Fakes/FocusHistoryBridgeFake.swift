@@ -24,8 +24,14 @@ import IPadCore
     var bandInputs: [Double] = []
     func bandForMinutes(_ minutes: Double) -> Int { bandInputs.append(minutes); return suppliedBand }
     func formatDuration(seconds: Int) -> String { calls.append(("formatDuration", [seconds], [])); return formattedDuration }
-    func cleanupInvalidSessions() throws -> Int { try record("cleanupInvalidSessions"); return count }
-    func addManualSession(taskID: Int, startTime: String, durationMinutes: Int) throws -> Int { try record("addManualSession", numbers: [taskID, durationMinutes], text: [startTime]); return createdID }
-    func updateSession(id: Int, changes: SessionChanges) throws { submittedChanges.append((id, false, changes)); try record("updateSession", numbers: [id]) }
-    func updateRestSession(id: Int, changes: SessionChanges) throws { submittedChanges.append((id, true, changes)); try record("updateRestSession", numbers: [id]) }
+    func cleanupInvalidSessions() throws -> Int { try record("cleanupInvalidSessions"); onChanged?(); return count }
+    func addManualSession(taskID: Int, startTime: String, durationMinutes: Int) throws -> Int {
+        try record("addManualSession", numbers: [taskID, durationMinutes], text: [startTime]); onChanged?(); return createdID
+    }
+    func updateSession(id: Int, changes: SessionChanges) throws {
+        submittedChanges.append((id, false, changes)); try record("updateSession", numbers: [id]); onChanged?()
+    }
+    func updateRestSession(id: Int, changes: SessionChanges) throws {
+        submittedChanges.append((id, true, changes)); try record("updateRestSession", numbers: [id]); onChanged?()
+    }
 }

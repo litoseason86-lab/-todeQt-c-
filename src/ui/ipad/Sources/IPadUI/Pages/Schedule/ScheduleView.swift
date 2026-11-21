@@ -79,6 +79,8 @@ import SwiftUI
                 deleting = nil
             }
         } message: { Text("该课程会从整张课表移除。") }
+        .onAppear { store.setActive(true) }
+        .onDisappear { store.setActive(false) }
     }
     // 副标题：「第 6 周 · 10月6日 – 12日」，周次与日期都来自服务。
     private var subtitle: String {

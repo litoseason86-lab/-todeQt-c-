@@ -49,6 +49,7 @@ struct FocusRingView<Center: View>: View {
             center()
         }
         .aspectRatio(1, contentMode: .fit)
-        .accessibilityElement(children: .combine)
+        // 圆环中心在待机态包含「模式与时长」菜单按钮，必须用 .contain 保留子控件的独立无障碍焦点。
+        .accessibilityElement(children: .contain)
     }
 }

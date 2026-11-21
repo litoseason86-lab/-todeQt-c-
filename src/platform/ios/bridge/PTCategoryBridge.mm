@@ -70,6 +70,24 @@ using namespace PTBridgeSupport;
     FailureCollector::Call call(_failures);
     return CategoryManager::instance()->updateCategory(id, string(name), string(color)) ? YES : fail(error, call.error().isEmpty() ? QStringLiteral("修改科目失败") : call.error());
 }
+- (BOOL)updateCategory:(NSInteger)categoryId changes:(NSDictionary *)changes error:(NSError **)error {
+    NSAssert(NSThread.isMainThread, @"科目写入必须在主线程"); int cid;
+    if (!integer(categoryId, &cid)) return fail(error, QStringLiteral("科目编号越界"));
+    // 仅允许 name/color 字符串键进入字段级更新，避免未知字段或未改字段覆盖另一台设备的同步修改。
+    QVariantMap map;
+    for (id rawKey in changes) {
+        if (![rawKey isKindOfClass:NSString.class]) return fail(error, QStringLiteral("科目字段无效"));
+        NSString *key = (NSString *)rawKey;
+        id value = changes[key];
+        if (([key isEqualToString:@"name"] || [key isEqualToString:@"color"]) && [value isKindOfClass:NSString.class]) {
+            map.insert(string(key), string((NSString *)value));
+        } else {
+            return fail(error, QStringLiteral("科目字段无效"));
+        }
+    }
+    FailureCollector::Call call(_failures);
+    return CategoryManager::instance()->updateCategoryChanges(cid, map) ? YES : fail(error, call.error().isEmpty() ? QStringLiteral("修改科目失败") : call.error());
+}
 - (BOOL)deleteCategory:(NSInteger)categoryId error:(NSError **)error {
     NSAssert(NSThread.isMainThread, @"科目写入必须在主线程"); int id;
     if (!integer(categoryId, &id)) return fail(error, QStringLiteral("科目编号越界")); FailureCollector::Call call(_failures);

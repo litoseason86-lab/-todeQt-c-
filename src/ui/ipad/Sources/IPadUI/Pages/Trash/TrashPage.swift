@@ -74,7 +74,7 @@ import SwiftUI
                 }
             }
         }
-        .alert(store.confirmation?.title ?? "", isPresented: Binding(get: { store.confirmation != nil }, set: { _ in }), presenting: store.confirmation) { action in
+        .alert(store.confirmation?.title ?? "", isPresented: Binding(get: { store.confirmation != nil }, set: { if !$0 { store.cancelConfirmation() } }), presenting: store.confirmation) { action in
             Button("取消", role: .cancel) { store.cancelConfirmation() }
             switch action {
             case .restore: Button("恢复") { store.confirmRestore() }
@@ -91,22 +91,29 @@ import SwiftUI
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if store.selecting {
-                SelectionActionBar {
-                    SelectionBarButton(title: "恢复", systemImage: "arrow.uturn.backward") { store.restoreSelection() }
-                        .disabled(!store.items.contains { store.selection.contains($0.id) && $0.restorable })
-                    SelectionBarButton(title: "彻底删除", systemImage: "trash", role: .destructive) { store.requestDeleteSelection() }
-                        .disabled(store.selection.isEmpty)
-                        .keyboardShortcut(.delete, modifiers: .command)
+            let hasNotice = !store.actionError.isEmpty || !store.restoredTitle.isEmpty || !store.batchNotice.isEmpty
+            if store.selecting || hasNotice {
+                VStack(spacing: 8) {
+                    // 多选期间操作报错或部分恢复提示仍叠在多选操作条上方，不因 selecting 为真被吞没。
+                    if hasNotice {
+                        HStack {
+                            Text(!store.actionError.isEmpty ? store.actionError
+                                 : !store.batchNotice.isEmpty ? store.batchNotice : "已恢复「\(store.restoredTitle)」")
+                                .foregroundStyle(store.actionError.isEmpty ? ThemeColors.ink : ThemeColors.danger)
+                            Spacer()
+                            Button("关闭提示", systemImage: "xmark") { store.dismissNotice() }.labelStyle(.iconOnly)
+                        }.padding().background(ThemeColors.surface)
+                    }
+                    if store.selecting {
+                        SelectionActionBar {
+                            SelectionBarButton(title: "恢复", systemImage: "arrow.uturn.backward") { store.restoreSelection() }
+                                .disabled(!store.items.contains { store.selection.contains($0.id) && $0.restorable })
+                            SelectionBarButton(title: "彻底删除", systemImage: "trash", role: .destructive) { store.requestDeleteSelection() }
+                                .disabled(store.selection.isEmpty)
+                                .keyboardShortcut(.delete, modifiers: .command)
+                        }
+                    }
                 }
-            } else if !store.actionError.isEmpty || !store.restoredTitle.isEmpty || !store.batchNotice.isEmpty {
-                HStack {
-                    Text(!store.actionError.isEmpty ? store.actionError
-                         : !store.batchNotice.isEmpty ? store.batchNotice : "已恢复「\(store.restoredTitle)」")
-                        .foregroundStyle(store.actionError.isEmpty ? ThemeColors.ink : ThemeColors.danger)
-                    Spacer()
-                    Button("关闭提示", systemImage: "xmark") { store.dismissNotice() }.labelStyle(.iconOnly)
-                }.padding().background(ThemeColors.surface)
             }
         }
         .onAppear { store.activate() }
@@ -129,6 +136,7 @@ import SwiftUI
                 Text(item.title.isEmpty ? "未命名" : item.title).scaledSystemFont(size: 16).foregroundStyle(ThemeColors.inkStrong).lineLimit(2)
                 Text(TrashFormat.metaText(item, today: store.today)).scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft).lineLimit(1)
             }
+            .accessibilityElement(children: .combine)
             Spacer(minLength: 0)
             if wide && item.restorable && !store.selecting {
                 Button("恢复") { store.requestRestore(item) }.buttonStyle(SoftPillStyle())
@@ -137,7 +145,8 @@ import SwiftUI
         .padding(.horizontal, 16).frame(minHeight: 72)
         .contentShape(Rectangle())
         .onTapGesture { if store.selecting { store.toggleSelection(item.id) } }
-        .accessibilityElement(children: .combine)
+        // 宽窗带行尾「恢复」按钮时用 .contain，避免 .combine 把按钮吞进整行导致 VoiceOver 无法单独激活。
+        .accessibilityElement(children: wide && item.restorable && !store.selecting ? .contain : .combine)
         .accessibilityAddTraits(store.selecting && store.selection.contains(item.id) ? .isSelected : [])
     }
     private func icon(_ kind: String) -> String {

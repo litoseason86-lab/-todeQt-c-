@@ -143,6 +143,9 @@ public final class ShellStore {
     public private(set) var selection: PageID = .dashboard
     public private(set) var errorMessage = ""
     public private(set) var toast: ShellToast?
+    // 数据库代次：恢复备份或远端快照替换整库时递增，供旧撤销提示、详情浮层和跨库闭包立即失效。
+    public private(set) var databaseGeneration: UInt64 = 0
+    public private(set) var orderedPages: [PageID] = PageID.ordered([])
     public private(set) var sidebarPages: [PageID] = PageID.ordered([]).filter {
         !PageID.summary.prefix(3).contains($0) && !PageID.fixed.contains($0)
     }
@@ -176,7 +179,7 @@ public final class ShellStore {
     // 提供者在每次打开记一笔时现取，避免来源停留在上一次的任务上。
     @ObservationIgnored public var captureSourceProvider: (() -> ShellCaptureSource?)?
     @ObservationIgnored private var captureSource = ShellCaptureSource()
-    @ObservationIgnored private var editFlushers: [UUID: () -> Void] = [:]
+    @ObservationIgnored private var editFlushers: [UUID: () -> Bool] = [:]
     @ObservationIgnored public var onAccessibilityTimeoutSuspensionChanged: ((Bool) -> Void)?
     // nil 表示尚未接收系统状态；首次关闭也要转发，解除旧根视图可能留在共享删除槽中的暂停。
     @ObservationIgnored private var voiceOverEnabled: Bool?
@@ -185,6 +188,7 @@ public final class ShellStore {
     @ObservationIgnored private var toastAction: (() -> Void)?
     @ObservationIgnored private var toastRetired: (() -> Void)?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
+    @ObservationIgnored private var toastGeneration: UInt64 = 0
 
     public init(bridge: any ShellBridgeProtocol) {
         self.bridge = bridge
@@ -200,7 +204,6 @@ public final class ShellStore {
         selection = PageID(rawValue: details.selectedPage) ?? .dashboard
     }
 
-    public var orderedPages: [PageID] { PageID.ordered(details.sidebarOrder) }
     public func summaryTiles(focusTimeText: String) -> [ShellSummaryTile] {
         // 定稿摘要块写「时:分」（1:05）：块宽只放得下四五个数字，整句「1 小时 5 分」会被截断。计时中沿用计时器读数。
         let minutes = max(0, details.todayFocusedSeconds) / 60
@@ -228,6 +231,7 @@ public final class ShellStore {
         let ordered = PageID.ordered(sidebarOrder)
         let sidebar = ordered.filter { !PageID.summary.prefix(3).contains($0) && !PageID.fixed.contains($0) }
         let more = ordered.filter { !PageID.primary.contains($0) }
+        if orderedPages != ordered { orderedPages = ordered }
         if sidebarPages != sidebar { sidebarPages = sidebar }
         if morePages != more { morePages = more }
     }
@@ -320,6 +324,8 @@ public final class ShellStore {
     // 选的还是同一页（从搜索回到原页、页面快捷键）时 selection 不变，只靠它通知外壳。
     public private(set) var navigationRequest = 0
     public func openSearch() {
+        guard !operationBlocksUI else { return }
+        _ = flushEdits()
         dismissCapture()
         searchShown = true
         navigationRequest += 1
@@ -411,8 +417,17 @@ public final class ShellStore {
     // 提示条只有一个槽；替换、超时、主动收起均通知原调用方，供待删项提交，动作执行时不重复提交。
     public func showToast(_ message: String, actionTitle: String? = nil,
                           durationMilliseconds: UInt64 = 5000,
+                          preservesReentrantToast: Bool = true,
                           action: (() -> Void)? = nil, onRetired: (() -> Void)? = nil) {
+        let generationBeforeRetire = toastGeneration
         retireToast()
+        // 若旧提示的退场回调（如待删项提前提交失败）同步重入弹出了失败提示：
+        // 外层普通提示直接让位保留失败告警；若外层携带新的退场职责则将失败信息提升到外壳错误栏，保证退场链与失败均不丢。
+        if toastGeneration != generationBeforeRetire, let reentrant = toast {
+            if preservesReentrantToast && onRetired == nil { return }
+            errorMessage = reentrant.message
+        }
+        toastGeneration &+= 1
         let id = UUID()
         toast = ShellToast(id: id, message: message, actionTitle: actionTitle)
         toastAction = action
@@ -436,15 +451,33 @@ public final class ShellStore {
         retireToast()
         action?()
     }
-    @discardableResult public func registerEditFlusher(_ callback: @escaping () -> Void) -> UUID {
+    // 换库时静默作废旧库提示条与挂起的日期跳转：绝不执行旧 toastRetired（避免提交新库待删项），同时递增代次使旧闭包失效。
+    public func invalidateForDatabaseChange() {
+        databaseGeneration &+= 1
+        requestedFocusDate = nil
+        toastTask?.cancel()
+        toastTask = nil
+        toast = nil
+        toastAction = nil
+        toastRetired = nil
+        toastGeneration &+= 1
+    }
+    @discardableResult public func registerEditFlusher(_ callback: @escaping () -> Bool) -> UUID {
         let token = UUID()
         editFlushers[token] = callback
         return token
     }
+    @discardableResult public func registerEditFlusher(_ callback: @escaping () -> Void) -> UUID {
+        registerEditFlusher { callback(); return true }
+    }
     public func unregisterEditFlusher(_ token: UUID) { editFlushers.removeValue(forKey: token) }
-    public func flushEdits() {
-        // 复制回调集合后调用，保存过程允许页面注销；此方法必须同步完成后才能进入后台同步。
-        for callback in Array(editFlushers.values) { callback() }
+    @discardableResult public func flushEdits() -> Bool {
+        // 复制回调集合后调用，保存过程允许页面注销；任一编辑会话未保存成功均返回 false 供临界操作中止。
+        var allSucceeded = true
+        for callback in Array(editFlushers.values) {
+            if !callback() { allSucceeded = false }
+        }
+        return allSucceeded
     }
 }
 

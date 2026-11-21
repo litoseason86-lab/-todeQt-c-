@@ -32,11 +32,17 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let categories = CategoryBridgeAdapter()
         let scheduleBridge = ScheduleBridgeAdapter()
         let interactions = InteractionBridgeAdapter()
+        let inlineEditor = InlineTaskEditor(tasks: tasks, interactions: interactions, shell: store)
         // 本周使用独立任务信号适配器，避免 FocusStore.start 覆盖单槽回调；动作与撤销槽仍共享。
+        // 本周起始日直接用 LogicalDay 纯计算周期，不在启动或切周时跑整周统计汇总 SQL。
         let week = WeekStore(tasks: TaskBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter(), pendingDeletion: pending, interactions: InteractionBridgeAdapter(),
                              weekStart: "", weekDates: { start in
                                  try statisticsBridge.weekStats(startDate: start).map(\.date)
-                             }, weekStartProvider: { try statisticsBridge.currentWeeklyReview().weekStart })
+                             }, weekStartProvider: {
+                                 let today = logicalDay.today
+                                 return try logicalDay.period(anchor: today, range: "week", shift: 0, logicalToday: today).start
+                             },
+                             inlineEditor: inlineEditor)
         // TimelineStore 也订阅完成信号；FocusBridge 的回调是单槽，不能与 FocusStore 或 TodayStore 共用适配器。
         let timeline = TimelineStore(history: focusHistory, statistics: statisticsBridge, pendingDeletion: pending,
                                      logicalDay: LogicalDayBridgeAdapter(), date: logicalDay.today,
@@ -51,7 +57,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                categories: categories, logicalDay: logicalDay,
                                settings: settingsBridge, statistics: statisticsBridge,
                                focusHistory: focusHistory, pendingDeletion: pending,
-                               taskActions: actions, inlineEditor: InlineTaskEditor(tasks: tasks, interactions: interactions, shell: store),
+                               taskActions: actions, inlineEditor: inlineEditor,
                                weekStore: week, timelineStore: timeline, scheduleStore: schedule,
                                trash: trash, sync: sync, backup: backup, export: export, routines: routines)
         // 恢复回调是单槽，独立桥接不能占用设置页或 CoreBridges 的回调；由 FocusStore 的闭包强持有。
@@ -59,7 +65,6 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let focus = FocusStore(focus: FocusBridgeAdapter(), settings: SettingsBridgeAdapter(), tasks: TaskBridgeAdapter(),
                                pendingDeletion: pending, shell: store, reduceMotion: { UIAccessibility.isReduceMotionEnabled },
                                operationBlocksInput: { focusBackup.snapshot().operationBlocksUI })
-        focusBackup.onRestoreStarted = { [weak focus] in focus?.prepareForRestore() }
         focus.start()
         actions.focusHook = focus
         // 055-P4-1：今日任务页的 Store 在根上装配一份，⌘N 经外壳现有回调切页并请求新建输入。
@@ -67,7 +72,8 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let today = TodayStore(tasks: TaskBridgeAdapter(), interactions: InteractionBridgeAdapter(),
                                logicalDay: LogicalDayBridgeAdapter(), settings: SettingsBridgeAdapter(),
                                statistics: StatisticsBridgeAdapter(), gaps: GapReminderBridgeAdapter(),
-                               pendingDeletion: pending, shell: store, focus: FocusBridgeAdapter())
+                               pendingDeletion: pending, shell: store, focus: FocusBridgeAdapter(),
+                               inlineEditor: inlineEditor)
         // 仪表盘使用独立桥接实例；这些桥的回调是单槽，避免覆盖其它 Store 的单槽回调。
         let dashboard = DashboardStore(tasks: TaskBridgeAdapter(), statistics: StatisticsBridgeAdapter(),
                                        settings: SettingsBridgeAdapter(), pendingDeletion: pending,
@@ -87,24 +93,56 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let statistics = StatsStore(statistics: StatisticsBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter(),
                                     tasks: TaskBridgeAdapter(), settings: SettingsBridgeAdapter(),
                                     categories: CategoryBridgeAdapter(), history: FocusHistoryBridgeAdapter(), defaults: .standard)
+        // 先让 UIKit 上屏输入法组合，再同步冲刷编辑会话；备份、恢复、导出与加入同步前统一复用同一入口。
+        let flushNativeEditsClosure: () -> Bool = { [weak store] in
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            return store?.flushEdits() ?? true
+        }
+        let commitPendingClosure: () -> Bool = { [weak pending] in
+            pending?.commitIfNeeded() ?? false
+        }
         // 055-P4-5：设置页独占自己的设置适配器，不覆盖 FocusStore 的回调。
-        let trashStore = TrashStore(bridge: TrashBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter())
+        let trashStore = TrashStore(bridge: TrashBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter(),
+                                    commitPending: commitPendingClosure)
         let settings = SettingsStore(bridge: SettingsBridgeAdapter())
         let settingsCategories = SettingsCategoryStore(bridge: CategoryBridgeAdapter())
         let settingsRoutines = SettingsRoutineStore(bridge: RoutineBridgeAdapter(), categories: CategoryBridgeAdapter())
         // 055-P4-5：异步文件操作跨设置子页存活，回调不随一次导出注销。
-        let settingsSync = SettingsSyncStore(bridge: SyncBridgeAdapter())
+        let settingsSync = SettingsSyncStore(bridge: SyncBridgeAdapter(),
+                                             flushEdits: flushNativeEditsClosure,
+                                             commitPending: commitPendingClosure)
         let settingsBackup = SettingsBackupStore(bridge: BackupBridgeAdapter(), files: FileTransferWorkspace(),
-            commitPending: { [weak pending] in pending?.commitIfNeeded() ?? false },
+            flushEdits: flushNativeEditsClosure,
+            commitPending: commitPendingClosure,
             restoreWarning: { sync.restoreWarning() })
-        let settingsExport = SettingsExportStore(bridge: ExportBridgeAdapter(), files: FileTransferWorkspace(), logicalDay: LogicalDayBridgeAdapter())
+        let settingsExport = SettingsExportStore(bridge: ExportBridgeAdapter(), files: FileTransferWorkspace(),
+                                                 logicalDay: LogicalDayBridgeAdapter(),
+                                                 flushEdits: flushNativeEditsClosure,
+                                                 commitPending: commitPendingClosure)
+        // 手动恢复开始或远端快照提交时，递增数据库代次并统一收起各 Store 的待删槽、撤销提示、多选与草稿，避免旧库编号误写新库。
+        let clearDatabaseEditors = { [weak store, weak pending, weak focus, weak memos, weak inlineEditor,
+                                      weak today, weak week, weak timeline, weak gaps, weak countdown,
+                                      weak trashStore, weak settingsCategories, weak settingsRoutines, weak settingsSync] in
+            store?.invalidateForDatabaseChange()
+            pending?.invalidateForDatabaseChange()
+            focus?.prepareForRestore()
+            memos?.prepareForRestore()
+            inlineEditor?.cancel()
+            today?.prepareForRestore()
+            week?.prepareForRestore()
+            timeline?.prepareForRestore()
+            gaps?.prepareForRestore()
+            countdown?.prepareForRestore()
+            trashStore?.prepareForRestore()
+            settingsCategories?.prepareForRestore()
+            settingsRoutines?.prepareForRestore()
+            settingsSync?.prepareForRestore()
+        }
+        focusBackup.onRestoreStarted = clearDatabaseEditors
+        sync.onSnapshotReplaced = clearDatabaseEditors
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
-        PTLifecycleBridge.flushHandler = { [weak store] in
-            MainActor.assumeIsolated {
-                // 先让 UIKit 上屏组合，再同步保存；返回后 C++ 才写出设备同步。
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                store?.flushEdits()
-            }
+        PTLifecycleBridge.flushHandler = {
+            MainActor.assumeIsolated { flushNativeEditsClosure() }
         }
         let search = SearchStore(tasks: TaskBridgeAdapter(), gaps: KnowledgeGapAdapter(), pendingDeletion: pending, categories: CategoryBridgeAdapter())
         let root = ShellRootView(store: store)
@@ -115,7 +153,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         if UITour.isRequested {
             UITour.rootView = { AnyView(root) }
             UITour.selectSettingsSection = { [weak settings] in settings?.selectSection($0) }
-            UITour.openSearch = { [weak store, weak search] query in search?.query = query; search?.search(); store?.openSearch() }
+            UITour.openSearch = { [weak store, weak search] query in search?.setActive(true); search?.query = query; search?.search(); store?.openSearch() }
             UITour.sheets = [
                 ("new-task", { [weak store, weak today] in store?.select(.today); today?.requestNewTask() }, { [weak today] in today?.endComposing() }),
                 ("gap", { [weak store, weak gaps] in store?.select(.knowledgeGap); gaps?.requestForm(.add) }, { [weak gaps] in gaps?.dismissForm() }),

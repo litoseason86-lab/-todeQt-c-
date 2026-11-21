@@ -24,10 +24,15 @@ final class ContentFormatTests: XCTestCase {
             }
         }
     }
-    // 产品保证：空标题的显示与删除确认采用正文首行，纯空白显示新备忘录。
+    // 产品保证：空标题的显示与删除确认采用正文首行，纯空白显示新备忘录；旧 SQLite 备忘录的无时区毫秒时间串可正确解析。
     func testDisplayTitleAndUTF16Boundary() {
         XCTAssertEqual(MemoFormat.shownTitle(title: " ", body: "第一行\n第二行"), "第一行")
         XCTAssertEqual(MemoFormat.shownTitle(title: "", body: "\n第二行"), "新备忘录")
         XCTAssertEqual(MemoFormat.characterCount("🍅"), 2)
+        let zone = TimeZone(secondsFromGMT: 0)!
+        let now = MemoFormat.parse("2026-10-10T18:00:00.000", timeZone: zone)
+        XCTAssertNotNil(now)
+        XCTAssertEqual(MemoFormat.formatUpdatedAt("2026-10-10T14:35:00.000", now: now!, timeZone: zone), "今天 14:35")
+        XCTAssertEqual(MemoFormat.formatUpdatedAt("2026-10-09T09:05:00.123", now: now!, timeZone: zone), "昨天")
     }
 }
